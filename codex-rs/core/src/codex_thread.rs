@@ -58,6 +58,7 @@ use codex_rollout::state_db::StateDbHandle;
 
 use crate::unified_exec::SharedTerminalInfo;
 use crate::unified_exec::SharedTerminalOpenRequest;
+use crate::unified_exec::SharedTerminalWriteOutput;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
@@ -457,6 +458,17 @@ impl CodexThread {
         self.codex
             .session
             .resize_shared_terminal(process_id, terminal_size)
+            .await
+    }
+
+    pub async fn write_shared_terminal(
+        &self,
+        process_id: i32,
+        input: &str,
+    ) -> anyhow::Result<SharedTerminalWriteOutput> {
+        self.codex
+            .session
+            .write_shared_terminal(process_id, input)
             .await
     }
 

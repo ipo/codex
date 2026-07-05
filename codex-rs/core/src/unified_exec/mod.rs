@@ -66,6 +66,7 @@ pub use shared_terminal::SharedTerminalInfo;
 pub(crate) use shared_terminal::SharedTerminalMetadata;
 pub use shared_terminal::SharedTerminalOpenRequest;
 pub use shared_terminal::SharedTerminalStatus;
+pub use shared_terminal::SharedTerminalWriteOutput;
 
 pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
 pub(crate) const WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS: u64 = 2_000;

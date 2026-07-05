@@ -1206,6 +1206,17 @@ impl MessageProcessor {
                     .thread_background_terminals_terminate(params)
                     .await
             }
+            ClientRequest::ThreadTerminalOpen { params, .. } => {
+                self.thread_processor.thread_terminal_open(params).await
+            }
+            ClientRequest::ThreadTerminalWrite { params, .. } => {
+                self.thread_processor
+                    .thread_terminal_write(&request_id, params)
+                    .await
+            }
+            ClientRequest::ThreadTerminalResize { params, .. } => {
+                self.thread_processor.thread_terminal_resize(params).await
+            }
             ClientRequest::ThreadRollback { params, .. } => {
                 self.thread_processor
                     .thread_rollback(&request_id, params, app_server_client_name.as_deref())

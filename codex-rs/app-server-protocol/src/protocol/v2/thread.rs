@@ -10,6 +10,7 @@ use super::ThreadSource;
 use super::Turn;
 use super::TurnEnvironmentParams;
 use super::TurnItemsView;
+use super::process::ProcessTerminalSize;
 use super::shared::v2_enum_from_core;
 use codex_experimental_api_macros::ExperimentalApi;
 pub use codex_protocol::capabilities::CapabilityRootLocation;
@@ -1009,9 +1010,101 @@ pub struct ThreadBackgroundTerminal {
     pub process_id: String,
     pub command: String,
     pub cwd: AbsolutePathBuf,
+    pub source: ThreadTerminalSource,
+    pub label: Option<String>,
+    pub tty: bool,
+    pub size: Option<ProcessTerminalSize>,
+    pub status: ThreadTerminalStatus,
     pub os_pid: Option<u32>,
     pub cpu_percent: Option<f64>,
     pub rss_kb: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadTerminalSource {
+    Agent,
+    SharedTerminal,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ThreadTerminalStatusKind {
+    Running,
+    Exited,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTerminalStatus {
+    pub kind: ThreadTerminalStatusKind,
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTerminalInfo {
+    pub thread_id: String,
+    pub label: String,
+    pub process_id: String,
+    pub command: String,
+    pub cwd: AbsolutePathBuf,
+    pub source: ThreadTerminalSource,
+    pub tty: bool,
+    pub size: Option<ProcessTerminalSize>,
+    pub status: ThreadTerminalStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTerminalOpenParams {
+    pub thread_id: String,
+    pub label: String,
+    #[ts(optional = nullable)]
+    pub size: Option<ProcessTerminalSize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTerminalOpenResponse {
+    pub terminal: ThreadTerminalInfo,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTerminalWriteParams {
+    pub thread_id: String,
+    pub process_id: String,
+    #[ts(optional = nullable)]
+    pub delta_base64: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTerminalWriteResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTerminalResizeParams {
+    pub thread_id: String,
+    pub process_id: String,
+    pub size: ProcessTerminalSize,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadTerminalResizeResponse {
+    pub terminal: ThreadTerminalInfo,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

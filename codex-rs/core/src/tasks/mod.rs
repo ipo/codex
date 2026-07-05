@@ -36,6 +36,7 @@ use crate::state::RunningTask;
 use crate::state::TaskKind;
 use crate::unified_exec::SharedTerminalInfo;
 use crate::unified_exec::SharedTerminalOpenRequest;
+use crate::unified_exec::SharedTerminalWriteOutput;
 use codex_analytics::TurnProfileFact;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
@@ -851,6 +852,18 @@ impl Session {
             .services
             .unified_exec_manager
             .resize_shared_terminal(process_id, terminal_size)
+            .await?)
+    }
+
+    pub(crate) async fn write_shared_terminal(
+        &self,
+        process_id: i32,
+        input: &str,
+    ) -> anyhow::Result<SharedTerminalWriteOutput> {
+        Ok(self
+            .services
+            .unified_exec_manager
+            .write_shared_terminal(process_id, input, /*yield_time_ms*/ 250)
             .await?)
     }
 

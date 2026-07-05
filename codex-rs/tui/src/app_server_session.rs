@@ -14,6 +14,8 @@ use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
 use crate::status::plan_type_display_name;
 use crate::terminal_visualization_instructions::with_terminal_visualization_instructions;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use codex_app_server_client::AppServerClient;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::AppServerPath;
@@ -41,6 +43,7 @@ use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
 use codex_app_server_protocol::NewThreadModelDefaults;
+use codex_app_server_protocol::ProcessTerminalSize;
 use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
@@ -97,6 +100,12 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
+use codex_app_server_protocol::ThreadTerminalOpenParams;
+use codex_app_server_protocol::ThreadTerminalOpenResponse;
+use codex_app_server_protocol::ThreadTerminalResizeParams;
+use codex_app_server_protocol::ThreadTerminalResizeResponse;
+use codex_app_server_protocol::ThreadTerminalWriteParams;
+use codex_app_server_protocol::ThreadTerminalWriteResponse;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
@@ -1035,6 +1044,71 @@ impl AppServerSession {
             .await
             .wrap_err("thread/shellCommand failed in TUI")?;
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn thread_terminal_open(
+        &mut self,
+        thread_id: ThreadId,
+        label: String,
+        size: Option<ProcessTerminalSize>,
+    ) -> Result<ThreadTerminalOpenResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadTerminalOpen {
+                request_id,
+                params: ThreadTerminalOpenParams {
+                    thread_id: thread_id.to_string(),
+                    label,
+                    size,
+                },
+            })
+            .await
+            .wrap_err("thread/terminal/open failed in TUI")
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn thread_terminal_write(
+        &mut self,
+        thread_id: ThreadId,
+        process_id: String,
+        input: &[u8],
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadTerminalWriteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadTerminalWrite {
+                request_id,
+                params: ThreadTerminalWriteParams {
+                    thread_id: thread_id.to_string(),
+                    process_id,
+                    delta_base64: Some(STANDARD.encode(input)),
+                },
+            })
+            .await
+            .wrap_err("thread/terminal/write failed in TUI")?;
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn thread_terminal_resize(
+        &mut self,
+        thread_id: ThreadId,
+        process_id: String,
+        size: ProcessTerminalSize,
+    ) -> Result<ThreadTerminalResizeResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadTerminalResize {
+                request_id,
+                params: ThreadTerminalResizeParams {
+                    thread_id: thread_id.to_string(),
+                    process_id,
+                    size,
+                },
+            })
+            .await
+            .wrap_err("thread/terminal/resize failed in TUI")
     }
 
     pub(crate) async fn thread_approve_guardian_denied_action(

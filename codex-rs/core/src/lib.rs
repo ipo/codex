@@ -109,6 +109,7 @@ mod unified_exec;
 pub use unified_exec::SharedTerminalInfo;
 pub use unified_exec::SharedTerminalOpenRequest;
 pub use unified_exec::SharedTerminalStatus;
+pub use unified_exec::SharedTerminalWriteOutput;
 pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use codex_protocol::config_types::ModelProviderAuthInfo;

@@ -38,7 +38,11 @@ mod thread_list_cwd_filter_tests {
 
 mod background_terminal_pagination_tests {
     use super::super::paginate_background_terminals;
+    use codex_app_server_protocol::ProcessTerminalSize;
     use codex_app_server_protocol::ThreadBackgroundTerminal;
+    use codex_app_server_protocol::ThreadTerminalSource;
+    use codex_app_server_protocol::ThreadTerminalStatus;
+    use codex_app_server_protocol::ThreadTerminalStatusKind;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
@@ -50,6 +54,14 @@ mod background_terminal_pagination_tests {
             process_id: process_id.to_string(),
             command: format!("command-{process_id}"),
             cwd: AbsolutePathBuf::from_absolute_path(cwd).expect("absolute cwd"),
+            source: ThreadTerminalSource::Agent,
+            label: None,
+            tty: true,
+            size: Some(ProcessTerminalSize { rows: 24, cols: 80 }),
+            status: ThreadTerminalStatus {
+                kind: ThreadTerminalStatusKind::Running,
+                exit_code: None,
+            },
             os_pid: None,
             cpu_percent: None,
             rss_kb: None,

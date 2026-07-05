@@ -607,6 +607,24 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadBackgroundTerminalsTerminateResponse,
     },
+    #[experimental("thread/terminal/open")]
+    ThreadTerminalOpen => "thread/terminal/open" {
+        params: v2::ThreadTerminalOpenParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadTerminalOpenResponse,
+    },
+    #[experimental("thread/terminal/write")]
+    ThreadTerminalWrite => "thread/terminal/write" {
+        params: v2::ThreadTerminalWriteParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadTerminalWriteResponse,
+    },
+    #[experimental("thread/terminal/resize")]
+    ThreadTerminalResize => "thread/terminal/resize" {
+        params: v2::ThreadTerminalResizeParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadTerminalResizeResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         serialization: thread_id(params.thread_id),

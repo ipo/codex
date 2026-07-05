@@ -19689,6 +19689,87 @@
         "title": "ThreadStatusChangedNotification",
         "type": "object"
       },
+      "ThreadTerminalInfo": {
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "cwd": {
+            "$ref": "#/definitions/v2/AbsolutePathBuf"
+          },
+          "label": {
+            "type": "string"
+          },
+          "processId": {
+            "type": "string"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ProcessTerminalSize"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/definitions/v2/ThreadTerminalSource"
+          },
+          "status": {
+            "$ref": "#/definitions/v2/ThreadTerminalStatus"
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "tty": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "command",
+          "cwd",
+          "label",
+          "processId",
+          "source",
+          "status",
+          "threadId",
+          "tty"
+        ],
+        "type": "object"
+      },
+      "ThreadTerminalSource": {
+        "enum": [
+          "agent",
+          "sharedTerminal"
+        ],
+        "type": "string"
+      },
+      "ThreadTerminalStatus": {
+        "properties": {
+          "exitCode": {
+            "format": "int32",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/definitions/v2/ThreadTerminalStatusKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ThreadTerminalStatusKind": {
+        "enum": [
+          "running",
+          "exited"
+        ],
+        "type": "string"
+      },
       "ThreadTokenUsage": {
         "properties": {
           "last": {

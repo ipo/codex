@@ -632,6 +632,34 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_terminal_open(
+        &self,
+        params: ThreadTerminalOpenParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_terminal_open_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_terminal_write(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadTerminalWriteParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_terminal_write_inner(request_id, params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_terminal_resize(
+        &self,
+        params: ThreadTerminalResizeParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_terminal_resize_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_rollback(
         &self,
         request_id: &ConnectionRequestId,
@@ -1823,6 +1851,11 @@ impl ThreadRequestProcessor {
                     process_id: terminal.process_id,
                     command: terminal.command,
                     cwd,
+                    source: thread_terminal_source_from_core(terminal.source),
+                    label: terminal.label,
+                    tty: terminal.tty,
+                    size: terminal.terminal_size.map(process_terminal_size_from_core),
+                    status: thread_terminal_status_from_core_background(terminal.status),
                     os_pid: None,
                     cpu_percent: None,
                     rss_kb: None,
@@ -1850,6 +1883,119 @@ impl ThreadRequestProcessor {
         let (_, thread) = self.load_thread(&thread_id).await?;
         let terminated = thread.terminate_background_terminal(process_id).await;
         Ok(ThreadBackgroundTerminalsTerminateResponse { terminated })
+    }
+
+    async fn thread_terminal_open_inner(
+        &self,
+        params: ThreadTerminalOpenParams,
+    ) -> Result<ThreadTerminalOpenResponse, JSONRPCErrorError> {
+        let ThreadTerminalOpenParams {
+            thread_id,
+            label,
+            size,
+        } = params;
+        let terminal_size = size.map(thread_terminal_size_from_protocol).transpose()?;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let terminal = thread
+            .open_shared_terminal(SharedTerminalOpenRequest {
+                label,
+                terminal_size,
+            })
+            .await
+            .map_err(|err| invalid_request(format!("failed to open shared terminal: {err}")))?;
+
+        Ok(ThreadTerminalOpenResponse {
+            terminal: thread_terminal_info_from_core(&thread_id, terminal)?,
+        })
+    }
+
+    async fn thread_terminal_write_inner(
+        &self,
+        request_id: &ConnectionRequestId,
+        params: ThreadTerminalWriteParams,
+    ) -> Result<ThreadTerminalWriteResponse, JSONRPCErrorError> {
+        let ThreadTerminalWriteParams {
+            thread_id,
+            process_id,
+            delta_base64,
+        } = params;
+        let process_id_int = process_id
+            .parse::<i32>()
+            .map_err(|err| invalid_request(format!("invalid terminal process id: {err}")))?;
+        let input = match delta_base64 {
+            Some(delta_base64) => {
+                let bytes = STANDARD
+                    .decode(delta_base64)
+                    .map_err(|err| invalid_request(format!("invalid deltaBase64: {err}")))?;
+                String::from_utf8(bytes)
+                    .map_err(|err| invalid_request(format!("terminal input is not UTF-8: {err}")))?
+            }
+            None => String::new(),
+        };
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let output = thread
+            .write_shared_terminal(process_id_int, &input)
+            .await
+            .map_err(|err| invalid_request(format!("failed to write shared terminal: {err}")))?;
+
+        if !output.output.is_empty() {
+            self.outgoing
+                .send_server_notification_to_connection_and_wait(
+                    request_id.connection_id,
+                    ServerNotification::ProcessOutputDelta(ProcessOutputDeltaNotification {
+                        process_handle: process_id.clone(),
+                        stream: ProcessOutputStream::Stdout,
+                        delta_base64: STANDARD.encode(output.output),
+                        cap_reached: false,
+                    }),
+                )
+                .await;
+        }
+
+        if let Some(exit_code) = output.exit_code {
+            self.outgoing
+                .send_server_notification_to_connection_and_wait(
+                    request_id.connection_id,
+                    ServerNotification::ProcessExited(ProcessExitedNotification {
+                        process_handle: process_id,
+                        exit_code,
+                        stdout: String::new(),
+                        stdout_cap_reached: false,
+                        stderr: String::new(),
+                        stderr_cap_reached: false,
+                    }),
+                )
+                .await;
+        }
+
+        Ok(ThreadTerminalWriteResponse {})
+    }
+
+    async fn thread_terminal_resize_inner(
+        &self,
+        params: ThreadTerminalResizeParams,
+    ) -> Result<ThreadTerminalResizeResponse, JSONRPCErrorError> {
+        let ThreadTerminalResizeParams {
+            thread_id,
+            process_id,
+            size,
+        } = params;
+        let process_id = process_id
+            .parse::<i32>()
+            .map_err(|err| invalid_request(format!("invalid terminal process id: {err}")))?;
+        let size = thread_terminal_size_from_protocol(size)?;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let terminal = thread
+            .resize_shared_terminal(process_id, size)
+            .await
+            .map_err(|err| invalid_request(format!("failed to resize shared terminal: {err}")))?;
+
+        Ok(ThreadTerminalResizeResponse {
+            terminal: thread_terminal_info_from_core(&thread_id, terminal)?,
+        })
     }
 
     async fn thread_shell_command_inner(
@@ -4532,6 +4678,83 @@ fn paginate_background_terminals(
     let end = start.saturating_add(effective_limit).min(terminals.len());
     let next_cursor = (end < terminals.len()).then(|| terminals[end - 1].process_id.clone());
     Ok((terminals[start..end].to_vec(), next_cursor))
+}
+
+fn thread_terminal_info_from_core(
+    thread_id: &str,
+    terminal: SharedTerminalInfo,
+) -> Result<ThreadTerminalInfo, JSONRPCErrorError> {
+    let cwd = terminal
+        .cwd
+        .to_abs_path()
+        .map_err(|err| internal_error(format!("shared terminal has invalid cwd: {err}")))?;
+    Ok(ThreadTerminalInfo {
+        thread_id: thread_id.to_string(),
+        label: terminal.label,
+        process_id: terminal.process_id.to_string(),
+        command: terminal.command,
+        cwd,
+        source: ThreadTerminalSource::SharedTerminal,
+        tty: terminal.tty,
+        size: terminal.terminal_size.map(process_terminal_size_from_core),
+        status: thread_terminal_status_from_core_shared(terminal.status),
+    })
+}
+
+fn thread_terminal_source_from_core(source: CoreBackgroundTerminalSource) -> ThreadTerminalSource {
+    match source {
+        CoreBackgroundTerminalSource::Agent => ThreadTerminalSource::Agent,
+        CoreBackgroundTerminalSource::SharedTerminal => ThreadTerminalSource::SharedTerminal,
+    }
+}
+
+fn thread_terminal_status_from_core_background(
+    status: CoreBackgroundTerminalStatus,
+) -> ThreadTerminalStatus {
+    match status {
+        CoreBackgroundTerminalStatus::Running => ThreadTerminalStatus {
+            kind: ThreadTerminalStatusKind::Running,
+            exit_code: None,
+        },
+        CoreBackgroundTerminalStatus::Exited { exit_code } => ThreadTerminalStatus {
+            kind: ThreadTerminalStatusKind::Exited,
+            exit_code,
+        },
+    }
+}
+
+fn thread_terminal_status_from_core_shared(status: SharedTerminalStatus) -> ThreadTerminalStatus {
+    match status {
+        SharedTerminalStatus::Running => ThreadTerminalStatus {
+            kind: ThreadTerminalStatusKind::Running,
+            exit_code: None,
+        },
+        SharedTerminalStatus::Exited { exit_code } => ThreadTerminalStatus {
+            kind: ThreadTerminalStatusKind::Exited,
+            exit_code,
+        },
+    }
+}
+
+fn process_terminal_size_from_core(size: TerminalSize) -> ProcessTerminalSize {
+    ProcessTerminalSize {
+        rows: size.rows,
+        cols: size.cols,
+    }
+}
+
+fn thread_terminal_size_from_protocol(
+    size: ProcessTerminalSize,
+) -> Result<TerminalSize, JSONRPCErrorError> {
+    if size.rows == 0 || size.cols == 0 {
+        return Err(invalid_params(
+            "thread/terminal size rows and cols must be greater than 0",
+        ));
+    }
+    Ok(TerminalSize {
+        rows: size.rows,
+        cols: size.cols,
+    })
 }
 
 fn build_thread_from_loaded_snapshot(

@@ -78,6 +78,8 @@ mod thread_settings_update;
 mod thread_shell_command;
 mod thread_start;
 mod thread_status;
+#[cfg(unix)]
+mod thread_terminal;
 mod thread_unarchive;
 mod thread_unsubscribe;
 mod turn_interrupt;

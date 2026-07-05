@@ -18,12 +18,15 @@ use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::shell::Shell;
 use crate::shell::ShellType;
+use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::runtimes::strip_managed_proxy_env;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::ProcessEntry;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
+use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process_manager::unregister_network_approval_for_entry;
+use codex_utils_output_truncation::TruncationPolicy;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SharedTerminalMetadata {
@@ -55,6 +58,14 @@ pub struct SharedTerminalInfo {
     pub tty: bool,
     pub terminal_size: Option<TerminalSize>,
     pub status: SharedTerminalStatus,
+}
+
+/// Output collected after writing to a shared terminal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SharedTerminalWriteOutput {
+    pub output: Vec<u8>,
+    pub process_id: Option<i32>,
+    pub exit_code: Option<i32>,
 }
 
 impl UnifiedExecProcessManager {
@@ -226,6 +237,44 @@ impl UnifiedExecProcessManager {
         entry.terminal_size = Some(terminal_size);
         shared_terminal_info_for_entry(entry)
             .ok_or(UnifiedExecError::UnknownProcessId { process_id })
+    }
+
+    pub(crate) async fn write_shared_terminal(
+        &self,
+        process_id: i32,
+        input: &str,
+        yield_time_ms: u64,
+    ) -> Result<SharedTerminalWriteOutput, UnifiedExecError> {
+        {
+            let store = self.process_store.lock().await;
+            let Some(entry) = store.processes.get(&process_id) else {
+                return Err(UnifiedExecError::UnknownProcessId { process_id });
+            };
+            if entry.shared_terminal.is_none() {
+                return Err(UnifiedExecError::UnknownProcessId { process_id });
+            }
+        }
+
+        let ExecCommandToolOutput {
+            raw_output,
+            process_id,
+            exit_code,
+            ..
+        } = self
+            .write_stdin(WriteStdinRequest {
+                process_id,
+                input,
+                yield_time_ms,
+                max_output_tokens: None,
+                truncation_policy: TruncationPolicy::Tokens(10_000),
+            })
+            .await?;
+
+        Ok(SharedTerminalWriteOutput {
+            output: raw_output,
+            process_id,
+            exit_code,
+        })
     }
 
     async fn remove_exited_or_return_live_shared_terminal(

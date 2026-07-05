@@ -81,6 +81,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsExtraRootsSetParams;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalsListParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadDeleteParams;
 use codex_app_server_protocol::ThreadForkParams;
@@ -104,6 +105,9 @@ use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadTerminalOpenParams;
+use codex_app_server_protocol::ThreadTerminalResizeParams;
+use codex_app_server_protocol::ThreadTerminalWriteParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
@@ -608,6 +612,43 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/archive", params).await
+    }
+
+    /// Send a `thread/backgroundTerminals/list` JSON-RPC request.
+    pub async fn send_thread_background_terminals_list_request(
+        &mut self,
+        params: ThreadBackgroundTerminalsListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/backgroundTerminals/list", params)
+            .await
+    }
+
+    /// Send a `thread/terminal/open` JSON-RPC request.
+    pub async fn send_thread_terminal_open_request(
+        &mut self,
+        params: ThreadTerminalOpenParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/terminal/open", params).await
+    }
+
+    /// Send a `thread/terminal/write` JSON-RPC request.
+    pub async fn send_thread_terminal_write_request(
+        &mut self,
+        params: ThreadTerminalWriteParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/terminal/write", params).await
+    }
+
+    /// Send a `thread/terminal/resize` JSON-RPC request.
+    pub async fn send_thread_terminal_resize_request(
+        &mut self,
+        params: ThreadTerminalResizeParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/terminal/resize", params).await
     }
 
     /// Send a `thread/delete` JSON-RPC request.
