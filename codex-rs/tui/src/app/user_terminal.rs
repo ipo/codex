@@ -139,12 +139,16 @@ impl UserTerminalState {
             .sessions
             .get(&key)
             .and_then(|session| session.process_id.clone());
+        let process_changed = old_process_id.as_deref() != Some(terminal.process_id.as_str());
         if let Some(old_process_id) = old_process_id {
             self.process_keys.remove(&old_process_id);
         }
 
         let metadata = metadata_from_terminal(terminal);
         if let Some(session) = self.sessions.get_mut(&key) {
+            if process_changed {
+                session.surface.reset_for_new_process();
+            }
             session.surface.set_metadata(metadata);
             session.process_id = Some(terminal.process_id.clone());
         }

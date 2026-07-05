@@ -184,6 +184,11 @@ impl UserTerminalSurface {
         self.metadata = metadata;
     }
 
+    pub(crate) fn reset_for_new_process(&mut self) {
+        self.parser = vt100::Parser::new(DEFAULT_ROWS, DEFAULT_COLS, /*scrollback_len*/ 0);
+        self.focus_mode = TerminalFocusMode::Input;
+    }
+
     pub(crate) fn set_open_controls(&mut self, open_controls: Vec<KeyBinding>) {
         self.open_controls = open_controls;
     }

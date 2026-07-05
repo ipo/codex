@@ -4,6 +4,7 @@ use crate::user_terminal::TerminalLayoutMode;
 use assert_matches::assert_matches;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use codex_app_server_protocol::ProcessExitedNotification;
 use codex_app_server_protocol::ProcessOutputStream;
 use codex_app_server_protocol::ThreadTerminalOpenResponse;
 use codex_app_server_protocol::ThreadTerminalResizeResponse;
@@ -57,11 +58,13 @@ async fn opens_named_terminals_and_preserves_state_across_dismiss() -> Result<()
     let mut tui = crate::tui::test_support::make_test_tui()?;
     let default_terminal = fake_terminal(&app, thread_id, "default", "41");
     let work_terminal = fake_terminal(&app, thread_id, "work", "42");
+    let fresh_default_terminal = fake_terminal(&app, thread_id, "default", "43");
     let mut terminal_rpc = RecordingTerminalRpc::new(vec![
         default_terminal.clone(),
         work_terminal,
         default_terminal.clone(),
         default_terminal,
+        fresh_default_terminal,
     ]);
 
     app.open_user_terminal(&mut tui, &mut terminal_rpc, String::new())
@@ -259,6 +262,106 @@ async fn opens_named_terminals_and_preserves_state_across_dismiss() -> Result<()
         Some(TerminalLayoutMode::CustomHeight(12))
     );
     assert!(render_active_terminal(&mut app).contains(marker));
+
+    assert!(
+        app.handle_user_terminal_process_exit(&ProcessExitedNotification {
+            process_handle: default_process_id.clone(),
+            exit_code: 0,
+            stdout: "old process exit\r\n".to_string(),
+            stdout_cap_reached: false,
+            stderr: String::new(),
+            stderr_cap_reached: false,
+        })
+    );
+    assert!(render_active_terminal(&mut app).contains("old process exit"));
+
+    app.open_user_terminal(&mut tui, &mut terminal_rpc, "default".to_string())
+        .await;
+    let fresh_process_id = active_process_id(&app);
+    assert_ne!(fresh_process_id, default_process_id);
+    assert_eq!(
+        active_layout_mode(&app),
+        Some(TerminalLayoutMode::CustomHeight(12))
+    );
+    let rendered = render_active_terminal(&mut app);
+    assert!(!rendered.contains(marker));
+    assert!(!rendered.contains("old process exit"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn paste_and_frame_control_escape_stay_terminal_local() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) =
+        crate::app::test_support::make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.active_thread_id = Some(thread_id);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let terminal = fake_terminal(&app, thread_id, "default", "41");
+    let mut terminal_rpc = RecordingTerminalRpc::new(vec![terminal]);
+
+    app.open_user_terminal(&mut tui, &mut terminal_rpc, String::new())
+        .await;
+    let process_id = active_process_id(&app);
+
+    let paste = "printf one\\nprintf two\\n".to_string();
+    app.handle_user_terminal_tui_event(&mut tui, &mut terminal_rpc, TuiEvent::Paste(paste.clone()))
+        .await?;
+    assert_eq!(
+        terminal_rpc.write_calls,
+        vec![WriteCall {
+            thread_id,
+            process_id: process_id.clone(),
+            input: paste.into_bytes(),
+        }]
+    );
+
+    app.handle_user_terminal_key(
+        &mut tui,
+        &mut terminal_rpc,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+    )
+    .await;
+    assert_eq!(
+        active_focus_mode(&app),
+        Some(TerminalFocusMode::FrameControls)
+    );
+    assert_eq!(
+        terminal_rpc.write_calls.len(),
+        1,
+        "open-controls key must not be sent to the terminal process"
+    );
+
+    app.handle_user_terminal_key(
+        &mut tui,
+        &mut terminal_rpc,
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+    )
+    .await;
+    assert_eq!(active_focus_mode(&app), Some(TerminalFocusMode::Input));
+
+    app.handle_user_terminal_key(
+        &mut tui,
+        &mut terminal_rpc,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+    )
+    .await;
+    assert_eq!(
+        terminal_rpc.write_calls,
+        vec![
+            WriteCall {
+                thread_id,
+                process_id: process_id.clone(),
+                input: b"printf one\\nprintf two\\n".to_vec(),
+            },
+            WriteCall {
+                thread_id,
+                process_id,
+                input: b"x".to_vec(),
+            },
+        ]
+    );
+    assert!(app.user_terminals.active_key().is_some());
 
     Ok(())
 }
