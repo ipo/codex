@@ -211,6 +211,9 @@ pub(crate) enum AppEvent {
         enabled: bool,
     },
 
+    /// Schedule a TUI redraw from an app-owned async event handler.
+    RequestRedraw,
+
     /// Clear the current context, start a fresh session, and submit an initial user message.
     ///
     /// This is the Plan Mode handoff path: the previous thread remains resumable, but the model
@@ -344,6 +347,11 @@ pub(crate) enum AppEvent {
     /// Fetch account-wide token activity for a `/usage` history card.
     RefreshTokenActivity {
         request_id: u64,
+    },
+
+    /// Open or attach a shared shell terminal overlay for the current thread.
+    OpenUserTerminal {
+        label: String,
     },
 
     /// Result of fetching account-wide token activity.

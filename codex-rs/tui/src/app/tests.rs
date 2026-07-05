@@ -5,6 +5,7 @@ mod plugin_catalog;
 mod session_summary;
 mod startup;
 
+use super::test_support::make_test_app_with_channels;
 use super::*;
 use crate::app_backtrack::BacktrackSelection;
 use crate::app_backtrack::BacktrackState;
@@ -4103,75 +4104,8 @@ async fn make_test_app() -> App {
         pending_startup_thread_start: false,
         pending_plugin_enabled_writes: HashMap::new(),
         pending_hook_enabled_writes: HashMap::new(),
+        user_terminals: UserTerminalState::default(),
     }
-}
-
-async fn make_test_app_with_channels() -> (
-    App,
-    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
-    tokio::sync::mpsc::UnboundedReceiver<Op>,
-) {
-    let (chat_widget, app_event_tx, rx, op_rx) = make_chatwidget_manual_with_sender().await;
-    let config = chat_widget.config_ref().clone();
-    let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
-    let model = get_model_offline_for_tests(config.model.as_deref());
-    let session_telemetry = test_session_telemetry(&config, model.as_str());
-
-    (
-        App {
-            model_catalog: chat_widget.model_catalog(),
-            session_telemetry,
-            app_event_tx,
-            chat_widget,
-            workspace_command_runner: None,
-            config,
-            state_db: None,
-            cli_kv_overrides: Vec::new(),
-            harness_overrides: ConfigOverrides::default(),
-            loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
-            cloud_config_bundle: CloudConfigBundleLoader::default(),
-            runtime_approval_policy_override: None,
-            runtime_permission_profile_override: None,
-            file_search,
-            transcript_cells: Vec::new(),
-            overlay: None,
-            deferred_history_lines: Vec::new(),
-            has_emitted_history_lines: false,
-            transcript_reflow: TranscriptReflowState::default(),
-            initial_history_replay_buffer: None,
-            enhanced_keys_supported: false,
-            keymap: crate::keymap::RuntimeKeymap::defaults(),
-            commit_anim_running: Arc::new(AtomicBool::new(false)),
-            status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-            terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-            skill_load_warnings: SkillLoadWarningState::default(),
-            backtrack: BacktrackState::default(),
-            backtrack_render_pending: false,
-            feedback: codex_feedback::CodexFeedback::new(),
-            feedback_audience: FeedbackAudience::External,
-            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-            app_server_target: crate::AppServerTarget::Embedded,
-            pending_update_action: None,
-            pending_shutdown_exit_thread_id: None,
-            windows_sandbox: WindowsSandboxState::default(),
-            thread_event_channels: HashMap::new(),
-            thread_event_listener_tasks: HashMap::new(),
-            agent_navigation: AgentNavigationState::default(),
-            side_threads: HashMap::new(),
-            active_thread_id: None,
-            active_thread_rx: None,
-            primary_thread_id: None,
-            last_subagent_backfill_attempt: None,
-            primary_session_configured: None,
-            pending_primary_events: VecDeque::new(),
-            pending_app_server_requests: PendingAppServerRequests::default(),
-            pending_startup_thread_start: false,
-            pending_plugin_enabled_writes: HashMap::new(),
-            pending_hook_enabled_writes: HashMap::new(),
-        },
-        rx,
-        op_rx,
-    )
 }
 
 #[tokio::test]

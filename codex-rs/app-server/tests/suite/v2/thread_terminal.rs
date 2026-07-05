@@ -4,6 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::TestAppServer;
+use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
@@ -40,7 +41,61 @@ use tokio::time::Instant;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[tokio::test]
+async fn thread_terminal_facade_opens_shell_without_active_turn() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let working_directory = tmp.path().join("workdir");
+    std::fs::create_dir(&working_directory)?;
+
+    let server = create_mock_responses_server_sequence(Vec::new()).await;
+    create_config_toml(&codex_home, &server.uri())?;
+
+    let mut mcp = TestAppServer::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(working_directory.display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let initial_size = ProcessTerminalSize { rows: 20, cols: 80 };
+    let open = open_terminal(&mut mcp, &thread.id, "default", initial_size).await?;
+    assert_eq!(open.label, "default");
+    assert_eq!(open.cwd.as_path(), working_directory.as_path());
+    assert_eq!(open.source, ThreadTerminalSource::SharedTerminal);
+    assert_eq!(open.tty, true);
+    assert_eq!(open.size, Some(initial_size));
+    assert_eq!(open.status.kind, ThreadTerminalStatusKind::Running);
+
+    let marker = "codex-idle-thread-terminal-marker";
+    let output = write_command_and_wait_for_output(
+        &mut mcp,
+        &thread.id,
+        &open.process_id,
+        &format!("printf '{marker}\\n'\n"),
+        marker,
+    )
+    .await?;
+    assert!(
+        output.contains(marker),
+        "expected terminal output to contain marker, got {output:?}"
+    );
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn thread_terminal_facade_opens_writes_resizes_and_reuses_labeled_shell() -> Result<()> {

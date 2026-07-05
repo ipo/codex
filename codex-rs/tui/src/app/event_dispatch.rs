@@ -20,6 +20,9 @@ impl App {
         event: AppEvent,
     ) -> Result<AppRunControl> {
         match event {
+            AppEvent::RequestRedraw => {
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::NewSession => {
                 self.start_fresh_session_with_summary_hint(
                     tui, app_server, /*session_start_source*/ None,
@@ -791,6 +794,9 @@ impl App {
             }
             AppEvent::RefreshTokenActivity { request_id } => {
                 self.refresh_token_activity(app_server, request_id);
+            }
+            AppEvent::OpenUserTerminal { label } => {
+                self.open_user_terminal(tui, app_server, label).await;
             }
             AppEvent::RefreshStatusLineWorkspaceHeadline { request_id } => {
                 self.refresh_status_line_workspace_headline(app_server, request_id);

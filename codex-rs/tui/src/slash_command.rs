@@ -50,6 +50,7 @@ pub enum SlashCommand {
     Status,
     Usage,
     DebugConfig,
+    Sh,
     Title,
     Statusline,
     Theme,
@@ -105,6 +106,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
+            SlashCommand::Sh => "open a shared shell terminal",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
@@ -161,6 +163,7 @@ impl SlashCommand {
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
                 | SlashCommand::Raw
+                | SlashCommand::Sh
                 | SlashCommand::Usage
                 | SlashCommand::Pets
                 | SlashCommand::Side
@@ -222,6 +225,7 @@ impl SlashCommand {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
+            | SlashCommand::Sh
             | SlashCommand::App
             | SlashCommand::Goal
             | SlashCommand::Mcp
@@ -294,6 +298,8 @@ mod tests {
         assert!(SlashCommand::Raw.available_during_task());
         assert!(SlashCommand::Raw.available_in_side_conversation());
         assert!(SlashCommand::Raw.supports_inline_args());
+        assert!(SlashCommand::Sh.available_during_task());
+        assert!(SlashCommand::Sh.supports_inline_args());
         assert!(SlashCommand::App.available_during_task());
     }
 

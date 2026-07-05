@@ -827,14 +827,17 @@ impl Session {
         self: &Arc<Self>,
         request: SharedTerminalOpenRequest,
     ) -> anyhow::Result<SharedTerminalInfo> {
-        let turn_context = {
+        let active_turn_context = {
             let active_turn = self.active_turn.lock().await;
             active_turn
                 .as_ref()
                 .and_then(|active_turn| active_turn.task.as_ref())
                 .map(|task| Arc::clone(&task.turn_context))
-        }
-        .ok_or_else(|| anyhow::anyhow!("cannot open shared terminal without an active turn"))?;
+        };
+        let turn_context = match active_turn_context {
+            Some(turn_context) => turn_context,
+            None => self.new_default_turn().await,
+        };
 
         Ok(self
             .services

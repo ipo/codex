@@ -2138,6 +2138,30 @@ async fn slash_stop_submits_background_terminal_cleanup() {
 }
 
 #[tokio::test]
+async fn slash_sh_requests_default_user_terminal() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Sh);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenUserTerminal { label }) if label == "default"
+    );
+}
+
+#[tokio::test]
+async fn slash_sh_requests_named_user_terminal() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Sh, "work".to_string(), Vec::new());
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenUserTerminal { label }) if label == "work"
+    );
+}
+
+#[tokio::test]
 async fn slash_clear_requests_ui_clear_when_idle() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

@@ -4,8 +4,6 @@
 //! Wiring code supplies raw output bytes, receives raw PTY input bytes, and
 //! propagates [`TerminalRenderOutcome::content_size`] through the resize RPC.
 
-#![allow(dead_code)]
-
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::terminal_palette::indexed_color;
@@ -165,10 +163,12 @@ impl UserTerminalSurface {
         &self.metadata
     }
 
+    #[cfg(test)]
     pub(crate) fn focus_mode(&self) -> TerminalFocusMode {
         self.focus_mode
     }
 
+    #[cfg(test)]
     pub(crate) fn layout_mode(&self) -> TerminalLayoutMode {
         self.layout_mode
     }

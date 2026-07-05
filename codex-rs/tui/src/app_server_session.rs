@@ -1046,7 +1046,6 @@ impl AppServerSession {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn thread_terminal_open(
         &mut self,
         thread_id: ThreadId,
@@ -1067,7 +1066,6 @@ impl AppServerSession {
             .wrap_err("thread/terminal/open failed in TUI")
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn thread_terminal_write(
         &mut self,
         thread_id: ThreadId,
@@ -1090,7 +1088,6 @@ impl AppServerSession {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn thread_terminal_resize(
         &mut self,
         thread_id: ThreadId,

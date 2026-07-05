@@ -454,6 +454,11 @@ impl ChatWidget {
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
+            SlashCommand::Sh => {
+                self.app_event_tx.send(AppEvent::OpenUserTerminal {
+                    label: "default".to_string(),
+                });
+            }
             SlashCommand::Title => {
                 self.open_terminal_title_setup();
             }
@@ -709,6 +714,10 @@ impl ChatWidget {
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
             },
+            SlashCommand::Sh => {
+                self.app_event_tx
+                    .send(AppEvent::OpenUserTerminal { label: args });
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;
@@ -1046,6 +1055,7 @@ impl ChatWidget {
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
+            | SlashCommand::Sh
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate
             | SlashCommand::Mcp

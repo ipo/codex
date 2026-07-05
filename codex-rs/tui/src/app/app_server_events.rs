@@ -137,6 +137,16 @@ impl App {
                 );
                 return;
             }
+            ServerNotification::ProcessOutputDelta(notification)
+                if self.handle_user_terminal_process_output(notification) =>
+            {
+                return;
+            }
+            ServerNotification::ProcessExited(notification)
+                if self.handle_user_terminal_process_exit(notification) =>
+            {
+                return;
+            }
             _ => {}
         }
 
