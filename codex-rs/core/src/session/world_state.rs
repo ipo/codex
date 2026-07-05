@@ -1,5 +1,6 @@
 use super::session::Session;
 use super::step_context::StepContext;
+use crate::context::world_state::ActiveTerminalsState;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::EnvironmentsState;
 use crate::context::world_state::WorldState;
@@ -26,6 +27,9 @@ impl Session {
 
         let mut world_state = WorldState::default();
         world_state.add_section(AgentsMdState::new(step_context.loaded_agents_md.as_deref()));
+        world_state.add_section(ActiveTerminalsState::from_background_terminals(
+            self.list_background_terminals().await,
+        ));
         if turn_context.config.include_environment_context {
             world_state.add_section(
                 EnvironmentsState::from_turn_context_with_environments(

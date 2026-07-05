@@ -81,6 +81,7 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsExtraRootsSetParams;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsListParams;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadDeleteParams;
@@ -621,6 +622,16 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/backgroundTerminals/list", params)
+            .await
+    }
+
+    /// Send a `thread/backgroundTerminals/clean` JSON-RPC request.
+    pub async fn send_thread_background_terminals_clean_request(
+        &mut self,
+        params: ThreadBackgroundTerminalsCleanParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/backgroundTerminals/clean", params)
             .await
     }
 

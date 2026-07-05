@@ -2122,6 +2122,15 @@ async fn slash_exit_requests_exit() {
 }
 
 #[tokio::test]
+async fn slash_ps_requests_background_terminal_list() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Ps);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ShowBackgroundTerminals));
+}
+
+#[tokio::test]
 async fn slash_stop_submits_background_terminal_cleanup() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -2132,7 +2141,7 @@ async fn slash_stop_submits_background_terminal_cleanup() {
     assert_eq!(cells.len(), 1, "expected cleanup confirmation message");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Stopping all background terminals."),
+        rendered.contains("Stopping all background terminals and shared /sh sessions."),
         "expected cleanup confirmation, got {rendered:?}"
     );
 }

@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_core::SharedTerminalOpenRequest;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
@@ -18,6 +19,7 @@ use codex_protocol::protocol::ExecCommandStatus;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_path_uri::PathUri;
+use codex_utils_pty::TerminalSize;
 use core_test_support::TempDirExt;
 use core_test_support::assert_regex_match;
 use core_test_support::managed_network_requirements_loader;
@@ -1094,6 +1096,132 @@ async fn unified_exec_emits_terminal_interaction_for_write_stdin() -> Result<()>
         .and_then(Value::as_str)
         .expect("stdin chars");
     assert_eq!(delta.stdin, expected_stdin);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_terminal_metadata_is_visible_and_agent_write_stdin_can_target_it() -> Result<()> {
+    // TODO(anp): Remove after shared-terminal fixtures support Windows/ConPTY.
+    skip_if_target_windows!(Ok(()), "uses POSIX interactive-process and shell semantics");
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let terminal = test
+        .codex
+        .open_shared_terminal(SharedTerminalOpenRequest {
+            label: "default".to_string(),
+            terminal_size: Some(TerminalSize { rows: 20, cols: 80 }),
+        })
+        .await?;
+
+    let scrollback_marker = "codex-sh-scrollback-not-model-context";
+    test.codex
+        .write_shared_terminal(
+            terminal.process_id,
+            &format!("printf '{scrollback_marker}\\n'\n"),
+        )
+        .await?;
+
+    let write_call_id = "shared-terminal-write";
+    let agent_marker = "codex-sh-agent-write-marker";
+    let write_args = serde_json::json!({
+        "session_id": terminal.process_id,
+        "chars": format!("printf '{agent_marker}\\n'\n"),
+        "yield_time_ms": 1_000,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-sh-1"),
+            ev_function_call(
+                write_call_id,
+                "write_stdin",
+                &serde_json::to_string(&write_args)?,
+            ),
+            ev_completed("resp-sh-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-sh-2"),
+            ev_assistant_message("msg-sh-1", "done"),
+            ev_completed("resp-sh-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "write to the shared terminal",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let mut terminal_interaction = None;
+    loop {
+        let event = wait_for_event(&test.codex, |_| true).await;
+        match event {
+            EventMsg::TerminalInteraction(interaction)
+                if interaction.process_id == terminal.process_id.to_string() =>
+            {
+                terminal_interaction = Some(interaction);
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    let terminal_interaction =
+        terminal_interaction.expect("expected TerminalInteraction for shared terminal write");
+    assert_eq!(
+        terminal_interaction.process_id,
+        terminal.process_id.to_string()
+    );
+    assert_eq!(
+        terminal_interaction.stdin,
+        write_args
+            .get("chars")
+            .and_then(Value::as_str)
+            .expect("write_stdin chars")
+    );
+
+    let requests = request_log.requests();
+    let first_request = requests.first().expect("expected first model request");
+    let active_terminals_fragment = first_request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.contains("<active_terminals>"))
+        .expect("active terminal metadata should be visible to the model");
+    assert!(active_terminals_fragment.contains("label=\"default\""));
+    assert!(active_terminals_fragment.contains("source=\"sharedTerminal\""));
+    assert!(active_terminals_fragment.contains("status=\"running\""));
+    assert!(active_terminals_fragment.contains(&format!("process_id=\"{}\"", terminal.process_id)));
+    assert!(active_terminals_fragment.contains("<cwd>"));
+    assert!(active_terminals_fragment.contains("<command>"));
+    assert!(
+        !active_terminals_fragment.contains(scrollback_marker),
+        "terminal scrollback must not be injected into active-terminal metadata"
+    );
+    assert!(
+        active_terminals_fragment.len() < 2_000,
+        "active-terminal metadata should remain bounded, got {} bytes",
+        active_terminals_fragment.len()
+    );
+
+    let output = requests
+        .iter()
+        .find_map(|request| request.function_call_output_text(write_call_id))
+        .expect("expected write_stdin tool output");
+    assert!(
+        output.contains(agent_marker),
+        "expected shared terminal output to contain marker, got {output:?}"
+    );
     Ok(())
 }
 

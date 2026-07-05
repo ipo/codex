@@ -1,0 +1,10 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: rendered
+---
+/ps
+
+Background terminals
+
+  • agent · pid 1000 · /repo · sleep 5
+  • /sh default · shared · pid 1001 · /repo · /bin/bash -l

@@ -354,6 +354,9 @@ pub(crate) enum AppEvent {
         label: String,
     },
 
+    /// Show the authoritative list of thread-owned background terminals.
+    ShowBackgroundTerminals,
+
     /// Result of fetching account-wide token activity.
     TokenActivityLoaded {
         request_id: u64,

@@ -59,6 +59,8 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
+use codex_app_server_protocol::ThreadBackgroundTerminalsListParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalsListResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
 use codex_app_server_protocol::ThreadCompactStartResponse;
 use codex_app_server_protocol::ThreadDeleteParams;
@@ -1145,6 +1147,24 @@ impl AppServerSession {
             .await
             .wrap_err("thread/backgroundTerminals/clean failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn thread_background_terminals_list(
+        &mut self,
+        thread_id: ThreadId,
+    ) -> Result<ThreadBackgroundTerminalsListResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadBackgroundTerminalsList {
+                request_id,
+                params: ThreadBackgroundTerminalsListParams {
+                    thread_id: thread_id.to_string(),
+                    cursor: None,
+                    limit: None,
+                },
+            })
+            .await
+            .wrap_err("thread/backgroundTerminals/list failed in TUI")
     }
 
     pub(crate) async fn thread_rollback(

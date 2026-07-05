@@ -1,3 +1,4 @@
+mod active_terminals;
 mod agents_md;
 mod environment;
 
@@ -15,6 +16,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 
+pub(crate) use active_terminals::ActiveTerminalsState;
 pub(crate) use agents_md::AgentsMdState;
 pub(crate) use environment::EnvironmentsState;
 

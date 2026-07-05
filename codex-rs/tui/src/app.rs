@@ -203,6 +203,7 @@ mod app_server_event_targets;
 mod app_server_events;
 pub(crate) mod app_server_requests;
 mod background_requests;
+mod background_terminals;
 mod config_persistence;
 mod event_dispatch;
 mod history_ui;

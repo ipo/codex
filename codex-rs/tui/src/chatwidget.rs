@@ -104,11 +104,14 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillMetadata as ProtocolSkillMetadata;
 use codex_app_server_protocol::SkillsListResponse;
+use codex_app_server_protocol::ThreadBackgroundTerminal;
 use codex_app_server_protocol::ThreadGoal as AppThreadGoal;
 use codex_app_server_protocol::ThreadGoalStatus as AppThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::ThreadSettingsUpdatedNotification;
+use codex_app_server_protocol::ThreadTerminalSource;
+use codex_app_server_protocol::ThreadTerminalStatusKind;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::ToolRequestUserInputParams;
 use codex_app_server_protocol::Turn;
@@ -1458,6 +1461,7 @@ impl ChatWidget {
         ));
     }
 
+    #[cfg(test)]
     pub(crate) fn add_ps_output(&mut self) {
         let processes = self
             .unified_exec_processes
@@ -1470,12 +1474,50 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_unified_exec_processes_output(processes));
     }
 
+    pub(crate) fn add_background_terminals_output(
+        &mut self,
+        terminals: Vec<ThreadBackgroundTerminal>,
+    ) {
+        let processes = terminals
+            .into_iter()
+            .map(|terminal| {
+                let command = split_command_string(&terminal.command);
+                history_cell::BackgroundTerminalDetails {
+                    command_display: strip_bash_lc_and_escape(&command),
+                    recent_chunks: Vec::new(),
+                    process_id: Some(terminal.process_id),
+                    cwd: Some(terminal.cwd.display().to_string()),
+                    source: match terminal.source {
+                        ThreadTerminalSource::Agent => {
+                            history_cell::BackgroundTerminalDisplaySource::Agent
+                        }
+                        ThreadTerminalSource::SharedTerminal => {
+                            history_cell::BackgroundTerminalDisplaySource::SharedTerminal
+                        }
+                    },
+                    label: terminal.label,
+                    status: match terminal.status.kind {
+                        ThreadTerminalStatusKind::Running => {
+                            history_cell::BackgroundTerminalDisplayStatus::Running
+                        }
+                        ThreadTerminalStatusKind::Exited => {
+                            history_cell::BackgroundTerminalDisplayStatus::Exited {
+                                exit_code: terminal.status.exit_code,
+                            }
+                        }
+                    },
+                }
+            })
+            .collect();
+        self.add_to_history(history_cell::new_background_terminals_output(processes));
+    }
+
     fn clean_background_terminals(&mut self) {
         self.submit_op(AppCommand::clean_background_terminals());
         self.unified_exec_processes.clear();
         self.sync_unified_exec_footer();
         self.add_info_message(
-            "Stopping all background terminals.".to_string(),
+            "Stopping all background terminals and shared /sh sessions.".to_string(),
             /*hint*/ None,
         );
     }

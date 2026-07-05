@@ -104,19 +104,94 @@ pub(crate) fn new_unified_exec_interaction(
 
 #[derive(Debug)]
 struct UnifiedExecProcessesCell {
-    processes: Vec<UnifiedExecProcessDetails>,
+    processes: Vec<BackgroundTerminalDetails>,
 }
 
 impl UnifiedExecProcessesCell {
-    fn new(processes: Vec<UnifiedExecProcessDetails>) -> Self {
+    fn new(processes: Vec<BackgroundTerminalDetails>) -> Self {
         Self { processes }
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct UnifiedExecProcessDetails {
     pub(crate) command_display: String,
     pub(crate) recent_chunks: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BackgroundTerminalDetails {
+    pub(crate) command_display: String,
+    pub(crate) recent_chunks: Vec<String>,
+    pub(crate) process_id: Option<String>,
+    pub(crate) cwd: Option<String>,
+    pub(crate) source: BackgroundTerminalDisplaySource,
+    pub(crate) label: Option<String>,
+    pub(crate) status: BackgroundTerminalDisplayStatus,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum BackgroundTerminalDisplaySource {
+    Agent,
+    SharedTerminal,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum BackgroundTerminalDisplayStatus {
+    Running,
+    Exited { exit_code: Option<i32> },
+}
+
+impl BackgroundTerminalDetails {
+    #[cfg(test)]
+    fn from_unified_exec(process: UnifiedExecProcessDetails) -> Self {
+        Self {
+            command_display: process.command_display,
+            recent_chunks: process.recent_chunks,
+            process_id: None,
+            cwd: None,
+            source: BackgroundTerminalDisplaySource::Agent,
+            label: None,
+            status: BackgroundTerminalDisplayStatus::Running,
+        }
+    }
+
+    fn summary(&self) -> String {
+        if self.process_id.is_none()
+            && self.cwd.is_none()
+            && self.source == BackgroundTerminalDisplaySource::Agent
+        {
+            return self.command_display.clone();
+        }
+
+        let mut parts = Vec::new();
+        match self.source {
+            BackgroundTerminalDisplaySource::Agent => parts.push("agent".to_string()),
+            BackgroundTerminalDisplaySource::SharedTerminal => {
+                parts.push(format!(
+                    "/sh {}",
+                    self.label.as_deref().unwrap_or("default")
+                ));
+                parts.push("shared".to_string());
+            }
+        }
+        if let Some(process_id) = &self.process_id {
+            parts.push(format!("pid {process_id}"));
+        }
+        if let Some(cwd) = &self.cwd {
+            parts.push(cwd.clone());
+        }
+        match self.status {
+            BackgroundTerminalDisplayStatus::Running => {}
+            BackgroundTerminalDisplayStatus::Exited { exit_code } => match exit_code {
+                Some(exit_code) => parts.push(format!("exited {exit_code}")),
+                None => parts.push("exited".to_string()),
+            },
+        }
+        parts.push(self.command_display.clone());
+        parts.join(" · ")
+    }
 }
 
 impl HistoryCell for UnifiedExecProcessesCell {
@@ -145,7 +220,7 @@ impl HistoryCell for UnifiedExecProcessesCell {
             if shown >= max_processes {
                 break;
             }
-            let command = &process.command_display;
+            let command = process.summary();
             let (snippet, snippet_truncated) = {
                 let (first_line, has_more_lines) = match command.split_once('\n') {
                     Some((first, _)) => (first, true),
@@ -233,8 +308,19 @@ impl HistoryCell for UnifiedExecProcessesCell {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn new_unified_exec_processes_output(
     processes: Vec<UnifiedExecProcessDetails>,
+) -> CompositeHistoryCell {
+    let processes = processes
+        .into_iter()
+        .map(BackgroundTerminalDetails::from_unified_exec)
+        .collect();
+    new_background_terminals_output(processes)
+}
+
+pub(crate) fn new_background_terminals_output(
+    processes: Vec<BackgroundTerminalDetails>,
 ) -> CompositeHistoryCell {
     let command = PlainHistoryCell::new(vec!["/ps".magenta().into()]);
     let summary = UnifiedExecProcessesCell::new(processes);

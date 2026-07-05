@@ -13,10 +13,16 @@ use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ProcessKillParams;
+use codex_app_server_protocol::ProcessKillResponse;
 use codex_app_server_protocol::ProcessOutputDeltaNotification;
 use codex_app_server_protocol::ProcessOutputStream;
+use codex_app_server_protocol::ProcessSpawnParams;
+use codex_app_server_protocol::ProcessSpawnResponse;
 use codex_app_server_protocol::ProcessTerminalSize;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
+use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsListParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsListResponse;
 use codex_app_server_protocol::ThreadItem;
@@ -33,6 +39,7 @@ use codex_app_server_protocol::ThreadTerminalWriteResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::TempDir;
@@ -244,6 +251,129 @@ async fn thread_terminal_facade_opens_writes_resizes_and_reuses_labeled_shell() 
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_background_clean_terminates_shared_terminals() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let working_directory = tmp.path().join("workdir");
+    std::fs::create_dir(&working_directory)?;
+
+    let server = create_mock_responses_server_sequence(Vec::new()).await;
+    create_config_toml(&codex_home, &server.uri())?;
+
+    let mut mcp = TestAppServer::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(working_directory.display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let initial_size = ProcessTerminalSize { rows: 20, cols: 80 };
+    let open = open_terminal(&mut mcp, &thread.id, "default", initial_size).await?;
+    let process_id = open.process_id.clone();
+
+    let list = list_background_terminals(&mut mcp, &thread.id).await?;
+    assert!(
+        list.data
+            .iter()
+            .any(|terminal| terminal.process_id == process_id
+                && terminal.source == ThreadTerminalSource::SharedTerminal
+                && terminal.label.as_deref() == Some("default")),
+        "shared terminal should appear before clean: {list:?}"
+    );
+
+    clean_background_terminals(&mut mcp, &thread.id).await?;
+    wait_for_background_terminal_absent(&mut mcp, &thread.id, &process_id).await?;
+
+    let reopened = open_terminal(&mut mcp, &thread.id, "default", initial_size).await?;
+    assert_ne!(reopened.process_id, process_id);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn process_spawn_sessions_are_not_listed_as_shared_thread_terminals() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let working_directory = tmp.path().join("workdir");
+    std::fs::create_dir(&working_directory)?;
+
+    let server = create_mock_responses_server_sequence(Vec::new()).await;
+    create_config_toml(&codex_home, &server.uri())?;
+
+    let mut mcp = TestAppServer::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(working_directory.display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let process_handle = "standalone-process-handle".to_string();
+    let spawn_req = mcp
+        .send_process_spawn_request(ProcessSpawnParams {
+            command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
+            process_handle: process_handle.clone(),
+            cwd: AbsolutePathBuf::try_from(working_directory.as_path())?,
+            tty: false,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: None,
+            timeout_ms: Some(None),
+            env: None,
+            size: None,
+        })
+        .await?;
+    let spawn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(spawn_req)),
+    )
+    .await??;
+    let _: ProcessSpawnResponse = to_response::<ProcessSpawnResponse>(spawn_resp)?;
+
+    let list = list_background_terminals(&mut mcp, &thread.id).await?;
+
+    let kill_req = mcp
+        .send_process_kill_request(ProcessKillParams {
+            process_handle: process_handle.clone(),
+        })
+        .await?;
+    let kill_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(kill_req)),
+    )
+    .await??;
+    let _: ProcessKillResponse = to_response::<ProcessKillResponse>(kill_resp)?;
+
+    assert!(
+        list.data.is_empty(),
+        "standalone process/spawn session {process_handle:?} should not appear as a thread background terminal: {list:?}"
+    );
+
+    Ok(())
+}
+
 async fn open_terminal(
     mcp: &mut TestAppServer,
     thread_id: &str,
@@ -389,6 +519,43 @@ async fn list_background_terminals(
     )
     .await??;
     to_response::<ThreadBackgroundTerminalsListResponse>(response)
+}
+
+async fn clean_background_terminals(mcp: &mut TestAppServer, thread_id: &str) -> Result<()> {
+    let request_id = mcp
+        .send_thread_background_terminals_clean_request(ThreadBackgroundTerminalsCleanParams {
+            thread_id: thread_id.to_string(),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: ThreadBackgroundTerminalsCleanResponse =
+        to_response::<ThreadBackgroundTerminalsCleanResponse>(response)?;
+    Ok(())
+}
+
+async fn wait_for_background_terminal_absent(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    process_id: &str,
+) -> Result<()> {
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+    while Instant::now() < deadline {
+        let list = list_background_terminals(mcp, thread_id).await?;
+        if list
+            .data
+            .iter()
+            .all(|terminal| terminal.process_id != process_id)
+        {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    bail!("timed out waiting for shared terminal {process_id} to disappear");
 }
 
 async fn wait_for_command_execution_started(mcp: &mut TestAppServer) -> Result<()> {

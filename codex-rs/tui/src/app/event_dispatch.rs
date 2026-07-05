@@ -798,6 +798,9 @@ impl App {
             AppEvent::OpenUserTerminal { label } => {
                 self.open_user_terminal(tui, app_server, label).await;
             }
+            AppEvent::ShowBackgroundTerminals => {
+                self.show_background_terminals(tui, app_server).await;
+            }
             AppEvent::RefreshStatusLineWorkspaceHeadline { request_id } => {
                 self.refresh_status_line_workspace_headline(app_server, request_id);
             }

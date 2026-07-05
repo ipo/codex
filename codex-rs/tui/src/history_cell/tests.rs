@@ -693,6 +693,32 @@ fn ps_output_multiline_snapshot() {
 }
 
 #[test]
+fn ps_output_shared_terminal_metadata_snapshot() {
+    let cell = new_background_terminals_output(vec![
+        BackgroundTerminalDetails {
+            command_display: "sleep 5".to_string(),
+            recent_chunks: Vec::new(),
+            process_id: Some("1000".to_string()),
+            cwd: Some("/repo".to_string()),
+            source: BackgroundTerminalDisplaySource::Agent,
+            label: None,
+            status: BackgroundTerminalDisplayStatus::Running,
+        },
+        BackgroundTerminalDetails {
+            command_display: "/bin/bash -l".to_string(),
+            recent_chunks: Vec::new(),
+            process_id: Some("1001".to_string()),
+            cwd: Some("/repo".to_string()),
+            source: BackgroundTerminalDisplaySource::SharedTerminal,
+            label: Some("default".to_string()),
+            status: BackgroundTerminalDisplayStatus::Running,
+        },
+    ]);
+    let rendered = render_lines(&cell.display_lines(/*width*/ 90)).join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn cyber_policy_error_event_snapshot() {
     let cell = new_cyber_policy_error_event();
     let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
