@@ -52,6 +52,7 @@ pub(crate) struct RuntimeKeymap {
     pub(crate) pager: PagerKeymap,
     pub(crate) list: ListKeymap,
     pub(crate) approval: ApprovalKeymap,
+    pub(crate) terminal: TerminalKeymap,
 }
 
 #[derive(Clone, Debug)]
@@ -261,6 +262,13 @@ pub(crate) struct ApprovalKeymap {
     pub(crate) deny: Vec<KeyBinding>,
     pub(crate) decline: Vec<KeyBinding>,
     pub(crate) cancel: Vec<KeyBinding>,
+}
+
+/// Interactive terminal overlay keybindings.
+#[derive(Clone, Debug)]
+pub(crate) struct TerminalKeymap {
+    /// Enter frame-control mode while the terminal is focused.
+    pub(crate) open_controls: Vec<KeyBinding>,
 }
 
 /// Returns the first binding, used as the primary UI hint for an action.
@@ -779,6 +787,10 @@ impl RuntimeKeymap {
             cancel: resolve_local!(keymap, defaults, approval, cancel),
         };
 
+        let terminal = TerminalKeymap {
+            open_controls: resolve_local!(keymap, defaults, terminal, open_controls),
+        };
+
         let list_move_up = resolve_local!(keymap, defaults, list, move_up);
         let list_move_down = resolve_local!(keymap, defaults, list, move_down);
         let list_accept = resolve_local!(keymap, defaults, list, accept);
@@ -895,6 +907,7 @@ impl RuntimeKeymap {
             pager,
             list,
             approval,
+            terminal,
         };
 
         resolved.validate_conflicts()?;
@@ -1148,6 +1161,9 @@ impl RuntimeKeymap {
                 deny: default_bindings![plain(KeyCode::Char('d'))],
                 decline: default_bindings![plain(KeyCode::Esc), plain(KeyCode::Char('n'))],
                 cancel: default_bindings![plain(KeyCode::Char('c'))],
+            },
+            terminal: TerminalKeymap {
+                open_controls: default_bindings![ctrl(KeyCode::Char('x'))],
             },
         }
     }
@@ -1631,6 +1647,11 @@ impl RuntimeKeymap {
                 ("decline", self.approval.decline.as_slice()),
                 ("cancel", self.approval.cancel.as_slice()),
             ],
+        )?;
+
+        validate_unique(
+            "terminal",
+            [("open_controls", self.terminal.open_controls.as_slice())],
         )?;
 
         let mut seen: HashMap<(KeyCode, KeyModifiers), &'static str> = HashMap::new();

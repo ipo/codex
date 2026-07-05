@@ -195,6 +195,7 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("approval", "Approval", "deny", "Choose the explicit deny option when available."),
     action("approval", "Approval", "decline", "Decline and provide corrective guidance."),
     action("approval", "Approval", "cancel", "Cancel an elicitation request."),
+    action("terminal", "Terminal", "open_controls", "Open terminal frame controls."),
 ];
 
 /// Convert a stable action identifier into a display label.
@@ -338,6 +339,7 @@ pub(super) fn binding_slot<'a>(
         ("approval", "deny") => Some(&mut keymap.approval.deny),
         ("approval", "decline") => Some(&mut keymap.approval.decline),
         ("approval", "cancel") => Some(&mut keymap.approval.cancel),
+        ("terminal", "open_controls") => Some(&mut keymap.terminal.open_controls),
         _ => None,
     }
 }
@@ -463,6 +465,7 @@ pub(super) fn bindings_for_action<'a>(
         ("approval", "deny") => Some(runtime_keymap.approval.deny.as_slice()),
         ("approval", "decline") => Some(runtime_keymap.approval.decline.as_slice()),
         ("approval", "cancel") => Some(runtime_keymap.approval.cancel.as_slice()),
+        ("terminal", "open_controls") => Some(runtime_keymap.terminal.open_controls.as_slice()),
         _ => None,
     }
 }

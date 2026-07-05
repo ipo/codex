@@ -1,0 +1,11 @@
+---
+source: tui/src/user_terminal/tests.rs
+expression: "render_to_string(&mut terminal, 60, 16)"
+---
+/sh default  7 rows  shared full-access  running  /repo
+prompt$ echo hi
+               hi
+
+
+
+ frame controls: x/q dismiss  f fullscreen  h half  +/- resi

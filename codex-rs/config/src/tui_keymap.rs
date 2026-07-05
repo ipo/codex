@@ -387,6 +387,15 @@ pub struct TuiApprovalKeymap {
     pub cancel: Option<KeybindingsSpec>,
 }
 
+/// Interactive terminal overlay keybindings.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(deny_unknown_fields)]
+pub struct TuiTerminalKeymap {
+    /// Enter terminal frame-control mode.
+    pub open_controls: Option<KeybindingsSpec>,
+}
+
 /// Raw keymap configuration from `[tui.keymap]`.
 ///
 /// Each context contains action-level overrides. Missing actions inherit from
@@ -421,6 +430,8 @@ pub struct TuiKeymap {
     pub list: TuiListKeymap,
     #[serde(default)]
     pub approval: TuiApprovalKeymap,
+    #[serde(default)]
+    pub terminal: TuiTerminalKeymap,
 }
 
 /// Normalize one user-entered key spec into canonical storage format.
@@ -650,6 +661,20 @@ mod tests {
         "#;
         let keymap: TuiKeymap = toml::from_str(toml_input).expect("valid config");
         assert!(keymap.global.open_transcript.is_some());
+    }
+
+    #[test]
+    fn terminal_open_controls_action_is_accepted() {
+        let toml_input = r#"
+            [terminal]
+            open_controls = "ctrl-x"
+        "#;
+        let keymap: TuiKeymap = toml::from_str(toml_input).expect("valid config");
+        let mut expected_keymap = TuiKeymap::default();
+        expected_keymap.terminal.open_controls =
+            Some(KeybindingsSpec::One(KeybindingSpec("ctrl-x".to_string())));
+
+        assert_eq!(keymap, expected_keymap);
     }
 
     #[test]

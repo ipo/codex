@@ -1068,6 +1068,22 @@ mod tests {
     }
 
     #[test]
+    fn picker_terminal_tab_lists_terminal_actions() {
+        let runtime = RuntimeKeymap::defaults();
+        let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());
+        let terminal_tab = selection_tab(&params, "terminal-shortcuts");
+
+        assert_eq!(
+            terminal_tab
+                .items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Open Controls"]
+        );
+    }
+
+    #[test]
     fn picker_content_snapshot() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params(&runtime, &TuiKeymap::default());

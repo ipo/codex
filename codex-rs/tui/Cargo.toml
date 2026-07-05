@@ -124,6 +124,7 @@ uuid = { workspace = true }
 
 codex-windows-sandbox = { workspace = true }
 tokio-util = { workspace = true, features = ["time"] }
+vt100 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
@@ -159,6 +160,5 @@ insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 serial_test = { workspace = true }
-vt100 = { workspace = true }
 uuid = { workspace = true }
 wiremock = { workspace = true }

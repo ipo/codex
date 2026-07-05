@@ -3122,6 +3122,9 @@
               "scroll_down": null,
               "scroll_up": null
             },
+            "terminal": {
+              "open_controls": null
+            },
             "vim_normal": {
               "append_after_cursor": null,
               "append_line_end": null,
@@ -3807,6 +3810,16 @@
             "scroll_up": null
           }
         },
+        "terminal": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiTerminalKeymap"
+            }
+          ],
+          "default": {
+            "open_controls": null
+          }
+        },
         "vim_normal": {
           "allOf": [
             {
@@ -4076,6 +4089,21 @@
           "type": "string"
         }
       ]
+    },
+    "TuiTerminalKeymap": {
+      "additionalProperties": false,
+      "description": "Interactive terminal overlay keybindings.",
+      "properties": {
+        "open_controls": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Enter terminal frame-control mode."
+        }
+      },
+      "type": "object"
     },
     "TuiVimNormalKeymap": {
       "additionalProperties": false,

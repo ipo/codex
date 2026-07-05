@@ -187,6 +187,7 @@ mod transcript_reflow;
 mod tui;
 mod ui_consts;
 pub(crate) mod update_action;
+mod user_terminal;
 pub use update_action::UpdateAction;
 #[cfg(not(debug_assertions))]
 pub use update_action::get_update_action;

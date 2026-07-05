@@ -1,0 +1,9 @@
+---
+source: tui/src/user_terminal/tests.rs
+expression: buffer_to_string(&buf)
+---
+/sh default  half  shared full-access  r
+redlo
+     world
+
+ ctrl + x controls   shell input

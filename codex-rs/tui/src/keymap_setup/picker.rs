@@ -119,6 +119,12 @@ const KEYMAP_CONTEXT_TABS: &[KeymapContextTab] = &[
         description: "Approval prompt shortcuts.",
         contexts: &["approval"],
     },
+    KeymapContextTab {
+        id: "terminal-shortcuts",
+        label: "Terminal",
+        description: "Interactive terminal overlay shortcuts.",
+        contexts: &["terminal"],
+    },
 ];
 
 #[cfg(test)]
