@@ -870,6 +870,17 @@ impl Session {
             .await?)
     }
 
+    pub(crate) async fn poll_shared_terminal(
+        &self,
+        process_id: i32,
+    ) -> anyhow::Result<SharedTerminalWriteOutput> {
+        Ok(self
+            .services
+            .unified_exec_manager
+            .poll_shared_terminal(process_id)
+            .await?)
+    }
+
     pub(crate) async fn terminate_background_terminal(&self, process_id: i32) -> bool {
         self.services
             .unified_exec_manager

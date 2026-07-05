@@ -12,12 +12,15 @@ use codex_app_server_protocol::ThreadTerminalResizeResponse;
 use codex_app_server_protocol::ThreadTerminalStatus;
 use codex_app_server_protocol::ThreadTerminalStatusKind;
 use std::collections::hash_map::Entry;
+use std::time::Duration;
 
 use crate::user_terminal::TerminalContentSize;
 use crate::user_terminal::TerminalFrameAction;
 use crate::user_terminal::TerminalMetadata;
 use crate::user_terminal::TerminalRenderOutcome;
 use crate::user_terminal::UserTerminalSurface;
+
+const USER_TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Thread-scoped terminal RPCs used by the `/sh` TUI surface.
 ///
@@ -36,6 +39,12 @@ pub(super) trait UserTerminalRpc {
         thread_id: ThreadId,
         process_id: String,
         input: &[u8],
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    fn poll_terminal(
+        &mut self,
+        thread_id: ThreadId,
+        process_id: String,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
     fn resize_terminal(
@@ -65,6 +74,10 @@ impl UserTerminalRpc for AppServerSession {
         AppServerSession::thread_terminal_write(self, thread_id, process_id, input).await
     }
 
+    async fn poll_terminal(&mut self, thread_id: ThreadId, process_id: String) -> Result<()> {
+        AppServerSession::thread_terminal_poll(self, thread_id, process_id).await
+    }
+
     async fn resize_terminal(
         &mut self,
         thread_id: ThreadId,
@@ -91,6 +104,8 @@ pub(super) struct UserTerminalSession {
     surface: UserTerminalSurface,
     process_id: Option<String>,
     last_content_size: Option<TerminalContentSize>,
+    running: bool,
+    poll_scheduled: bool,
 }
 
 #[derive(Default)]
@@ -130,6 +145,8 @@ impl UserTerminalState {
                 surface: UserTerminalSurface::new(metadata, open_controls),
                 process_id: None,
                 last_content_size: None,
+                running: false,
+                poll_scheduled: false,
             }),
         }
     }
@@ -148,9 +165,11 @@ impl UserTerminalState {
         if let Some(session) = self.sessions.get_mut(&key) {
             if process_changed {
                 session.surface.reset_for_new_process();
+                session.poll_scheduled = false;
             }
             session.surface.set_metadata(metadata);
             session.process_id = Some(terminal.process_id.clone());
+            session.running = terminal.status.kind == ThreadTerminalStatusKind::Running;
         }
         self.process_keys
             .insert(terminal.process_id.clone(), key.clone());
@@ -164,6 +183,29 @@ impl UserTerminalState {
 
     fn dismiss_active(&mut self) {
         self.active_key = None;
+    }
+
+    fn mark_active_poll_scheduled(&mut self) -> Option<(ThreadId, String, String)> {
+        let key = self.active_key.clone()?;
+        let session = self.sessions.get_mut(&key)?;
+        let process_id = session.process_id.clone()?;
+        if !session.running || session.poll_scheduled {
+            return None;
+        }
+        session.poll_scheduled = true;
+        Some((key.thread_id, key.label, process_id))
+    }
+
+    fn clear_poll_scheduled(&mut self, thread_id: ThreadId, label: &str, process_id: &str) -> bool {
+        let key = UserTerminalKey::new(thread_id, label.to_string());
+        let Some(session) = self.sessions.get_mut(&key) else {
+            return false;
+        };
+        if session.process_id.as_deref() != Some(process_id) {
+            return false;
+        }
+        session.poll_scheduled = false;
+        self.active_key.as_ref() == Some(&key) && session.running
     }
 }
 
@@ -226,6 +268,7 @@ impl App {
                 );
                 session.last_content_size = Some(content_size);
                 self.user_terminals.attach_terminal(key, &response.terminal);
+                self.schedule_active_user_terminal_poll();
                 tui.frame_requester().schedule_frame();
             }
             Err(err) => {
@@ -353,6 +396,43 @@ impl App {
         }
     }
 
+    pub(super) async fn poll_user_terminal(
+        &mut self,
+        app_server: &mut impl UserTerminalRpc,
+        thread_id: ThreadId,
+        label: String,
+        process_id: String,
+    ) {
+        if !self
+            .user_terminals
+            .clear_poll_scheduled(thread_id, &label, &process_id)
+        {
+            return;
+        }
+
+        match app_server
+            .poll_terminal(thread_id, process_id.clone())
+            .await
+        {
+            Ok(()) => {
+                self.schedule_active_user_terminal_poll();
+            }
+            Err(err) => {
+                if let Some(session) = self
+                    .user_terminals
+                    .sessions
+                    .get_mut(&UserTerminalKey::new(thread_id, label.clone()))
+                    && session.process_id.as_deref() == Some(process_id.as_str())
+                {
+                    session.running = false;
+                }
+                self.chat_widget
+                    .add_error_message(format!("Failed to poll /sh '{label}': {err}"));
+                self.app_event_tx.send(AppEvent::RequestRedraw);
+            }
+        }
+    }
+
     async fn resize_active_user_terminal_if_needed(
         &mut self,
         app_server: &mut impl UserTerminalRpc,
@@ -469,6 +549,8 @@ impl App {
         let mut metadata = session.surface_metadata();
         metadata.status = format!("exited {}", notification.exit_code);
         session.surface.set_metadata(metadata);
+        session.running = false;
+        session.poll_scheduled = false;
         self.app_event_tx.send(AppEvent::RequestRedraw);
         true
     }
@@ -476,8 +558,27 @@ impl App {
     fn active_user_terminal_target(&self) -> Option<(ThreadId, String, String)> {
         let key = self.user_terminals.active_key.as_ref()?;
         let session = self.user_terminals.sessions.get(key)?;
+        if !session.running {
+            return None;
+        }
         let process_id = session.process_id.clone()?;
         Some((key.thread_id, process_id, key.label.clone()))
+    }
+
+    fn schedule_active_user_terminal_poll(&mut self) {
+        let Some((thread_id, label, process_id)) = self.user_terminals.mark_active_poll_scheduled()
+        else {
+            return;
+        };
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(USER_TERMINAL_POLL_INTERVAL).await;
+            app_event_tx.send(AppEvent::PollUserTerminal {
+                thread_id,
+                label,
+                process_id,
+            });
+        });
     }
 }
 

@@ -1090,6 +1090,27 @@ impl AppServerSession {
         Ok(())
     }
 
+    pub(crate) async fn thread_terminal_poll(
+        &mut self,
+        thread_id: ThreadId,
+        process_id: String,
+    ) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadTerminalWriteResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadTerminalWrite {
+                request_id,
+                params: ThreadTerminalWriteParams {
+                    thread_id: thread_id.to_string(),
+                    process_id,
+                    delta_base64: None,
+                },
+            })
+            .await
+            .wrap_err("thread/terminal/write poll failed in TUI")?;
+        Ok(())
+    }
+
     pub(crate) async fn thread_terminal_resize(
         &mut self,
         thread_id: ThreadId,

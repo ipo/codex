@@ -318,6 +318,7 @@ async fn write_stdin(
             process_id,
             input,
             yield_time_ms,
+            empty_yield_time_ms_floor: MIN_EMPTY_YIELD_TIME_MS,
             max_output_tokens: None,
             truncation_policy: TruncationPolicy::Tokens(10_000),
         })

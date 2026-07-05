@@ -7,6 +7,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
+use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::unified_exec::WriteStdinRequest;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TerminalInteractionEvent;
@@ -74,6 +75,7 @@ impl WriteStdinHandler {
                 process_id: args.session_id,
                 input: &args.chars,
                 yield_time_ms: args.yield_time_ms,
+                empty_yield_time_ms_floor: MIN_EMPTY_YIELD_TIME_MS,
                 max_output_tokens: args.max_output_tokens,
                 truncation_policy: turn.model_info.truncation_policy.into(),
             })

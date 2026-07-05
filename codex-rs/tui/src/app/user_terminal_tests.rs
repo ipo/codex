@@ -367,6 +367,57 @@ async fn paste_and_frame_control_escape_stay_terminal_local() -> Result<()> {
 }
 
 #[tokio::test]
+async fn active_terminal_poll_drains_without_pty_input_and_ignores_dismissed_overlay() -> Result<()>
+{
+    let (mut app, _app_event_rx, _op_rx) =
+        crate::app::test_support::make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.active_thread_id = Some(thread_id);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let terminal = fake_terminal(&app, thread_id, "default", "41");
+    let mut terminal_rpc = RecordingTerminalRpc::new(vec![terminal]);
+
+    app.open_user_terminal(&mut tui, &mut terminal_rpc, String::new())
+        .await;
+    let process_id = active_process_id(&app);
+
+    app.poll_user_terminal(
+        &mut terminal_rpc,
+        thread_id,
+        "default".to_string(),
+        process_id.clone(),
+    )
+    .await;
+    assert_eq!(
+        terminal_rpc.poll_calls,
+        vec![PollCall {
+            thread_id,
+            process_id: process_id.clone(),
+        }]
+    );
+    assert!(
+        terminal_rpc.write_calls.is_empty(),
+        "polling must not send PTY input"
+    );
+
+    app.user_terminals.dismiss_active();
+    app.poll_user_terminal(
+        &mut terminal_rpc,
+        thread_id,
+        "default".to_string(),
+        process_id,
+    )
+    .await;
+    assert_eq!(
+        terminal_rpc.poll_calls.len(),
+        1,
+        "stale poll events after dismiss should be ignored"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_label_reports_error_without_opening_terminal() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) =
         crate::app::test_support::make_test_app_with_channels().await;
@@ -553,6 +604,12 @@ struct WriteCall {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct PollCall {
+    thread_id: ThreadId,
+    process_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct ResizeCall {
     thread_id: ThreadId,
     process_id: String,
@@ -563,9 +620,11 @@ struct RecordingTerminalRpc {
     open_responses: VecDeque<ThreadTerminalInfo>,
     open_calls: Vec<OpenCall>,
     write_calls: Vec<WriteCall>,
+    poll_calls: Vec<PollCall>,
     resize_calls: Vec<ResizeCall>,
     open_error: Option<String>,
     write_error: Option<String>,
+    poll_error: Option<String>,
     resize_error: Option<String>,
 }
 
@@ -575,9 +634,11 @@ impl RecordingTerminalRpc {
             open_responses: open_responses.into(),
             open_calls: Vec::new(),
             write_calls: Vec::new(),
+            poll_calls: Vec::new(),
             resize_calls: Vec::new(),
             open_error: None,
             write_error: None,
+            poll_error: None,
             resize_error: None,
         }
     }
@@ -618,6 +679,17 @@ impl UserTerminalRpc for RecordingTerminalRpc {
             input: input.to_vec(),
         });
         if let Some(error) = self.write_error.take() {
+            bail!("{error}");
+        }
+        Ok(())
+    }
+
+    async fn poll_terminal(&mut self, thread_id: ThreadId, process_id: String) -> Result<()> {
+        self.poll_calls.push(PollCall {
+            thread_id,
+            process_id,
+        });
+        if let Some(error) = self.poll_error.take() {
             bail!("{error}");
         }
         Ok(())

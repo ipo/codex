@@ -20,6 +20,7 @@ use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::runtimes::strip_managed_proxy_env;
+use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::ProcessEntry;
 use crate::unified_exec::UnifiedExecError;
@@ -245,6 +246,32 @@ impl UnifiedExecProcessManager {
         input: &str,
         yield_time_ms: u64,
     ) -> Result<SharedTerminalWriteOutput, UnifiedExecError> {
+        self.write_shared_terminal_with_empty_poll_floor(
+            process_id,
+            input,
+            yield_time_ms,
+            MIN_EMPTY_YIELD_TIME_MS,
+        )
+        .await
+    }
+
+    pub(crate) async fn poll_shared_terminal(
+        &self,
+        process_id: i32,
+    ) -> Result<SharedTerminalWriteOutput, UnifiedExecError> {
+        self.write_shared_terminal_with_empty_poll_floor(
+            process_id, "", /*yield_time_ms*/ 0, /*empty_yield_time_ms_floor*/ 0,
+        )
+        .await
+    }
+
+    async fn write_shared_terminal_with_empty_poll_floor(
+        &self,
+        process_id: i32,
+        input: &str,
+        yield_time_ms: u64,
+        empty_yield_time_ms_floor: u64,
+    ) -> Result<SharedTerminalWriteOutput, UnifiedExecError> {
         {
             let store = self.process_store.lock().await;
             let Some(entry) = store.processes.get(&process_id) else {
@@ -265,6 +292,7 @@ impl UnifiedExecProcessManager {
                 process_id,
                 input,
                 yield_time_ms,
+                empty_yield_time_ms_floor,
                 max_output_tokens: None,
                 truncation_policy: TruncationPolicy::Tokens(10_000),
             })

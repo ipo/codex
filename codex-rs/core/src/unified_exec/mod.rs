@@ -121,6 +121,7 @@ pub(crate) struct WriteStdinRequest<'a> {
     pub process_id: i32,
     pub input: &'a str,
     pub yield_time_ms: u64,
+    pub empty_yield_time_ms_floor: u64,
     pub max_output_tokens: Option<usize>,
     pub truncation_policy: TruncationPolicy,
 }

@@ -1923,6 +1923,7 @@ impl ThreadRequestProcessor {
         let process_id_int = process_id
             .parse::<i32>()
             .map_err(|err| invalid_request(format!("invalid terminal process id: {err}")))?;
+        let is_poll = delta_base64.is_none();
         let input = match delta_base64 {
             Some(delta_base64) => {
                 let bytes = STANDARD
@@ -1935,10 +1936,17 @@ impl ThreadRequestProcessor {
         };
 
         let (_, thread) = self.load_thread(&thread_id).await?;
-        let output = thread
-            .write_shared_terminal(process_id_int, &input)
-            .await
-            .map_err(|err| invalid_request(format!("failed to write shared terminal: {err}")))?;
+        let output = if is_poll {
+            thread
+                .poll_shared_terminal(process_id_int)
+                .await
+                .map_err(|err| invalid_request(format!("failed to poll shared terminal: {err}")))?
+        } else {
+            thread
+                .write_shared_terminal(process_id_int, &input)
+                .await
+                .map_err(|err| invalid_request(format!("failed to write shared terminal: {err}")))?
+        };
 
         if !output.output.is_empty() {
             self.outgoing

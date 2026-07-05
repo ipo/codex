@@ -184,6 +184,20 @@ async fn thread_terminal_facade_opens_writes_resizes_and_reuses_labeled_shell() 
         "expected terminal output to contain marker, got {output:?}"
     );
 
+    let delayed_marker = "codex-thread-terminal-delayed-marker";
+    let delayed_output = write_command_and_wait_for_output(
+        &mut mcp,
+        &thread.id,
+        &process_id,
+        &format!("sleep 1; printf '{delayed_marker}\\n'\n"),
+        delayed_marker,
+    )
+    .await?;
+    assert!(
+        delayed_output.contains(delayed_marker),
+        "expected polled terminal output to contain delayed marker, got {delayed_output:?}"
+    );
+
     let first_resize = resize_terminal(
         &mut mcp,
         &thread.id,

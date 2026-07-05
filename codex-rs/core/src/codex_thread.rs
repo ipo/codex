@@ -472,6 +472,13 @@ impl CodexThread {
             .await
     }
 
+    pub async fn poll_shared_terminal(
+        &self,
+        process_id: i32,
+    ) -> anyhow::Result<SharedTerminalWriteOutput> {
+        self.codex.session.poll_shared_terminal(process_id).await
+    }
+
     pub async fn terminate_background_terminal(&self, process_id: i32) -> bool {
         self.codex
             .session

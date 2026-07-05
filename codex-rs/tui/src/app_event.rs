@@ -354,6 +354,13 @@ pub(crate) enum AppEvent {
         label: String,
     },
 
+    /// Drain pending output for the active shared shell terminal if it still matches this target.
+    PollUserTerminal {
+        thread_id: ThreadId,
+        label: String,
+        process_id: String,
+    },
+
     /// Show the authoritative list of thread-owned background terminals.
     ShowBackgroundTerminals,
 

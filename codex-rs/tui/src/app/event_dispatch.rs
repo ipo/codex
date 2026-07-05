@@ -798,6 +798,14 @@ impl App {
             AppEvent::OpenUserTerminal { label } => {
                 self.open_user_terminal(tui, app_server, label).await;
             }
+            AppEvent::PollUserTerminal {
+                thread_id,
+                label,
+                process_id,
+            } => {
+                self.poll_user_terminal(app_server, thread_id, label, process_id)
+                    .await;
+            }
             AppEvent::ShowBackgroundTerminals => {
                 self.show_background_terminals(tui, app_server).await;
             }
