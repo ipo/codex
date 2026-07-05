@@ -19,6 +19,8 @@ pub(crate) enum UnifiedExecError {
     StdinClosed,
     #[error("missing command line for unified exec request")]
     MissingCommandLine,
+    #[error("invalid shared terminal label `{label}`; labels must match [A-Za-z0-9._-]{{1,64}}")]
+    InvalidSharedTerminalLabel { label: String },
     #[error("Command denied by sandbox: {message}")]
     SandboxDenied {
         message: String,

@@ -52,6 +52,7 @@ use codex_sandboxing::SandboxablePreference;
 use codex_shell_command::powershell::prefix_powershell_script_with_utf8;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_path_uri::PathUri;
+use codex_utils_pty::TerminalSize;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::io;
@@ -437,6 +438,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                             req.tty,
                             prepared.spawn_lifecycle,
                             req.turn_environment.environment.as_ref(),
+                            TerminalSize::default(),
                         )
                         .await
                         .map_err(|err| match err {

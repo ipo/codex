@@ -45,6 +45,7 @@ use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
+use codex_utils_pty::TerminalSize;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -54,6 +55,9 @@ use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 use codex_rollout::state_db::StateDbHandle;
+
+use crate::unified_exec::SharedTerminalInfo;
+use crate::unified_exec::SharedTerminalOpenRequest;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
@@ -165,12 +169,29 @@ pub struct CodexThread {
     out_of_band_elicitation_count: Mutex<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackgroundTerminalSource {
+    Agent,
+    SharedTerminal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackgroundTerminalStatus {
+    Running,
+    Exited { exit_code: Option<i32> },
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub struct BackgroundTerminalInfo {
     pub item_id: String,
     pub process_id: String,
     pub command: String,
     pub cwd: PathUri,
+    pub source: BackgroundTerminalSource,
+    pub label: Option<String>,
+    pub tty: bool,
+    pub terminal_size: Option<TerminalSize>,
+    pub status: BackgroundTerminalStatus,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
@@ -419,6 +440,24 @@ impl CodexThread {
 
     pub async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
         self.codex.session.list_background_terminals().await
+    }
+
+    pub async fn open_shared_terminal(
+        &self,
+        request: SharedTerminalOpenRequest,
+    ) -> anyhow::Result<SharedTerminalInfo> {
+        self.codex.session.open_shared_terminal(request).await
+    }
+
+    pub async fn resize_shared_terminal(
+        &self,
+        process_id: i32,
+        terminal_size: TerminalSize,
+    ) -> anyhow::Result<SharedTerminalInfo> {
+        self.codex
+            .session
+            .resize_shared_terminal(process_id, terminal_size)
+            .await
     }
 
     pub async fn terminate_background_terminal(&self, process_id: i32) -> bool {

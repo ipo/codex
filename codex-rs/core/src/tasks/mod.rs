@@ -34,6 +34,8 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use crate::unified_exec::SharedTerminalInfo;
+use crate::unified_exec::SharedTerminalOpenRequest;
 use codex_analytics::TurnProfileFact;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
@@ -57,6 +59,7 @@ use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
+use codex_utils_pty::TerminalSize;
 pub(crate) use compact::CompactTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
@@ -817,6 +820,38 @@ impl Session {
 
     pub(crate) async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
         self.services.unified_exec_manager.list_processes().await
+    }
+
+    pub(crate) async fn open_shared_terminal(
+        self: &Arc<Self>,
+        request: SharedTerminalOpenRequest,
+    ) -> anyhow::Result<SharedTerminalInfo> {
+        let turn_context = {
+            let active_turn = self.active_turn.lock().await;
+            active_turn
+                .as_ref()
+                .and_then(|active_turn| active_turn.task.as_ref())
+                .map(|task| Arc::clone(&task.turn_context))
+        }
+        .ok_or_else(|| anyhow::anyhow!("cannot open shared terminal without an active turn"))?;
+
+        Ok(self
+            .services
+            .unified_exec_manager
+            .open_shared_terminal(Arc::clone(self), turn_context, request)
+            .await?)
+    }
+
+    pub(crate) async fn resize_shared_terminal(
+        &self,
+        process_id: i32,
+        terminal_size: TerminalSize,
+    ) -> anyhow::Result<SharedTerminalInfo> {
+        Ok(self
+            .services
+            .unified_exec_manager
+            .resize_shared_terminal(process_id, terminal_size)
+            .await?)
     }
 
     pub(crate) async fn terminate_background_terminal(&self, process_id: i32) -> bool {

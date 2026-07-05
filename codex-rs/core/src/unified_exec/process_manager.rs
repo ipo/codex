@@ -13,6 +13,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::codex_thread::BackgroundTerminalInfo;
+use crate::codex_thread::BackgroundTerminalSource;
+use crate::codex_thread::BackgroundTerminalStatus;
 use crate::exec_env::CODEX_PERMISSION_PROFILE_ENV_VAR;
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 use crate::exec_env::create_env;
@@ -65,6 +67,7 @@ use codex_sandboxing::SandboxCommand;
 use codex_tools::ToolName;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_path_uri::PathUri;
+use codex_utils_pty::TerminalSize;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -222,7 +225,7 @@ impl Drop for InitialExecCommandGuard {
     }
 }
 
-async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
+pub(super) async fn unregister_network_approval_for_entry(entry: &ProcessEntry) {
     if let Some(network_approval) = entry.network_approval.as_ref()
         && let Some(session) = entry.session.upgrade()
     {
@@ -398,7 +401,11 @@ impl UnifiedExecProcessManager {
     pub(crate) async fn release_process_id(&self, process_id: i32) {
         let removed = {
             let mut store = self.process_store.lock().await;
-            store.remove(process_id)
+            let removed = store.remove(process_id);
+            if removed.is_none() {
+                store.release_reserved_process_id(process_id);
+            }
+            removed
         };
         if let Some(entry) = removed {
             unregister_network_approval_for_entry(&entry).await;
@@ -874,6 +881,7 @@ impl UnifiedExecProcessManager {
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
         initial_exec_command_active: Arc<AtomicBool>,
     ) {
+        let terminal_size = tty.then_some(TerminalSize::default());
         let entry = ProcessEntry {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
@@ -885,6 +893,8 @@ impl UnifiedExecProcessManager {
             network_approval,
             session: Arc::downgrade(&context.session),
             last_used: started_at,
+            shared_terminal: None,
+            terminal_size,
         };
         let pruned_entry = {
             let mut store = self.process_store.lock().await;
@@ -939,6 +949,7 @@ impl UnifiedExecProcessManager {
             tty,
             spawn_lifecycle,
             environment,
+            TerminalSize::default(),
         )
         .await
         .map_err(|err| match err {
@@ -959,6 +970,7 @@ impl UnifiedExecProcessManager {
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
         environment: &codex_exec_server::Environment,
+        terminal_size: TerminalSize,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let inherited_fds = spawn_lifecycle.inherited_fds();
 
@@ -1083,7 +1095,7 @@ impl UnifiedExecProcessManager {
                 native_cwd.as_path(),
                 &request.env,
                 &request.arg0,
-                codex_utils_pty::TerminalSize::default(),
+                terminal_size,
                 &inherited_fds,
             )
             .await
@@ -1329,7 +1341,7 @@ impl UnifiedExecProcessManager {
         }
     }
 
-    fn prune_processes_if_needed(store: &mut ProcessStore) -> Option<ProcessEntry> {
+    pub(super) fn prune_processes_if_needed(store: &mut ProcessStore) -> Option<ProcessEntry> {
         if store.processes.len() < MAX_UNIFIED_EXEC_PROCESSES {
             return None;
         }
@@ -1409,6 +1421,24 @@ impl UnifiedExecProcessManager {
                 process_id: entry.process_id.to_string(),
                 command: entry.hook_command.clone(),
                 cwd: entry.cwd.clone(),
+                source: if entry.shared_terminal.is_some() {
+                    BackgroundTerminalSource::SharedTerminal
+                } else {
+                    BackgroundTerminalSource::Agent
+                },
+                label: entry
+                    .shared_terminal
+                    .as_ref()
+                    .map(|shared_terminal| shared_terminal.label.clone()),
+                tty: entry.tty,
+                terminal_size: entry.terminal_size,
+                status: if entry.process.has_exited() {
+                    BackgroundTerminalStatus::Exited {
+                        exit_code: entry.process.exit_code(),
+                    }
+                } else {
+                    BackgroundTerminalStatus::Running
+                },
             })
             .collect()
     }

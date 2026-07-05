@@ -27,6 +27,7 @@ use codex_utils_output_truncation::formatted_truncate_text;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
 use codex_utils_pty::SpawnedPty;
+use codex_utils_pty::TerminalSize;
 
 use super::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
 use super::UnifiedExecError;
@@ -242,6 +243,17 @@ impl UnifiedExecProcess {
                 .signal(ExecServerProcessSignal::Interrupt)
                 .await
                 .map_err(|err| UnifiedExecError::process_failed(err.to_string())),
+        }
+    }
+
+    pub(super) async fn resize(&self, size: TerminalSize) -> Result<(), UnifiedExecError> {
+        match &self.process_handle {
+            ProcessHandle::Local(process_handle) => process_handle
+                .resize(size)
+                .map_err(|err| UnifiedExecError::process_failed(err.to_string())),
+            ProcessHandle::ExecServer(_) => Err(UnifiedExecError::process_failed(
+                "remote exec-server processes do not support resize yet".to_string(),
+            )),
         }
     }
 

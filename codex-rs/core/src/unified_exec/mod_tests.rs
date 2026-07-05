@@ -1,6 +1,8 @@
 use super::head_tail_buffer::HeadTailBuffer;
 use super::*;
 use crate::codex_thread::BackgroundTerminalInfo;
+use crate::codex_thread::BackgroundTerminalSource;
+use crate::codex_thread::BackgroundTerminalStatus;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
@@ -23,6 +25,7 @@ use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
+use codex_utils_pty::TerminalSize;
 use core_test_support::skip_if_no_remote_env;
 use core_test_support::skip_if_sandbox;
 use core_test_support::test_codex::test_env as remote_test_env;
@@ -118,6 +121,7 @@ async fn exec_command_with_tty(
                     .expect("turn environment")
                     .environment
                     .as_ref(),
+                TerminalSize::default(),
             )
             .await?,
     );
@@ -137,6 +141,8 @@ async fn exec_command_with_tty(
             network_approval: None,
             session: Arc::downgrade(session),
             last_used: started_at,
+            shared_terminal: None,
+            terminal_size: tty.then_some(TerminalSize::default()),
         };
         manager
             .process_store
@@ -371,6 +377,11 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
             process_id: process_id.to_string(),
             command: "bash -i".to_string(),
             cwd: cwd.into(),
+            source: BackgroundTerminalSource::Agent,
+            label: None,
+            tty: true,
+            terminal_size: Some(TerminalSize::default()),
+            status: BackgroundTerminalStatus::Running,
         }]
     );
 
@@ -654,6 +665,191 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_terminal_reuses_labels_and_accepts_agent_stdin() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let initial_size = TerminalSize { rows: 20, cols: 70 };
+    let first = manager
+        .open_shared_terminal(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            SharedTerminalOpenRequest {
+                label: "  default  ".to_string(),
+                terminal_size: Some(initial_size),
+            },
+        )
+        .await?;
+    assert_eq!(
+        first,
+        SharedTerminalInfo {
+            label: "default".to_string(),
+            item_id: format!("shared-terminal:default:{}", first.process_id),
+            process_id: first.process_id,
+            command: first.command.clone(),
+            cwd: first.cwd.clone(),
+            tty: true,
+            terminal_size: Some(initial_size),
+            status: SharedTerminalStatus::Running,
+        }
+    );
+
+    let reopened = manager
+        .open_shared_terminal(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            SharedTerminalOpenRequest {
+                label: "default".to_string(),
+                terminal_size: None,
+            },
+        )
+        .await?;
+    assert_eq!(reopened.process_id, first.process_id);
+
+    let other = manager
+        .open_shared_terminal(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            SharedTerminalOpenRequest {
+                label: "logs".to_string(),
+                terminal_size: None,
+            },
+        )
+        .await?;
+    assert_ne!(other.process_id, first.process_id);
+
+    let mut actual_terminals = session.list_background_terminals().await;
+    actual_terminals.sort_by(|left, right| left.process_id.cmp(&right.process_id));
+    let mut expected_terminals = vec![
+        BackgroundTerminalInfo {
+            item_id: first.item_id.clone(),
+            process_id: first.process_id.to_string(),
+            command: first.command.clone(),
+            cwd: first.cwd.clone(),
+            source: BackgroundTerminalSource::SharedTerminal,
+            label: Some("default".to_string()),
+            tty: true,
+            terminal_size: Some(initial_size),
+            status: BackgroundTerminalStatus::Running,
+        },
+        BackgroundTerminalInfo {
+            item_id: other.item_id.clone(),
+            process_id: other.process_id.to_string(),
+            command: other.command.clone(),
+            cwd: other.cwd.clone(),
+            source: BackgroundTerminalSource::SharedTerminal,
+            label: Some("logs".to_string()),
+            tty: true,
+            terminal_size: Some(TerminalSize::default()),
+            status: BackgroundTerminalStatus::Running,
+        },
+    ];
+    expected_terminals.sort_by(|left, right| left.process_id.cmp(&right.process_id));
+    assert_eq!(actual_terminals, expected_terminals);
+
+    let output = write_stdin(
+        &session,
+        first.process_id,
+        "printf 'shared-terminal-agent-write\\n'\n",
+        /*yield_time_ms*/ 2_500,
+    )
+    .await?;
+    assert!(String::from_utf8_lossy(&output.raw_output).contains("shared-terminal-agent-write"));
+
+    let resized_size = TerminalSize { rows: 33, cols: 99 };
+    let resized = manager
+        .resize_shared_terminal(first.process_id, resized_size)
+        .await?;
+    assert_eq!(resized.terminal_size, Some(resized_size));
+
+    manager.terminate_all_processes().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_terminal_reopens_exited_labels_with_fresh_process() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let first = manager
+        .open_shared_terminal(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            SharedTerminalOpenRequest {
+                label: "exit-test".to_string(),
+                terminal_size: None,
+            },
+        )
+        .await?;
+
+    write_stdin(
+        &session,
+        first.process_id,
+        "exit\n",
+        /*yield_time_ms*/ 2_500,
+    )
+    .await?;
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let is_closed = {
+                let store = manager.process_store.lock().await;
+                store
+                    .processes
+                    .get(&first.process_id)
+                    .is_none_or(|entry| entry.process.has_exited())
+            };
+            if is_closed {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("shared terminal should exit");
+
+    let reopened = manager
+        .open_shared_terminal(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            SharedTerminalOpenRequest {
+                label: "exit-test".to_string(),
+                terminal_size: None,
+            },
+        )
+        .await?;
+    assert_ne!(reopened.process_id, first.process_id);
+
+    manager.terminate_all_processes().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_terminal_rejects_invalid_labels_before_spawning() -> anyhow::Result<()> {
+    let (session, turn) = test_session_and_turn().await;
+    let err = session
+        .services
+        .unified_exec_manager
+        .open_shared_terminal(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            SharedTerminalOpenRequest {
+                label: "bad label".to_string(),
+                terminal_size: None,
+            },
+        )
+        .await
+        .expect_err("label should be rejected");
+    assert_eq!(
+        err.to_string(),
+        "invalid shared terminal label `bad label`; labels must match [A-Za-z0-9._-]{1,64}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminating_initial_exec_command_rechecks_initial_response_state() -> anyhow::Result<()> {
     let (session, turn) = test_session_and_turn().await;
     let manager = &session.services.unified_exec_manager;
@@ -681,6 +877,8 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             network_approval: None,
             session: Arc::downgrade(&session),
             last_used: Instant::now(),
+            shared_terminal: None,
+            terminal_size: Some(TerminalSize::default()),
         },
     );
 
@@ -754,6 +952,8 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
             network_approval: None,
             session: Arc::downgrade(&session),
             last_used,
+            shared_terminal: None,
+            terminal_size: Some(TerminalSize::default()),
         },
     );
 
@@ -815,6 +1015,7 @@ async fn completed_pipe_commands_preserve_exit_code() -> anyhow::Result<()> {
             /*tty*/ false,
             Box::new(NoopSpawnLifecycle),
             &environment,
+            TerminalSize::default(),
         )
         .await?;
 
@@ -855,6 +1056,7 @@ async fn unified_exec_uses_remote_exec_server_when_configured() -> anyhow::Resul
             /*tty*/ true,
             Box::new(NoopSpawnLifecycle),
             remote_test_env.environment(),
+            TerminalSize::default(),
         )
         .await?;
 
@@ -916,6 +1118,7 @@ async fn remote_exec_server_rejects_inherited_fd_launches() -> anyhow::Result<()
                 .expect("turn environment")
                 .environment
                 .as_ref(),
+            TerminalSize::default(),
         )
         .await
         .expect_err("expected inherited fd rejection");

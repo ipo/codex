@@ -32,6 +32,7 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_tools::UnifiedExecShellMode;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_path_uri::PathUri;
+use codex_utils_pty::TerminalSize;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
@@ -49,6 +50,7 @@ mod head_tail_buffer;
 mod process;
 mod process_manager;
 mod process_state;
+mod shared_terminal;
 
 pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
     process_manager::set_deterministic_process_ids_for_tests(enabled);
@@ -60,6 +62,10 @@ pub(crate) use process::NoopSpawnLifecycle;
 pub(crate) use process::SpawnLifecycle;
 pub(crate) use process::SpawnLifecycleHandle;
 pub(crate) use process::UnifiedExecProcess;
+pub use shared_terminal::SharedTerminalInfo;
+pub(crate) use shared_terminal::SharedTerminalMetadata;
+pub use shared_terminal::SharedTerminalOpenRequest;
+pub use shared_terminal::SharedTerminalStatus;
 
 pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
 pub(crate) const WINDOWS_INITIAL_EXEC_YIELD_TIME_FLOOR_MS: u64 = 2_000;
@@ -126,8 +132,15 @@ pub(crate) struct ProcessStore {
 
 impl ProcessStore {
     fn remove(&mut self, process_id: i32) -> Option<ProcessEntry> {
+        let entry = self.processes.remove(&process_id)?;
+        if entry.shared_terminal.is_none() {
+            self.reserved_process_ids.remove(&process_id);
+        }
+        Some(entry)
+    }
+
+    fn release_reserved_process_id(&mut self, process_id: i32) {
         self.reserved_process_ids.remove(&process_id);
-        self.processes.remove(&process_id)
     }
 }
 
@@ -163,6 +176,8 @@ struct ProcessEntry {
     network_approval: Option<DeferredNetworkApproval>,
     session: Weak<Session>,
     last_used: tokio::time::Instant,
+    shared_terminal: Option<SharedTerminalMetadata>,
+    terminal_size: Option<TerminalSize>,
 }
 
 pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {
