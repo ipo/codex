@@ -204,6 +204,9 @@ impl UserTerminalState {
         if session.process_id.as_deref() != Some(process_id) {
             return false;
         }
+        if !session.poll_scheduled {
+            return false;
+        }
         session.poll_scheduled = false;
         self.active_key.as_ref() == Some(&key) && session.running
     }

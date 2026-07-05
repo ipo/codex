@@ -259,10 +259,22 @@ impl UnifiedExecProcessManager {
         &self,
         process_id: i32,
     ) -> Result<SharedTerminalWriteOutput, UnifiedExecError> {
-        self.write_shared_terminal_with_empty_poll_floor(
-            process_id, "", /*yield_time_ms*/ 0, /*empty_yield_time_ms_floor*/ 0,
-        )
-        .await
+        match self
+            .write_shared_terminal_with_empty_poll_floor(
+                process_id, "", /*yield_time_ms*/ 0, /*empty_yield_time_ms_floor*/ 0,
+            )
+            .await
+        {
+            Ok(output) => Ok(output),
+            Err(UnifiedExecError::UnknownProcessId {
+                process_id: unknown_process_id,
+            }) if unknown_process_id == process_id => Ok(SharedTerminalWriteOutput {
+                output: Vec::new(),
+                process_id: None,
+                exit_code: None,
+            }),
+            Err(err) => Err(err),
+        }
     }
 
     async fn write_shared_terminal_with_empty_poll_floor(

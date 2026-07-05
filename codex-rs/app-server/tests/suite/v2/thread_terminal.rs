@@ -317,6 +317,55 @@ async fn thread_background_clean_terminates_shared_terminals() -> Result<()> {
 }
 
 #[tokio::test]
+async fn polling_exited_shared_terminal_is_benign() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let working_directory = tmp.path().join("workdir");
+    std::fs::create_dir(&working_directory)?;
+
+    let server = create_mock_responses_server_sequence(Vec::new()).await;
+    create_config_toml(&codex_home, &server.uri())?;
+
+    let mut mcp = TestAppServer::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            cwd: Some(working_directory.display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let open = open_terminal(
+        &mut mcp,
+        &thread.id,
+        "default",
+        ProcessTerminalSize { rows: 20, cols: 80 },
+    )
+    .await?;
+    let process_id = open.process_id.clone();
+
+    write_terminal(
+        &mut mcp,
+        &thread.id,
+        &process_id,
+        Some("exit\n".to_string()),
+    )
+    .await?;
+    write_terminal(&mut mcp, &thread.id, &process_id, None).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn process_spawn_sessions_are_not_listed_as_shared_thread_terminals() -> Result<()> {
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");

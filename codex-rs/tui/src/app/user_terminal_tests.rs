@@ -418,6 +418,47 @@ async fn active_terminal_poll_drains_without_pty_input_and_ignores_dismissed_ove
 }
 
 #[tokio::test]
+async fn stale_poll_after_terminal_exit_is_ignored() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) =
+        crate::app::test_support::make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.active_thread_id = Some(thread_id);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let terminal = fake_terminal(&app, thread_id, "default", "41");
+    let mut terminal_rpc = RecordingTerminalRpc::new(vec![terminal]);
+
+    app.open_user_terminal(&mut tui, &mut terminal_rpc, String::new())
+        .await;
+    let process_id = active_process_id(&app);
+    while app_event_rx.try_recv().is_ok() {}
+
+    assert!(
+        app.handle_user_terminal_process_exit(&ProcessExitedNotification {
+            process_handle: process_id.clone(),
+            exit_code: 0,
+            stdout: String::new(),
+            stdout_cap_reached: false,
+            stderr: String::new(),
+            stderr_cap_reached: false,
+        })
+    );
+    while app_event_rx.try_recv().is_ok() {}
+
+    terminal_rpc.poll_error = Some("poll boom".to_string());
+    app.poll_user_terminal(
+        &mut terminal_rpc,
+        thread_id,
+        "default".to_string(),
+        process_id,
+    )
+    .await;
+    assert_eq!(terminal_rpc.poll_calls, Vec::<PollCall>::new());
+    assert_eq!(drain_app_events(&mut app_event_rx).history_text, "");
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_label_reports_error_without_opening_terminal() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) =
         crate::app::test_support::make_test_app_with_channels().await;
