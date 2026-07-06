@@ -6,6 +6,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::ProcessExitedNotification;
 use codex_app_server_protocol::ProcessOutputStream;
+use codex_app_server_protocol::ThreadTerminalDismissResponse;
 use codex_app_server_protocol::ThreadTerminalOpenResponse;
 use codex_app_server_protocol::ThreadTerminalResizeResponse;
 use codex_app_server_protocol::ThreadTerminalSource;
@@ -253,6 +254,10 @@ async fn opens_named_terminals_and_preserves_state_across_dismiss() -> Result<()
             .process_keys
             .contains_key(&default_process_id)
     );
+    assert!(
+        terminal_rpc.dismiss_calls.is_empty(),
+        "dismissing a running terminal overlay should stay local"
+    );
 
     app.open_user_terminal(&mut tui, &mut terminal_rpc, "default".to_string())
         .await;
@@ -273,7 +278,25 @@ async fn opens_named_terminals_and_preserves_state_across_dismiss() -> Result<()
             stderr_cap_reached: false,
         })
     );
-    assert!(render_active_terminal(&mut app).contains("old process exit"));
+    let rendered = render_active_terminal(&mut app);
+    assert!(rendered.contains("old process exit"));
+    assert!(rendered.contains("exited 0"));
+    assert!(
+        app.handle_user_terminal_process_exit(&ProcessExitedNotification {
+            process_handle: default_process_id.clone(),
+            exit_code: 0,
+            stdout: "old process exit\r\n".to_string(),
+            stdout_cap_reached: false,
+            stderr: String::new(),
+            stderr_cap_reached: false,
+        })
+    );
+    assert_eq!(
+        render_active_terminal(&mut app)
+            .matches("old process exit")
+            .count(),
+        1
+    );
 
     app.open_user_terminal(&mut tui, &mut terminal_rpc, "default".to_string())
         .await;
@@ -444,6 +467,29 @@ async fn stale_poll_after_terminal_exit_is_ignored() -> Result<()> {
     );
     while app_event_rx.try_recv().is_ok() {}
 
+    app.handle_user_terminal_key(
+        &mut tui,
+        &mut terminal_rpc,
+        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE),
+    )
+    .await;
+    let drained = drain_app_events(&mut app_event_rx);
+    assert_eq!(
+        terminal_rpc.write_calls,
+        Vec::<WriteCall>::new(),
+        "input after exit should be blocked before write RPC"
+    );
+    assert!(
+        drained.history_text.contains(
+            "Cannot write to /sh 'default': terminal exited. Reopen it with /sh default."
+        )
+    );
+    assert!(
+        !drained.history_text.contains("terminal process is unknown"),
+        "exited terminal input must not use the unknown-process message"
+    );
+    assert_eq!(drained.request_redraws, 1);
+
     terminal_rpc.poll_error = Some("poll boom".to_string());
     app.poll_user_terminal(
         &mut terminal_rpc,
@@ -454,6 +500,59 @@ async fn stale_poll_after_terminal_exit_is_ignored() -> Result<()> {
     .await;
     assert_eq!(terminal_rpc.poll_calls, Vec::<PollCall>::new());
     assert_eq!(drain_app_events(&mut app_event_rx).history_text, "");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn dismissing_exited_terminal_invokes_backend_cleanup() -> Result<()> {
+    let (mut app, _app_event_rx, _op_rx) =
+        crate::app::test_support::make_test_app_with_channels().await;
+    let thread_id = ThreadId::new();
+    app.active_thread_id = Some(thread_id);
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let terminal = fake_terminal(&app, thread_id, "default", "41");
+    let mut terminal_rpc = RecordingTerminalRpc::new(vec![terminal]);
+
+    app.open_user_terminal(&mut tui, &mut terminal_rpc, String::new())
+        .await;
+    let process_id = active_process_id(&app);
+    assert!(
+        app.handle_user_terminal_process_exit(&ProcessExitedNotification {
+            process_handle: process_id.clone(),
+            exit_code: 0,
+            stdout: "done\r\n".to_string(),
+            stdout_cap_reached: false,
+            stderr: String::new(),
+            stderr_cap_reached: false,
+        })
+    );
+
+    app.handle_user_terminal_key(
+        &mut tui,
+        &mut terminal_rpc,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+    )
+    .await;
+    app.handle_user_terminal_key(
+        &mut tui,
+        &mut terminal_rpc,
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+    )
+    .await;
+
+    assert_eq!(
+        terminal_rpc.dismiss_calls,
+        vec![DismissCall {
+            thread_id,
+            process_id: process_id.clone(),
+        }]
+    );
+    assert_eq!(app.user_terminals.active_key(), None);
+    assert!(
+        !app.user_terminals.process_keys.contains_key(&process_id),
+        "dismissed exited process should be removed from local routing"
+    );
 
     Ok(())
 }
@@ -657,16 +756,24 @@ struct ResizeCall {
     size: ProcessTerminalSize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DismissCall {
+    thread_id: ThreadId,
+    process_id: String,
+}
+
 struct RecordingTerminalRpc {
     open_responses: VecDeque<ThreadTerminalInfo>,
     open_calls: Vec<OpenCall>,
     write_calls: Vec<WriteCall>,
     poll_calls: Vec<PollCall>,
     resize_calls: Vec<ResizeCall>,
+    dismiss_calls: Vec<DismissCall>,
     open_error: Option<String>,
     write_error: Option<String>,
     poll_error: Option<String>,
     resize_error: Option<String>,
+    dismiss_error: Option<String>,
 }
 
 impl RecordingTerminalRpc {
@@ -677,10 +784,12 @@ impl RecordingTerminalRpc {
             write_calls: Vec::new(),
             poll_calls: Vec::new(),
             resize_calls: Vec::new(),
+            dismiss_calls: Vec::new(),
             open_error: None,
             write_error: None,
             poll_error: None,
             resize_error: None,
+            dismiss_error: None,
         }
     }
 }
@@ -766,6 +875,21 @@ impl UserTerminalRpc for RecordingTerminalRpc {
                 },
             },
         })
+    }
+
+    async fn dismiss_terminal(
+        &mut self,
+        thread_id: ThreadId,
+        process_id: String,
+    ) -> Result<ThreadTerminalDismissResponse> {
+        self.dismiss_calls.push(DismissCall {
+            thread_id,
+            process_id,
+        });
+        if let Some(error) = self.dismiss_error.take() {
+            bail!("{error}");
+        }
+        Ok(ThreadTerminalDismissResponse { dismissed: true })
     }
 }
 

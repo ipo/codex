@@ -6,6 +6,7 @@ use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::ProcessExitedNotification;
 use codex_app_server_protocol::ProcessOutputDeltaNotification;
 use codex_app_server_protocol::ProcessTerminalSize;
+use codex_app_server_protocol::ThreadTerminalDismissResponse;
 use codex_app_server_protocol::ThreadTerminalInfo;
 use codex_app_server_protocol::ThreadTerminalOpenResponse;
 use codex_app_server_protocol::ThreadTerminalResizeResponse;
@@ -53,6 +54,12 @@ pub(super) trait UserTerminalRpc {
         process_id: String,
         size: ProcessTerminalSize,
     ) -> impl std::future::Future<Output = Result<ThreadTerminalResizeResponse>> + Send;
+
+    fn dismiss_terminal(
+        &mut self,
+        thread_id: ThreadId,
+        process_id: String,
+    ) -> impl std::future::Future<Output = Result<ThreadTerminalDismissResponse>> + Send;
 }
 
 impl UserTerminalRpc for AppServerSession {
@@ -86,6 +93,14 @@ impl UserTerminalRpc for AppServerSession {
     ) -> Result<ThreadTerminalResizeResponse> {
         AppServerSession::thread_terminal_resize(self, thread_id, process_id, size).await
     }
+
+    async fn dismiss_terminal(
+        &mut self,
+        thread_id: ThreadId,
+        process_id: String,
+    ) -> Result<ThreadTerminalDismissResponse> {
+        AppServerSession::thread_terminal_dismiss(self, thread_id, process_id).await
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -106,6 +121,13 @@ pub(super) struct UserTerminalSession {
     last_content_size: Option<TerminalContentSize>,
     running: bool,
     poll_scheduled: bool,
+    exit_reported: bool,
+}
+
+struct UserTerminalDismissTarget {
+    key: UserTerminalKey,
+    process_id: String,
+    running: bool,
 }
 
 #[derive(Default)]
@@ -147,6 +169,7 @@ impl UserTerminalState {
                 last_content_size: None,
                 running: false,
                 poll_scheduled: false,
+                exit_reported: false,
             }),
         }
     }
@@ -166,10 +189,14 @@ impl UserTerminalState {
             if process_changed {
                 session.surface.reset_for_new_process();
                 session.poll_scheduled = false;
+                session.exit_reported = false;
             }
             session.surface.set_metadata(metadata);
             session.process_id = Some(terminal.process_id.clone());
             session.running = terminal.status.kind == ThreadTerminalStatusKind::Running;
+            if session.running {
+                session.exit_reported = false;
+            }
         }
         self.process_keys
             .insert(terminal.process_id.clone(), key.clone());
@@ -183,6 +210,33 @@ impl UserTerminalState {
 
     fn dismiss_active(&mut self) {
         self.active_key = None;
+    }
+
+    fn active_dismiss_target(&self) -> Option<UserTerminalDismissTarget> {
+        let key = self.active_key.clone()?;
+        let session = self.sessions.get(&key)?;
+        let process_id = session.process_id.clone()?;
+        Some(UserTerminalDismissTarget {
+            key,
+            process_id,
+            running: session.running,
+        })
+    }
+
+    fn remove_session(&mut self, key: &UserTerminalKey, process_id: &str) {
+        if self
+            .sessions
+            .get(key)
+            .and_then(|session| session.process_id.as_deref())
+            != Some(process_id)
+        {
+            return;
+        }
+        self.sessions.remove(key);
+        self.process_keys.remove(process_id);
+        if self.active_key.as_ref() == Some(key) {
+            self.active_key = None;
+        }
     }
 
     fn mark_active_poll_scheduled(&mut self) -> Option<(ThreadId, String, String)> {
@@ -328,7 +382,7 @@ impl App {
         };
         let outcome = session.surface.handle_key_event(key_event);
         if matches!(outcome.frame_action, Some(TerminalFrameAction::Dismiss)) {
-            self.user_terminals.dismiss_active();
+            self.dismiss_active_user_terminal(app_server).await;
             tui.frame_requester().schedule_frame();
             return;
         }
@@ -378,16 +432,61 @@ impl App {
         }
     }
 
+    async fn dismiss_active_user_terminal(&mut self, app_server: &mut impl UserTerminalRpc) {
+        let dismiss_target = self.user_terminals.active_dismiss_target();
+        self.user_terminals.dismiss_active();
+        let Some(target) = dismiss_target else {
+            return;
+        };
+        if target.running {
+            return;
+        }
+
+        match app_server
+            .dismiss_terminal(target.key.thread_id, target.process_id.clone())
+            .await
+        {
+            Ok(response) => {
+                if response.dismissed {
+                    self.user_terminals
+                        .remove_session(&target.key, &target.process_id);
+                }
+            }
+            Err(err) => {
+                self.chat_widget.add_error_message(format!(
+                    "Failed to dismiss /sh '{}': {err}",
+                    target.key.label
+                ));
+                self.app_event_tx.send(AppEvent::RequestRedraw);
+            }
+        }
+    }
+
     async fn write_active_user_terminal_input(
         &mut self,
         app_server: &mut impl UserTerminalRpc,
         input: &[u8],
     ) {
-        let Some((thread_id, process_id, label)) = self.active_user_terminal_target() else {
-            self.chat_widget
-                .add_error_message("Cannot write to /sh: terminal process is unknown.".to_string());
-            self.app_event_tx.send(AppEvent::RequestRedraw);
-            return;
+        let (thread_id, process_id, label) = match self.active_user_terminal_target() {
+            ActiveUserTerminalTarget::Running {
+                thread_id,
+                process_id,
+                label,
+            } => (thread_id, process_id, label),
+            ActiveUserTerminalTarget::Exited { label } => {
+                self.chat_widget.add_error_message(format!(
+                    "Cannot write to /sh '{label}': terminal exited. Reopen it with /sh {label}."
+                ));
+                self.app_event_tx.send(AppEvent::RequestRedraw);
+                return;
+            }
+            ActiveUserTerminalTarget::Unknown => {
+                self.chat_widget.add_error_message(
+                    "Cannot write to /sh: terminal process is unknown.".to_string(),
+                );
+                self.app_event_tx.send(AppEvent::RequestRedraw);
+                return;
+            }
         };
         if let Err(err) = app_server
             .write_terminal(thread_id, process_id, input)
@@ -539,12 +638,12 @@ impl App {
         else {
             return false;
         };
-        if !notification.stdout.is_empty() {
+        if !session.exit_reported && !notification.stdout.is_empty() {
             session
                 .surface
                 .process_output(notification.stdout.as_bytes());
         }
-        if !notification.stderr.is_empty() {
+        if !session.exit_reported && !notification.stderr.is_empty() {
             session
                 .surface
                 .process_output(notification.stderr.as_bytes());
@@ -554,18 +653,31 @@ impl App {
         session.surface.set_metadata(metadata);
         session.running = false;
         session.poll_scheduled = false;
+        session.exit_reported = true;
         self.app_event_tx.send(AppEvent::RequestRedraw);
         true
     }
 
-    fn active_user_terminal_target(&self) -> Option<(ThreadId, String, String)> {
-        let key = self.user_terminals.active_key.as_ref()?;
-        let session = self.user_terminals.sessions.get(key)?;
+    fn active_user_terminal_target(&self) -> ActiveUserTerminalTarget {
+        let Some(key) = self.user_terminals.active_key.as_ref() else {
+            return ActiveUserTerminalTarget::Unknown;
+        };
+        let Some(session) = self.user_terminals.sessions.get(key) else {
+            return ActiveUserTerminalTarget::Unknown;
+        };
         if !session.running {
-            return None;
+            return ActiveUserTerminalTarget::Exited {
+                label: key.label.clone(),
+            };
         }
-        let process_id = session.process_id.clone()?;
-        Some((key.thread_id, process_id, key.label.clone()))
+        let Some(process_id) = session.process_id.clone() else {
+            return ActiveUserTerminalTarget::Unknown;
+        };
+        ActiveUserTerminalTarget::Running {
+            thread_id: key.thread_id,
+            process_id,
+            label: key.label.clone(),
+        }
     }
 
     fn schedule_active_user_terminal_poll(&mut self) {
@@ -583,6 +695,18 @@ impl App {
             });
         });
     }
+}
+
+enum ActiveUserTerminalTarget {
+    Running {
+        thread_id: ThreadId,
+        process_id: String,
+        label: String,
+    },
+    Exited {
+        label: String,
+    },
+    Unknown,
 }
 
 impl UserTerminalSession {

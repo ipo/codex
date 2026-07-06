@@ -8,12 +8,14 @@ use serde_json::json;
 
 #[test]
 fn renders_active_shared_terminal_metadata_without_output() {
-    let state = ActiveTerminalsState::from_background_terminals(vec![terminal(
+    let mut running_terminal = terminal(
         "1000",
         Some("default"),
         "/bin/bash -l",
         BackgroundTerminalSource::SharedTerminal,
-    )]);
+    );
+    running_terminal.final_output = Some("running output must stay out of context".to_string());
+    let state = ActiveTerminalsState::from_background_terminals(vec![running_terminal]);
     let mut world_state = WorldState::default();
     world_state.add_section(state);
 
@@ -49,6 +51,58 @@ fn renders_active_shared_terminal_metadata_without_output() {
         Vec::<ResponseItem>::new(),
         render_fragments(world_state.render_diff(&world_state.snapshot()))
     );
+}
+
+#[test]
+fn renders_exited_shared_terminal_final_output() {
+    let mut exited_terminal = terminal(
+        "1000",
+        Some("default"),
+        "/bin/bash -l",
+        BackgroundTerminalSource::SharedTerminal,
+    );
+    exited_terminal.status = BackgroundTerminalStatus::Exited { exit_code: Some(7) };
+    exited_terminal.final_output = Some("done <ok>&\n".to_string());
+    let state = ActiveTerminalsState::from_background_terminals(vec![exited_terminal]);
+    let mut world_state = WorldState::default();
+    world_state.add_section(state);
+
+    assert_eq!(
+        vec![user_message(
+            r#"<active_terminals>
+  <terminal label="default" process_id="1000" source="sharedTerminal" status="exited" exit_code="7">
+    <cwd>/repo</cwd>
+    <command>/bin/bash -l</command>
+    <final_output>done &lt;ok&gt;&amp;
+</final_output>
+  </terminal>
+</active_terminals>"#,
+        )],
+        render_fragments(world_state.render_full()),
+    );
+}
+
+#[test]
+fn caps_exited_shared_terminal_final_output() {
+    let mut exited_terminal = terminal(
+        "1000",
+        Some("default"),
+        "/bin/bash -l",
+        BackgroundTerminalSource::SharedTerminal,
+    );
+    exited_terminal.status = BackgroundTerminalStatus::Exited { exit_code: Some(0) };
+    exited_terminal.final_output = Some("x".repeat(MAX_CONTEXT_OUTPUT_CHARS + 40));
+
+    let state = ActiveTerminalsState::from_background_terminals(vec![exited_terminal]);
+    let snapshot = state.snapshot();
+    let final_output = snapshot
+        .terminals
+        .get("1000")
+        .and_then(|terminal| terminal.final_output.as_ref())
+        .expect("exited terminal output should be retained");
+
+    assert_eq!(final_output.chars().count(), MAX_CONTEXT_OUTPUT_CHARS);
+    assert!(final_output.ends_with("..."));
 }
 
 #[test]
@@ -124,6 +178,7 @@ fn terminal(
         tty: true,
         terminal_size: None,
         status: BackgroundTerminalStatus::Running,
+        final_output: None,
     }
 }
 

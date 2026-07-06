@@ -625,6 +625,12 @@ client_request_definitions! {
         serialization: thread_id(params.thread_id),
         response: v2::ThreadTerminalResizeResponse,
     },
+    #[experimental("thread/terminal/dismiss")]
+    ThreadTerminalDismiss => "thread/terminal/dismiss" {
+        params: v2::ThreadTerminalDismissParams,
+        serialization: thread_id(params.thread_id),
+        response: v2::ThreadTerminalDismissResponse,
+    },
     ThreadRollback => "thread/rollback" {
         params: v2::ThreadRollbackParams,
         serialization: thread_id(params.thread_id),
@@ -3196,6 +3202,29 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "thread/backgroundTerminals/terminate",
+                "id": 8,
+                "params": {
+                    "threadId": "thr_123",
+                    "processId": "42"
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_thread_terminal_dismiss() -> Result<()> {
+        let request = ClientRequest::ThreadTerminalDismiss {
+            request_id: RequestId::Integer(8),
+            params: v2::ThreadTerminalDismissParams {
+                thread_id: "thr_123".to_string(),
+                process_id: "42".to_string(),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "thread/terminal/dismiss",
                 "id": 8,
                 "params": {
                     "threadId": "thr_123",

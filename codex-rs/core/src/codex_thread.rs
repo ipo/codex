@@ -193,6 +193,7 @@ pub struct BackgroundTerminalInfo {
     pub tty: bool,
     pub terminal_size: Option<TerminalSize>,
     pub status: BackgroundTerminalStatus,
+    pub final_output: Option<String>,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread
@@ -483,6 +484,13 @@ impl CodexThread {
         self.codex
             .session
             .terminate_background_terminal(process_id)
+            .await
+    }
+
+    pub async fn dismiss_retained_shared_terminal(&self, process_id: i32) -> bool {
+        self.codex
+            .session
+            .dismiss_retained_shared_terminal(process_id)
             .await
     }
 

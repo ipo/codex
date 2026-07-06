@@ -165,8 +165,12 @@ Example with notification opt-out:
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
-- `thread/backgroundTerminals/list` — list running background terminals for a loaded thread (experimental; requires `capabilities.experimentalApi`); returns `data` with the running terminal ids.
+- `thread/backgroundTerminals/list` — list running and retained exited background terminals for a loaded thread (experimental; requires `capabilities.experimentalApi`); returns `data` with the terminal ids.
 - `thread/backgroundTerminals/terminate` — terminate one running background terminal by app-server `processId` (experimental; requires `capabilities.experimentalApi`); returns whether a process was terminated.
+- `thread/terminal/open` — experimental; open or reattach a labeled thread-owned shared terminal such as the TUI `/sh` surface; returns terminal metadata including `processId` and lifecycle `status`.
+- `thread/terminal/write` — experimental; write base64-decoded stdin bytes to a shared terminal; omit `deltaBase64` to poll for output/exit without writing input. Output and exit are reported through `process/outputDelta` and `process/exited` notifications.
+- `thread/terminal/resize` — experimental; resize a running shared terminal PTY by `processId`; returns refreshed terminal metadata.
+- `thread/terminal/dismiss` — experimental; remove a retained exited shared terminal by `processId`; returns `{ "dismissed": true }` only when a retained exited record was removed. Running terminals are not terminated or removed.
 - `thread/rollback` — deprecated and will be removed soon. Drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Experimental `runtimeWorkspaceRoots` replaces the thread-scoped runtime workspace roots used to materialize `:workspace_roots`; paths must be absolute. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode". Deprecated experimental `multiAgentMode` is ignored; Ultra reasoning effort selects proactive behavior.
 - `thread/inject_items` — append raw Responses API items to a loaded thread’s model-visible history without starting a user turn; returns `{}` on success.
@@ -970,6 +974,72 @@ Use `thread/backgroundTerminals/terminate` to terminate one running background t
 { "method": "thread/backgroundTerminals/terminate", "id": 37, "params": { "threadId": "thr_123", "processId": "42" } }
 { "id": 37, "result": { "terminated": true } }
 ```
+
+### Example: Shared thread terminal
+
+Use `thread/terminal/open` to open or reattach a labeled terminal for a loaded thread. These methods are experimental and require `capabilities.experimentalApi = true`. Terminal output is connection-scoped and arrives as `process/outputDelta`; terminal exit arrives as `process/exited`.
+
+```json
+{ "method": "thread/terminal/open", "id": 38, "params": {
+    "threadId": "thr_123",
+    "label": "default",
+    "size": { "rows": 20, "cols": 80 }
+} }
+{ "id": 38, "result": { "terminal": {
+    "threadId": "thr_123",
+    "label": "default",
+    "processId": "42",
+    "command": "/bin/bash -l",
+    "cwd": "/workspace",
+    "source": "sharedTerminal",
+    "tty": true,
+    "size": { "rows": 20, "cols": 80 },
+    "status": { "kind": "running", "exitCode": null }
+} } }
+
+{ "method": "thread/terminal/write", "id": 39, "params": {
+    "threadId": "thr_123",
+    "processId": "42",
+    "deltaBase64": "cHdkCg=="
+} }
+{ "id": 39, "result": {} }
+{ "method": "process/outputDelta", "params": {
+    "processHandle": "42",
+    "stream": "stdout",
+    "deltaBase64": "L3dvcmtzcGFjZQo=",
+    "capReached": false
+} }
+
+{ "method": "thread/terminal/write", "id": 40, "params": {
+    "threadId": "thr_123",
+    "processId": "42",
+    "deltaBase64": null
+} }
+{ "id": 40, "result": {} }
+
+{ "method": "thread/terminal/resize", "id": 41, "params": {
+    "threadId": "thr_123",
+    "processId": "42",
+    "size": { "rows": 30, "cols": 120 }
+} }
+{ "id": 41, "result": { "terminal": { "...": "..." } } }
+
+{ "method": "process/exited", "params": {
+    "processHandle": "42",
+    "exitCode": 0,
+    "stdout": "",
+    "stdoutCapReached": false,
+    "stderr": "",
+    "stderrCapReached": false
+} }
+{ "method": "thread/terminal/dismiss", "id": 42, "params": {
+    "threadId": "thr_123",
+    "processId": "42"
+} }
+{ "id": 42, "result": { "dismissed": true } }
+```
+
+Polling is a `thread/terminal/write` request with `deltaBase64` omitted or `null`; it drains available output and confirms exit state without sending stdin. After a shared terminal exits, the server retains its exited status and bounded final output for Codex context until `thread/terminal/dismiss`, `thread/backgroundTerminals/clean`, or opening a fresh terminal for the same label removes it.
 
 ### Example: Steer an active turn
 

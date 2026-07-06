@@ -212,6 +212,7 @@ struct PreparedProcessHandles {
     hook_command: String,
     process_id: i32,
     tty: bool,
+    shared_terminal_output: Option<Arc<tokio::sync::Mutex<HeadTailBuffer>>>,
 }
 
 struct InitialExecCommandGuard {
@@ -650,6 +651,22 @@ impl UnifiedExecProcessManager {
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let process_id = request.process_id;
 
+        let handles = match self.prepare_process_handles(process_id).await {
+            Ok(handles) => handles,
+            Err(UnifiedExecError::UnknownProcessId {
+                process_id: unknown_process_id,
+            }) if unknown_process_id == process_id => {
+                if let Some(output) = self
+                    .write_stdin_output_for_retained_shared_terminal(process_id, &request)
+                    .await
+                {
+                    return Ok(output);
+                }
+                return Err(UnifiedExecError::UnknownProcessId { process_id });
+            }
+            Err(err) => return Err(err),
+        };
+
         let PreparedProcessHandles {
             process,
             output_buffer,
@@ -664,8 +681,9 @@ impl UnifiedExecProcessManager {
             hook_command,
             process_id,
             tty,
+            shared_terminal_output,
             ..
-        } = self.prepare_process_handles(process_id).await?;
+        } = handles;
         let mut status_after_write = None;
 
         if !request.input.is_empty() {
@@ -724,6 +742,14 @@ impl UnifiedExecProcessManager {
         )
         .await;
         let wall_time = Instant::now().saturating_duration_since(start);
+        if let Some(shared_terminal_output) = &shared_terminal_output
+            && !collected.is_empty()
+        {
+            shared_terminal_output
+                .lock()
+                .await
+                .push_chunk(collected.clone());
+        }
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let original_token_count = approx_token_count(&text);
@@ -768,6 +794,7 @@ impl UnifiedExecProcessManager {
             } => (Some(process_id), exit_code, call_id),
             ProcessStatus::Exited { exit_code, entry } => {
                 let call_id = entry.call_id.clone();
+                self.retain_removed_shared_terminal_if_exited(&entry).await;
                 if let Err(message) =
                     finish_network_approval_after_process_exit_for_entry(&entry).await
                 {
@@ -865,6 +892,7 @@ impl UnifiedExecProcessManager {
             hook_command: entry.hook_command.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
+            shared_terminal_output: entry.shared_terminal_output.clone(),
         })
     }
 
@@ -896,6 +924,7 @@ impl UnifiedExecProcessManager {
             session: Arc::downgrade(&context.session),
             last_used: started_at,
             shared_terminal: None,
+            shared_terminal_output: None,
             terminal_size,
         };
         let pruned_entry = {
@@ -907,6 +936,8 @@ impl UnifiedExecProcessManager {
         // prune_processes_if_needed runs while holding process_store; do async
         // network-approval cleanup only after dropping that lock.
         if let Some(pruned_entry) = pruned_entry {
+            self.retain_removed_shared_terminal_if_exited(&pruned_entry)
+                .await;
             unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
@@ -1398,6 +1429,7 @@ impl UnifiedExecProcessManager {
                 .drain()
                 .map(|(_, entry)| entry)
                 .collect();
+            processes.retained_shared_terminals.clear();
             processes.reserved_process_ids.clear();
             entries
         };
@@ -1410,14 +1442,10 @@ impl UnifiedExecProcessManager {
 
     pub(crate) async fn list_processes(&self) -> Vec<BackgroundTerminalInfo> {
         let store = self.process_store.lock().await;
-        let mut entries = store
+        let mut terminals = store
             .processes
             .values()
-            .filter(|entry| !entry.process.has_exited())
-            .collect::<Vec<_>>();
-        entries.sort_by_key(|entry| entry.process_id);
-        entries
-            .into_iter()
+            .filter(|entry| !entry.process.has_exited() || entry.shared_terminal.is_some())
             .map(|entry| BackgroundTerminalInfo {
                 item_id: entry.call_id.clone(),
                 process_id: entry.process_id.to_string(),
@@ -1441,8 +1469,27 @@ impl UnifiedExecProcessManager {
                 } else {
                     BackgroundTerminalStatus::Running
                 },
+                final_output: None,
             })
-            .collect()
+            .collect::<Vec<_>>();
+        terminals.extend(store.retained_shared_terminals.values().map(|terminal| {
+            BackgroundTerminalInfo {
+                item_id: terminal.item_id.clone(),
+                process_id: terminal.process_id.to_string(),
+                command: terminal.command.clone(),
+                cwd: terminal.cwd.clone(),
+                source: BackgroundTerminalSource::SharedTerminal,
+                label: Some(terminal.label.clone()),
+                tty: terminal.tty,
+                terminal_size: terminal.terminal_size,
+                status: BackgroundTerminalStatus::Exited {
+                    exit_code: terminal.exit_code,
+                },
+                final_output: Some(String::from_utf8_lossy(&terminal.output).to_string()),
+            }
+        }));
+        terminals.sort_by_key(|terminal| terminal.process_id.parse::<i32>().unwrap_or(i32::MAX));
+        terminals
     }
 
     pub(crate) async fn terminate_process(&self, process_id: i32) -> bool {

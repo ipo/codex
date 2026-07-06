@@ -23,11 +23,16 @@ use crate::tools::runtimes::strip_managed_proxy_env;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::ProcessEntry;
+use crate::unified_exec::RetainedSharedTerminal;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process_manager::unregister_network_approval_for_entry;
 use codex_utils_output_truncation::TruncationPolicy;
+
+pub(crate) const MAX_RETAINED_SHARED_TERMINALS: usize = 16;
+pub(crate) const SHARED_TERMINAL_RETAINED_OUTPUT_MAX_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SharedTerminalMetadata {
@@ -182,6 +187,9 @@ impl UnifiedExecProcessManager {
             session: Arc::downgrade(&session),
             last_used: started_at,
             shared_terminal: Some(SharedTerminalMetadata { label }),
+            shared_terminal_output: Some(Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::new(
+                SHARED_TERMINAL_RETAINED_OUTPUT_MAX_BYTES,
+            )))),
             terminal_size: Some(terminal_size),
         };
 
@@ -203,6 +211,8 @@ impl UnifiedExecProcessManager {
         }
 
         if let Some(pruned_entry) = pruned_entry {
+            self.retain_removed_shared_terminal_if_exited(&pruned_entry)
+                .await;
             unregister_network_approval_for_entry(&pruned_entry).await;
             pruned_entry.process.terminate();
         }
@@ -285,9 +295,17 @@ impl UnifiedExecProcessManager {
         empty_yield_time_ms_floor: u64,
     ) -> Result<SharedTerminalWriteOutput, UnifiedExecError> {
         {
-            let store = self.process_store.lock().await;
+            let mut store = self.process_store.lock().await;
             let Some(entry) = store.processes.get(&process_id) else {
-                return Err(UnifiedExecError::UnknownProcessId { process_id });
+                let Some(retained) = store.retained_shared_terminals.get_mut(&process_id) else {
+                    return Err(UnifiedExecError::UnknownProcessId { process_id });
+                };
+                retained.last_used = Instant::now();
+                return Ok(SharedTerminalWriteOutput {
+                    output: Vec::new(),
+                    process_id: None,
+                    exit_code: retained.exit_code,
+                });
             };
             if entry.shared_terminal.is_none() {
                 return Err(UnifiedExecError::UnknownProcessId { process_id });
@@ -332,6 +350,7 @@ impl UnifiedExecProcessManager {
             });
 
             let Some(process_id) = process_id else {
+                store.remove_retained_shared_terminal_by_label(label);
                 return Ok(None);
             };
             let Some(entry) = store.processes.get(&process_id) else {
@@ -350,6 +369,85 @@ impl UnifiedExecProcessManager {
 
         Ok(None)
     }
+
+    pub(crate) async fn dismiss_retained_shared_terminal(&self, process_id: i32) -> bool {
+        let mut store = self.process_store.lock().await;
+        if store.processes.contains_key(&process_id) {
+            return false;
+        }
+        store.remove_retained_shared_terminal(process_id).is_some()
+    }
+
+    pub(super) async fn retain_removed_shared_terminal_if_exited(&self, entry: &ProcessEntry) {
+        let Some(metadata) = entry.shared_terminal.as_ref() else {
+            return;
+        };
+        if !entry.process.has_exited() {
+            return;
+        }
+
+        let output = collect_retained_output_for_entry(entry).await;
+        let retained = RetainedSharedTerminal {
+            label: metadata.label.clone(),
+            item_id: entry.call_id.clone(),
+            process_id: entry.process_id,
+            command: entry.hook_command.clone(),
+            cwd: entry.cwd.clone(),
+            tty: entry.tty,
+            terminal_size: entry.terminal_size,
+            exit_code: entry.process.exit_code(),
+            output,
+            last_used: Instant::now(),
+        };
+
+        let mut store = self.process_store.lock().await;
+        store.insert_retained_shared_terminal(retained);
+    }
+
+    pub(super) async fn write_stdin_output_for_retained_shared_terminal(
+        &self,
+        process_id: i32,
+        request: &WriteStdinRequest<'_>,
+    ) -> Option<ExecCommandToolOutput> {
+        let retained = {
+            let mut store = self.process_store.lock().await;
+            let retained = store.retained_shared_terminals.get_mut(&process_id)?;
+            retained.last_used = Instant::now();
+            retained.clone()
+        };
+        let text = String::from_utf8_lossy(&retained.output).to_string();
+
+        Some(ExecCommandToolOutput {
+            event_call_id: retained.item_id,
+            chunk_id: crate::unified_exec::generate_chunk_id(),
+            wall_time: std::time::Duration::ZERO,
+            raw_output: retained.output,
+            truncation_policy: request.truncation_policy,
+            max_output_tokens: request.max_output_tokens,
+            process_id: None,
+            exit_code: retained.exit_code,
+            original_token_count: Some(codex_utils_output_truncation::approx_token_count(&text)),
+            hook_command: Some(retained.command),
+        })
+    }
+}
+
+async fn collect_retained_output_for_entry(entry: &ProcessEntry) -> Vec<u8> {
+    let mut retained = HeadTailBuffer::new(SHARED_TERMINAL_RETAINED_OUTPUT_MAX_BYTES);
+    if let Some(shared_terminal_output) = &entry.shared_terminal_output {
+        let chunks = shared_terminal_output.lock().await.snapshot_chunks();
+        for chunk in chunks {
+            retained.push_chunk(chunk);
+        }
+    }
+
+    let output_buffer = entry.process.output_handles().output_buffer;
+    let chunks = output_buffer.lock().await.snapshot_chunks();
+    for chunk in chunks {
+        retained.push_chunk(chunk);
+    }
+
+    retained.to_bytes()
 }
 
 fn validate_shared_terminal_label(label: &str) -> Result<String, UnifiedExecError> {

@@ -269,6 +269,8 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadTerminalDismissParams;
+use codex_app_server_protocol::ThreadTerminalDismissResponse;
 use codex_app_server_protocol::ThreadTerminalInfo;
 use codex_app_server_protocol::ThreadTerminalOpenParams;
 use codex_app_server_protocol::ThreadTerminalOpenResponse;

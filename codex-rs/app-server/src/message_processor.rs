@@ -1217,6 +1217,9 @@ impl MessageProcessor {
             ClientRequest::ThreadTerminalResize { params, .. } => {
                 self.thread_processor.thread_terminal_resize(params).await
             }
+            ClientRequest::ThreadTerminalDismiss { params, .. } => {
+                self.thread_processor.thread_terminal_dismiss(params).await
+            }
             ClientRequest::ThreadRollback { params, .. } => {
                 self.thread_processor
                     .thread_rollback(&request_id, params, app_server_client_name.as_deref())

@@ -106,6 +106,7 @@ use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadTerminalDismissParams;
 use codex_app_server_protocol::ThreadTerminalOpenParams;
 use codex_app_server_protocol::ThreadTerminalResizeParams;
 use codex_app_server_protocol::ThreadTerminalWriteParams;
@@ -660,6 +661,15 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/terminal/resize", params).await
+    }
+
+    /// Send a `thread/terminal/dismiss` JSON-RPC request.
+    pub async fn send_thread_terminal_dismiss_request(
+        &mut self,
+        params: ThreadTerminalDismissParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("thread/terminal/dismiss", params).await
     }
 
     /// Send a `thread/delete` JSON-RPC request.

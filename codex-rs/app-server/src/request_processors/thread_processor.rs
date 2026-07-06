@@ -660,6 +660,15 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_terminal_dismiss(
+        &self,
+        params: ThreadTerminalDismissParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_terminal_dismiss_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_rollback(
         &self,
         request_id: &ConnectionRequestId,
@@ -2004,6 +2013,23 @@ impl ThreadRequestProcessor {
         Ok(ThreadTerminalResizeResponse {
             terminal: thread_terminal_info_from_core(&thread_id, terminal)?,
         })
+    }
+
+    async fn thread_terminal_dismiss_inner(
+        &self,
+        params: ThreadTerminalDismissParams,
+    ) -> Result<ThreadTerminalDismissResponse, JSONRPCErrorError> {
+        let ThreadTerminalDismissParams {
+            thread_id,
+            process_id,
+        } = params;
+        let process_id = process_id
+            .parse::<i32>()
+            .map_err(|err| invalid_request(format!("invalid terminal process id: {err}")))?;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let dismissed = thread.dismiss_retained_shared_terminal(process_id).await;
+        Ok(ThreadTerminalDismissResponse { dismissed })
     }
 
     async fn thread_shell_command_inner(

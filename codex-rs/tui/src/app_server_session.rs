@@ -102,6 +102,8 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
+use codex_app_server_protocol::ThreadTerminalDismissParams;
+use codex_app_server_protocol::ThreadTerminalDismissResponse;
 use codex_app_server_protocol::ThreadTerminalOpenParams;
 use codex_app_server_protocol::ThreadTerminalOpenResponse;
 use codex_app_server_protocol::ThreadTerminalResizeParams;
@@ -1129,6 +1131,24 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/terminal/resize failed in TUI")
+    }
+
+    pub(crate) async fn thread_terminal_dismiss(
+        &mut self,
+        thread_id: ThreadId,
+        process_id: String,
+    ) -> Result<ThreadTerminalDismissResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::ThreadTerminalDismiss {
+                request_id,
+                params: ThreadTerminalDismissParams {
+                    thread_id: thread_id.to_string(),
+                    process_id,
+                },
+            })
+            .await
+            .wrap_err("thread/terminal/dismiss failed in TUI")
     }
 
     pub(crate) async fn thread_approve_guardian_denied_action(

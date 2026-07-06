@@ -1,4 +1,5 @@
 use super::head_tail_buffer::HeadTailBuffer;
+use super::shared_terminal::SHARED_TERMINAL_RETAINED_OUTPUT_MAX_BYTES;
 use super::*;
 use crate::codex_thread::BackgroundTerminalInfo;
 use crate::codex_thread::BackgroundTerminalSource;
@@ -142,6 +143,7 @@ async fn exec_command_with_tty(
             session: Arc::downgrade(session),
             last_used: started_at,
             shared_terminal: None,
+            shared_terminal_output: None,
             terminal_size: tty.then_some(TerminalSize::default()),
         };
         manager
@@ -325,6 +327,24 @@ async fn write_stdin(
         .await
 }
 
+async fn poll_shared_terminal_until_exit(
+    manager: &UnifiedExecProcessManager,
+    process_id: i32,
+) -> anyhow::Result<SharedTerminalWriteOutput> {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let output = manager.poll_shared_terminal(process_id).await?;
+            if output.exit_code.is_some() {
+                return Ok::<SharedTerminalWriteOutput, UnifiedExecError>(output);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("shared terminal should exit")
+    .map_err(Into::into)
+}
+
 #[test]
 fn push_chunk_preserves_prefix_and_suffix() {
     let mut buffer = HeadTailBuffer::default();
@@ -383,6 +403,7 @@ async fn unified_exec_persists_across_requests() -> anyhow::Result<()> {
             tty: true,
             terminal_size: Some(TerminalSize::default()),
             status: BackgroundTerminalStatus::Running,
+            final_output: None,
         }]
     );
 
@@ -733,6 +754,7 @@ async fn shared_terminal_reuses_labels_and_accepts_agent_stdin() -> anyhow::Resu
             tty: true,
             terminal_size: Some(initial_size),
             status: BackgroundTerminalStatus::Running,
+            final_output: None,
         },
         BackgroundTerminalInfo {
             item_id: other.item_id.clone(),
@@ -744,6 +766,7 @@ async fn shared_terminal_reuses_labels_and_accepts_agent_stdin() -> anyhow::Resu
             tty: true,
             terminal_size: Some(TerminalSize::default()),
             status: BackgroundTerminalStatus::Running,
+            final_output: None,
         },
     ];
     expected_terminals.sort_by(|left, right| left.process_id.cmp(&right.process_id));
@@ -827,6 +850,133 @@ async fn shared_terminal_reopens_exited_labels_with_fresh_process() -> anyhow::R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_terminal_retains_exited_state_and_output() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let opened = manager
+        .open_shared_terminal(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            SharedTerminalOpenRequest {
+                label: "retain-test".to_string(),
+                terminal_size: None,
+            },
+        )
+        .await?;
+
+    let marker = "retained-shared-terminal-output";
+    let initial_output = write_stdin(
+        &session,
+        opened.process_id,
+        &format!("printf '{marker}\\n'; exit 7\n"),
+        /*yield_time_ms*/ 2_500,
+    )
+    .await?;
+    if initial_output.exit_code.is_none() {
+        poll_shared_terminal_until_exit(manager, opened.process_id).await?;
+    }
+
+    let terminals = session.list_background_terminals().await;
+    let retained = terminals
+        .iter()
+        .find(|terminal| terminal.process_id == opened.process_id.to_string())
+        .expect("retained terminal should be listed");
+    assert_eq!(retained.item_id, opened.item_id);
+    assert_eq!(retained.process_id, opened.process_id.to_string());
+    assert_eq!(retained.source, BackgroundTerminalSource::SharedTerminal);
+    assert_eq!(retained.label, Some("retain-test".to_string()));
+    assert_eq!(
+        retained.status,
+        BackgroundTerminalStatus::Exited { exit_code: Some(7) }
+    );
+    assert!(
+        retained
+            .final_output
+            .as_deref()
+            .is_some_and(|output| output.contains(marker))
+    );
+
+    let stale_write = write_stdin(
+        &session,
+        opened.process_id,
+        "printf 'after-exit\\n'\n",
+        /*yield_time_ms*/ 250,
+    )
+    .await?;
+    assert_eq!(stale_write.process_id, None);
+    assert_eq!(stale_write.exit_code, Some(7));
+    assert!(String::from_utf8_lossy(&stale_write.raw_output).contains(marker));
+
+    assert!(
+        manager
+            .dismiss_retained_shared_terminal(opened.process_id)
+            .await
+    );
+    assert!(
+        session
+            .list_background_terminals()
+            .await
+            .iter()
+            .all(|terminal| terminal.process_id != opened.process_id.to_string())
+    );
+    assert!(
+        !manager
+            .dismiss_retained_shared_terminal(opened.process_id)
+            .await
+    );
+
+    manager.terminate_all_processes().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_terminal_retained_output_is_capped() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let terminal = manager
+        .open_shared_terminal(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            SharedTerminalOpenRequest {
+                label: "cap-test".to_string(),
+                terminal_size: None,
+            },
+        )
+        .await?;
+
+    let output_bytes = SHARED_TERMINAL_RETAINED_OUTPUT_MAX_BYTES + 4_096;
+    let input = format!(
+        "i=0; while [ $i -lt {output_bytes} ]; do printf x; i=$((i+1)); done; printf tail-marker; exit 0\n"
+    );
+    let initial_output = write_stdin(
+        &session,
+        terminal.process_id,
+        &input,
+        /*yield_time_ms*/ 2_500,
+    )
+    .await?;
+    if initial_output.exit_code.is_none() {
+        poll_shared_terminal_until_exit(manager, terminal.process_id).await?;
+    }
+
+    {
+        let store = manager.process_store.lock().await;
+        let retained = store
+            .retained_shared_terminals
+            .get(&terminal.process_id)
+            .expect("exited shared terminal should be retained");
+        assert!(retained.output.len() <= SHARED_TERMINAL_RETAINED_OUTPUT_MAX_BYTES);
+        assert!(String::from_utf8_lossy(&retained.output).contains("tail-marker"));
+    }
+    manager.terminate_all_processes().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shared_terminal_rejects_invalid_labels_before_spawning() -> anyhow::Result<()> {
     let (session, turn) = test_session_and_turn().await;
     let err = session
@@ -879,6 +1029,7 @@ async fn terminating_initial_exec_command_rechecks_initial_response_state() -> a
             session: Arc::downgrade(&session),
             last_used: Instant::now(),
             shared_terminal: None,
+            shared_terminal_output: None,
             terminal_size: Some(TerminalSize::default()),
         },
     );
@@ -954,6 +1105,7 @@ async fn terminating_during_stdin_poll_returns_exited_response() -> anyhow::Resu
             session: Arc::downgrade(&session),
             last_used,
             shared_terminal: None,
+            shared_terminal_output: None,
             terminal_size: Some(TerminalSize::default()),
         },
     );

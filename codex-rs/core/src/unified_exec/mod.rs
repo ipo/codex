@@ -43,6 +43,7 @@ use crate::session::turn_context::TurnContext;
 use crate::session::turn_context::TurnEnvironment;
 use crate::shell::ShellType;
 use crate::tools::network_approval::DeferredNetworkApproval;
+use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 
 mod async_watcher;
 mod errors;
@@ -62,6 +63,7 @@ pub(crate) use process::NoopSpawnLifecycle;
 pub(crate) use process::SpawnLifecycle;
 pub(crate) use process::SpawnLifecycleHandle;
 pub(crate) use process::UnifiedExecProcess;
+pub(crate) use shared_terminal::MAX_RETAINED_SHARED_TERMINALS;
 pub use shared_terminal::SharedTerminalInfo;
 pub(crate) use shared_terminal::SharedTerminalMetadata;
 pub use shared_terminal::SharedTerminalOpenRequest;
@@ -129,6 +131,7 @@ pub(crate) struct WriteStdinRequest<'a> {
 #[derive(Default)]
 pub(crate) struct ProcessStore {
     processes: HashMap<i32, ProcessEntry>,
+    retained_shared_terminals: HashMap<i32, RetainedSharedTerminal>,
     reserved_process_ids: HashSet<i32>,
 }
 
@@ -139,6 +142,40 @@ impl ProcessStore {
             self.reserved_process_ids.remove(&process_id);
         }
         Some(entry)
+    }
+
+    fn insert_retained_shared_terminal(&mut self, retained: RetainedSharedTerminal) {
+        self.retained_shared_terminals
+            .insert(retained.process_id, retained);
+        while self.retained_shared_terminals.len() > MAX_RETAINED_SHARED_TERMINALS {
+            let Some(process_id) = self
+                .retained_shared_terminals
+                .iter()
+                .min_by_key(|(_, terminal)| terminal.last_used)
+                .map(|(process_id, _)| *process_id)
+            else {
+                break;
+            };
+            self.retained_shared_terminals.remove(&process_id);
+        }
+    }
+
+    fn remove_retained_shared_terminal(
+        &mut self,
+        process_id: i32,
+    ) -> Option<RetainedSharedTerminal> {
+        self.retained_shared_terminals.remove(&process_id)
+    }
+
+    fn remove_retained_shared_terminal_by_label(
+        &mut self,
+        label: &str,
+    ) -> Option<RetainedSharedTerminal> {
+        let process_id = self
+            .retained_shared_terminals
+            .iter()
+            .find_map(|(process_id, terminal)| (terminal.label == label).then_some(*process_id))?;
+        self.remove_retained_shared_terminal(process_id)
     }
 
     fn release_reserved_process_id(&mut self, process_id: i32) {
@@ -179,7 +216,22 @@ struct ProcessEntry {
     session: Weak<Session>,
     last_used: tokio::time::Instant,
     shared_terminal: Option<SharedTerminalMetadata>,
+    shared_terminal_output: Option<Arc<Mutex<HeadTailBuffer>>>,
     terminal_size: Option<TerminalSize>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RetainedSharedTerminal {
+    pub(crate) label: String,
+    pub(crate) item_id: String,
+    pub(crate) process_id: i32,
+    pub(crate) command: String,
+    pub(crate) cwd: PathUri,
+    pub(crate) tty: bool,
+    pub(crate) terminal_size: Option<TerminalSize>,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) output: Vec<u8>,
+    pub(crate) last_used: tokio::time::Instant,
 }
 
 pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {

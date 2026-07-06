@@ -11,7 +11,9 @@ use std::collections::BTreeMap;
 
 const MAX_ACTIVE_TERMINALS: usize = 16;
 const MAX_CONTEXT_FIELD_CHARS: usize = 512;
+const MAX_CONTEXT_OUTPUT_CHARS: usize = 2_000;
 const SHARED_TERMINAL_SOURCE: &str = "sharedTerminal";
+const EXITED_STATUS: &str = "exited";
 const RUNNING_STATUS: &str = "running";
 const UNAVAILABLE_STATUS: &str = "unavailable";
 
@@ -27,7 +29,10 @@ impl ActiveTerminalsState {
             .into_iter()
             .filter(|terminal| {
                 terminal.source == BackgroundTerminalSource::SharedTerminal
-                    && terminal.status == BackgroundTerminalStatus::Running
+                    && matches!(
+                        terminal.status,
+                        BackgroundTerminalStatus::Running | BackgroundTerminalStatus::Exited { .. }
+                    )
             })
             .collect::<Vec<_>>();
         terminals.sort_by_key(|terminal| terminal.process_id.parse::<i32>().unwrap_or(i32::MAX));
@@ -38,6 +43,19 @@ impl ActiveTerminalsState {
                 .take(MAX_ACTIVE_TERMINALS)
                 .map(|terminal| {
                     let process_id = truncate_for_context(&terminal.process_id);
+                    let (status, exit_code, final_output) = match terminal.status {
+                        BackgroundTerminalStatus::Running => {
+                            (RUNNING_STATUS.to_string(), None, None)
+                        }
+                        BackgroundTerminalStatus::Exited { exit_code } => (
+                            EXITED_STATUS.to_string(),
+                            exit_code,
+                            terminal
+                                .final_output
+                                .as_deref()
+                                .map(truncate_output_for_context),
+                        ),
+                    };
                     (
                         process_id.clone(),
                         ActiveTerminalSnapshot {
@@ -48,7 +66,9 @@ impl ActiveTerminalsState {
                             cwd: truncate_for_context(&terminal.cwd.inferred_native_path_string()),
                             command: truncate_for_context(&terminal.command),
                             source: SHARED_TERMINAL_SOURCE.to_string(),
-                            status: RUNNING_STATUS.to_string(),
+                            status,
+                            exit_code,
+                            final_output,
                         },
                     )
                 })
@@ -70,6 +90,10 @@ struct ActiveTerminalSnapshot {
     command: String,
     source: String,
     status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    final_output: Option<String>,
 }
 
 impl WorldStateSection for ActiveTerminalsState {
@@ -165,9 +189,16 @@ impl ContextualUserFragment for RenderedActiveTerminals {
                     push_xml_escaped_text(&mut rendered, &terminal.source);
                     rendered.push_str("\" status=\"");
                     push_xml_escaped_text(&mut rendered, &terminal.status);
+                    if let Some(exit_code) = terminal.exit_code {
+                        rendered.push_str("\" exit_code=\"");
+                        push_xml_escaped_text(&mut rendered, &exit_code.to_string());
+                    }
                     rendered.push_str("\">\n");
                     push_text_element(&mut rendered, "cwd", &terminal.cwd);
                     push_text_element(&mut rendered, "command", &terminal.command);
+                    if let Some(final_output) = &terminal.final_output {
+                        push_text_element(&mut rendered, "final_output", final_output);
+                    }
                     rendered.push_str("  </terminal>\n");
                 }
                 ActiveTerminalUpdate::Unavailable(terminal) => {
@@ -202,12 +233,20 @@ fn push_text_element(rendered: &mut String, tag: &str, value: &str) {
 }
 
 fn truncate_for_context(value: &str) -> String {
+    truncate_chars(value, MAX_CONTEXT_FIELD_CHARS)
+}
+
+fn truncate_output_for_context(value: &str) -> String {
+    truncate_chars(value, MAX_CONTEXT_OUTPUT_CHARS)
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
     let char_count = value.chars().count();
-    if char_count <= MAX_CONTEXT_FIELD_CHARS {
+    if char_count <= max_chars {
         return value.to_string();
     }
 
-    let take = MAX_CONTEXT_FIELD_CHARS.saturating_sub(3);
+    let take = max_chars.saturating_sub(3);
     let mut truncated = value.chars().take(take).collect::<String>();
     truncated.push_str("...");
     truncated

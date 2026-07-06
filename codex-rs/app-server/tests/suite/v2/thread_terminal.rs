@@ -13,6 +13,7 @@ use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::ProcessExitedNotification;
 use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessKillResponse;
 use codex_app_server_protocol::ProcessOutputDeltaNotification;
@@ -28,6 +29,8 @@ use codex_app_server_protocol::ThreadBackgroundTerminalsListResponse;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
+use codex_app_server_protocol::ThreadTerminalDismissParams;
+use codex_app_server_protocol::ThreadTerminalDismissResponse;
 use codex_app_server_protocol::ThreadTerminalOpenParams;
 use codex_app_server_protocol::ThreadTerminalOpenResponse;
 use codex_app_server_protocol::ThreadTerminalResizeParams;
@@ -255,6 +258,29 @@ async fn thread_terminal_facade_opens_writes_resizes_and_reuses_labeled_shell() 
     );
     assert_eq!(shared.status.kind, ThreadTerminalStatusKind::Running);
 
+    assert!(
+        !dismiss_terminal(&mut mcp, &thread.id, &process_id).await?,
+        "dismissing a running shared terminal should not remove it"
+    );
+    let running_after_dismiss = list_background_terminals(&mut mcp, &thread.id).await?;
+    assert!(
+        running_after_dismiss
+            .data
+            .iter()
+            .any(|terminal| terminal.process_id == process_id),
+        "running terminal should remain listed after dismiss: {running_after_dismiss:?}"
+    );
+    let after_dismiss_marker = "codex-thread-terminal-after-running-dismiss";
+    let after_dismiss_output = write_command_and_wait_for_output(
+        &mut mcp,
+        &thread.id,
+        &process_id,
+        &format!("printf '{after_dismiss_marker}\\n'\n"),
+        after_dismiss_marker,
+    )
+    .await?;
+    assert!(after_dismiss_output.contains(after_dismiss_marker));
+
     mcp.interrupt_turn_and_wait_for_aborted(
         thread.id.clone(),
         turn.id.clone(),
@@ -317,7 +343,7 @@ async fn thread_background_clean_terminates_shared_terminals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn polling_exited_shared_terminal_is_benign() -> Result<()> {
+async fn stale_write_and_poll_exited_shared_terminal_are_benign() -> Result<()> {
     let tmp = TempDir::new()?;
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home)?;
@@ -353,14 +379,81 @@ async fn polling_exited_shared_terminal_is_benign() -> Result<()> {
     .await?;
     let process_id = open.process_id.clone();
 
+    let marker = "codex-terminal-before-exit";
+    let output = write_command_and_wait_for_output(
+        &mut mcp,
+        &thread.id,
+        &process_id,
+        &format!("printf '{marker}\\n'; exit 4\n"),
+        marker,
+    )
+    .await?;
+    assert!(output.contains(marker));
+
+    let exit = poll_until_terminal_exit(&mut mcp, &thread.id, &process_id).await?;
+    assert_eq!(exit.exit_code, 4);
+    drain_terminal_output_deltas(&mut mcp, &process_id).await?;
+
+    let list = list_background_terminals(&mut mcp, &thread.id).await?;
+    let retained = list
+        .data
+        .iter()
+        .find(|terminal| terminal.process_id == process_id)
+        .context("exited shared terminal should remain listed")?;
+    assert_eq!(retained.status.kind, ThreadTerminalStatusKind::Exited);
+    assert_eq!(retained.status.exit_code, Some(4));
+
     write_terminal(
         &mut mcp,
         &thread.id,
         &process_id,
-        Some("exit\n".to_string()),
+        Some("printf 'after-exit\\n'\n".to_string()),
     )
     .await?;
+    let stale_write_exit = read_terminal_exit(&mut mcp, &process_id)
+        .await?
+        .context("stale write should emit exited state")?;
+    assert_eq!(stale_write_exit.exit_code, 4);
+    assert_eq!(
+        read_terminal_output_delta(&mut mcp, &process_id).await?,
+        None
+    );
+
     write_terminal(&mut mcp, &thread.id, &process_id, None).await?;
+    let stale_poll_exit = read_terminal_exit(&mut mcp, &process_id)
+        .await?
+        .context("stale poll should emit exited state")?;
+    assert_eq!(stale_poll_exit.exit_code, 4);
+
+    assert!(
+        dismiss_terminal(&mut mcp, &thread.id, &process_id).await?,
+        "dismissing a retained exited shared terminal should remove it"
+    );
+    wait_for_background_terminal_absent(&mut mcp, &thread.id, &process_id).await?;
+    assert!(
+        !dismiss_terminal(&mut mcp, &thread.id, &process_id).await?,
+        "dismissing an unknown terminal should return false"
+    );
+
+    let reopened = open_terminal(
+        &mut mcp,
+        &thread.id,
+        "default",
+        ProcessTerminalSize { rows: 20, cols: 80 },
+    )
+    .await?;
+    assert_ne!(reopened.process_id, process_id);
+
+    let fresh_marker = "codex-terminal-after-reopen";
+    let fresh_output = write_command_and_wait_for_output(
+        &mut mcp,
+        &thread.id,
+        &reopened.process_id,
+        &format!("printf '{fresh_marker}\\n'\n"),
+        fresh_marker,
+    )
+    .await?;
+    assert!(fresh_output.contains(fresh_marker));
 
     Ok(())
 }
@@ -483,6 +576,27 @@ async fn resize_terminal(
     Ok(terminal)
 }
 
+async fn dismiss_terminal(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    process_id: &str,
+) -> Result<bool> {
+    let request_id = mcp
+        .send_thread_terminal_dismiss_request(ThreadTerminalDismissParams {
+            thread_id: thread_id.to_string(),
+            process_id: process_id.to_string(),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadTerminalDismissResponse { dismissed } =
+        to_response::<ThreadTerminalDismissResponse>(response)?;
+    Ok(dismissed)
+}
+
 async fn write_command_and_wait_for_output(
     mcp: &mut TestAppServer,
     thread_id: &str,
@@ -556,6 +670,50 @@ async fn read_terminal_output_delta(
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
+async fn drain_terminal_output_deltas(mcp: &mut TestAppServer, process_id: &str) -> Result<()> {
+    while read_terminal_output_delta(mcp, process_id).await?.is_some() {}
+    Ok(())
+}
+
+async fn poll_until_terminal_exit(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    process_id: &str,
+) -> Result<ProcessExitedNotification> {
+    let deadline = Instant::now() + DEFAULT_READ_TIMEOUT;
+    while Instant::now() < deadline {
+        write_terminal(mcp, thread_id, process_id, None).await?;
+        if let Some(exit) = read_terminal_exit(mcp, process_id).await? {
+            return Ok(exit);
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    bail!("timed out waiting for terminal exit for {process_id}");
+}
+
+async fn read_terminal_exit(
+    mcp: &mut TestAppServer,
+    process_id: &str,
+) -> Result<Option<ProcessExitedNotification>> {
+    let notification = match timeout(
+        Duration::from_millis(100),
+        mcp.read_stream_until_matching_notification("process/exited", |notification| {
+            notification.method == "process/exited"
+        }),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => return Ok(None),
+    };
+    let exit = parse_process_exit(notification)?;
+    if exit.process_handle != process_id {
+        return Ok(None);
+    }
+    Ok(Some(exit))
+}
+
 fn parse_process_output_delta(
     notification: JSONRPCNotification,
 ) -> Result<ProcessOutputDeltaNotification> {
@@ -563,6 +721,13 @@ fn parse_process_output_delta(
         .params
         .context("process/outputDelta notification should include params")?;
     serde_json::from_value(params).context("deserialize process/outputDelta notification")
+}
+
+fn parse_process_exit(notification: JSONRPCNotification) -> Result<ProcessExitedNotification> {
+    let params = notification
+        .params
+        .context("process/exited notification should include params")?;
+    serde_json::from_value(params).context("deserialize process/exited notification")
 }
 
 async fn list_background_terminals(

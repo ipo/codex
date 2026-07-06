@@ -1226,6 +1226,120 @@ async fn shared_terminal_metadata_is_visible_and_agent_write_stdin_can_target_it
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retained_exited_shared_terminal_is_visible_and_agent_write_returns_exit() -> Result<()> {
+    // TODO(anp): Remove after shared-terminal fixtures support Windows/ConPTY.
+    skip_if_target_windows!(Ok(()), "uses POSIX interactive-process and shell semantics");
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_auto_env(&server).await?;
+    let terminal = test
+        .codex
+        .open_shared_terminal(SharedTerminalOpenRequest {
+            label: "default".to_string(),
+            terminal_size: Some(TerminalSize { rows: 20, cols: 80 }),
+        })
+        .await?;
+
+    let final_marker = "codex-sh-retained-final-output";
+    let exit_output = test
+        .codex
+        .write_shared_terminal(
+            terminal.process_id,
+            &format!("printf '{final_marker}\\n'; exit 5\n"),
+        )
+        .await?;
+    if exit_output.exit_code.is_none() {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let output = test.codex.poll_shared_terminal(terminal.process_id).await?;
+                if output.exit_code.is_some() {
+                    return Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("shared terminal should exit")?;
+    }
+
+    let write_call_id = "retained-shared-terminal-write";
+    let write_args = serde_json::json!({
+        "session_id": terminal.process_id,
+        "chars": "printf 'after-exit\\n'\n",
+        "yield_time_ms": 1_000,
+    });
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-retained-sh-1"),
+            ev_function_call(
+                write_call_id,
+                "write_stdin",
+                &serde_json::to_string(&write_args)?,
+            ),
+            ev_completed("resp-retained-sh-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-retained-sh-2"),
+            ev_assistant_message("msg-retained-sh-1", "done"),
+            ev_completed("resp-retained-sh-2"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "write to the exited shared terminal",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    let first_request = requests.first().expect("expected first model request");
+    let active_terminals_fragment = first_request
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.contains("<active_terminals>"))
+        .expect("exited terminal metadata should be visible to the model");
+    assert!(active_terminals_fragment.contains("label=\"default\""));
+    assert!(active_terminals_fragment.contains("status=\"exited\""));
+    assert!(active_terminals_fragment.contains("exit_code=\"5\""));
+    assert!(active_terminals_fragment.contains(final_marker));
+    assert!(
+        active_terminals_fragment.len() < 4_000,
+        "exited terminal context should remain bounded, got {} bytes",
+        active_terminals_fragment.len()
+    );
+
+    let output = requests
+        .iter()
+        .find_map(|request| request.function_call_output_text(write_call_id))
+        .expect("expected write_stdin tool output");
+    assert!(output.contains("Process exited with code 5"));
+    assert!(output.contains(final_marker));
+    assert!(
+        !output.contains("UnknownProcessId") && !output.contains("unknown process"),
+        "retained terminal write should not return unknown-process output: {output:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_terminal_interaction_captures_delayed_output() -> Result<()> {
     // TODO(anp): Remove after timing fixtures use target-native commands.
     skip_if_target_windows!(Ok(()), "uses a POSIX sleep/echo timing fixture");
