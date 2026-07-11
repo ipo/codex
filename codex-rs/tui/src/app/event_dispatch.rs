@@ -1026,9 +1026,9 @@ impl App {
             AppEvent::OpenReasoningPopup { model } => {
                 self.chat_widget.open_reasoning_popup(model);
             }
-            AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
+            AppEvent::OpenModelSelectionScopePrompt { model, effort } => {
                 self.chat_widget
-                    .open_plan_reasoning_scope_prompt(model, effort);
+                    .open_model_selection_scope_prompt(model, effort);
             }
             AppEvent::OpenAllModelsPopup { models } => {
                 self.chat_widget.open_all_models_popup(models);
@@ -1564,6 +1564,8 @@ impl App {
                             message.push_str(&label);
                         }
                         self.chat_widget.add_info_message(message, /*hint*/ None);
+                        self.chat_widget
+                            .record_persisted_model_selection(model, effort);
                     }
                     Err(err) => {
                         let error = format_config_error(&err);
@@ -1866,7 +1868,7 @@ impl App {
             }
             AppEvent::PersistPlanModeReasoningEffort(effort) => {
                 let key_path = "plan_mode_reasoning_effort";
-                let edit = if let Some(effort) = effort {
+                let edit = if let Some(effort) = effort.as_ref() {
                     crate::config_update::replace_config_value(
                         key_path,
                         serde_json::json!(effort.to_string()),
@@ -1874,19 +1876,24 @@ impl App {
                 } else {
                     crate::config_update::clear_config_value(key_path)
                 };
-                if let Err(err) = crate::config_update::write_config_batch(
+                match crate::config_update::write_config_batch(
                     app_server.request_handle(),
                     vec![edit],
                 )
                 .await
                 {
-                    tracing::error!(
-                        error = %err,
-                        "failed to persist plan mode reasoning effort"
-                    );
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to save Plan mode reasoning effort: {err}"
-                    ));
+                    Ok(_) => self
+                        .chat_widget
+                        .record_persisted_plan_mode_reasoning_effort(effort),
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist plan mode reasoning effort"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save Plan mode reasoning effort: {err}"
+                        ));
+                    }
                 }
             }
             AppEvent::PersistModelMigrationPromptAcknowledged {

@@ -1,0 +1,19 @@
+---
+source: tui/src/chatwidget/tests/plan_mode.rs
+expression: popup
+---
+  Apply model change
+  Choose whether to save gpt-5.4 with medium reasoning.
+
+› 1. Apply to Plan mode override                     Use medium reasoning as the Plan mode
+                                                     default. gpt-5.4 remains temporary and
+                                                     applies in both modes until this TUI session
+                                                     ends.
+  2. Apply to global default and Plan mode override  Use gpt-5.4 with medium reasoning as the
+                                                     global default and Plan mode override. This
+                                                     replaces the current user-chosen Plan
+                                                     override (low).
+  3. Do not change defaults                          Use gpt-5.4 with medium reasoning in Default
+                                                     and Plan until this TUI session ends.
+
+  Press enter to confirm or esc to go back
