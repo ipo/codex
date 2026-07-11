@@ -1110,7 +1110,7 @@ impl App {
         &mut self,
         session: ThreadSessionState,
         turns: Vec<Turn>,
-    ) -> Result<()> {
+    ) -> Result<crate::chatwidget::InitialUserMessageSubmission> {
         let thread_id = session.thread_id;
         self.primary_thread_id = Some(thread_id);
         self.primary_session_configured = Some(session.clone());
@@ -1159,8 +1159,11 @@ impl App {
         }
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ false);
-        self.chat_widget.submit_initial_user_message_if_pending();
-        Ok(())
+        let initial_submission = self.chat_widget.submit_initial_user_message_if_pending();
+        if initial_submission == crate::chatwidget::InitialUserMessageSubmission::Continue {
+            self.chat_widget.maybe_send_next_queued_input();
+        }
+        Ok(initial_submission)
     }
 
     pub(super) async fn enqueue_primary_thread_notification(
@@ -1355,8 +1358,11 @@ impl App {
             .set_queue_autosend_suppressed(/*suppressed*/ false);
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ false);
-        self.chat_widget.submit_initial_user_message_if_pending();
-        if resume_restored_queue {
+        let initial_submission = self.chat_widget.submit_initial_user_message_if_pending();
+        if initial_submission == crate::chatwidget::InitialUserMessageSubmission::Continue
+            || (initial_submission == crate::chatwidget::InitialUserMessageSubmission::NoMessage
+                && resume_restored_queue)
+        {
             self.chat_widget.maybe_send_next_queued_input();
         }
         self.refresh_status_line();

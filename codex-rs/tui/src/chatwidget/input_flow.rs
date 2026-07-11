@@ -109,6 +109,7 @@ impl ChatWidget {
                     user_message,
                     action,
                     pending_pastes,
+                    source: QueuedUserMessageSource::Composer,
                 });
             self.input_queue
                 .queued_user_message_history_records
