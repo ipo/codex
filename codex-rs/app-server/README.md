@@ -1422,11 +1422,19 @@ There are additional item-specific events:
 
 `error` event is emitted whenever the server hits an error mid-turn (for example, upstream model errors or quota limits). Carries the same `{ error: { message, codexErrorInfo?, additionalDetails? } }` payload as `turn.status: "failed"` and may precede that terminal notification.
 
+When `willRetry` is `true`, the error is an intermediate retry notification: clients should keep
+the turn running and update transient status UI instead of adding a terminal error. Model-capacity
+retries use `codexErrorInfo: "serverOverloaded"` and messages such as `Reconnecting... 1/5`.
+
 `codexErrorInfo` maps to the `CodexErrorInfo` enum. Common values:
 
 - `ContextWindowExceeded`
 - `SessionBudgetExceeded`
 - `UsageLimitExceeded`
+- `ServerOverloaded`: model capacity is unavailable; ordinary turns report this terminally after
+  same-turn retries are exhausted
+- `ServerOverloadedBeforeInput`: model capacity remained unavailable during pre-turn compaction;
+  the incoming user input was not recorded in thread history
 - `HttpConnectionFailed { httpStatusCode? }`: upstream HTTP failures including 4xx/5xx
 - `ResponseStreamConnectionFailed { httpStatusCode? }`: failure to connect to the response SSE stream
 - `ResponseStreamDisconnected { httpStatusCode? }`: disconnect of the response SSE stream in the middle of a turn before completion

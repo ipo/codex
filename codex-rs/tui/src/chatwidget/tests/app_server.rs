@@ -1061,7 +1061,7 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
                 message: "Reconnecting... 1/5".to_string(),
-                codex_error_info: Some(CodexErrorInfo::Other),
+                codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
                 additional_details: None,
             },
             will_retry: true,
@@ -1070,7 +1070,23 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         }),
         /*replay_kind*/ None,
     );
-    drain_insert_history(&mut rx);
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        cells.is_empty(),
+        "retry should not add a terminal history cell"
+    );
+    assert!(chat.bottom_pane.is_task_running());
+
+    let height = chat.desired_height(/*width*/ 80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|frame| chat.render(frame.area(), frame.buffer_mut()))
+        .expect("draw capacity retry status");
+    assert_chatwidget_snapshot!(
+        "live_app_server_capacity_retry_status",
+        normalized_backend_snapshot(terminal.backend())
+    );
 
     chat.handle_server_notification(
         ServerNotification::AgentMessageDelta(
@@ -1094,7 +1110,7 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
 }
 
 #[tokio::test]
-async fn live_app_server_server_overloaded_error_renders_warning() {
+async fn live_app_server_server_overloaded_before_input_error_renders_warning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.handle_server_notification(
@@ -1119,7 +1135,7 @@ async fn live_app_server_server_overloaded_error_renders_warning() {
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
                 message: "server overloaded".to_string(),
-                codex_error_info: Some(CodexErrorInfo::ServerOverloaded),
+                codex_error_info: Some(CodexErrorInfo::ServerOverloadedBeforeInput),
                 additional_details: None,
             },
             will_retry: false,

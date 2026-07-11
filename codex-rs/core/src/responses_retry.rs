@@ -6,10 +6,23 @@ use crate::client::ModelClientSession;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::util::backoff;
+use crate::util::positive_jitter;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
+
+// Keep capacity recovery bounded while giving a continuously running turn time to reach a healthy
+// backend. Jitter is added separately and never shortens these base delays.
+const SERVER_OVERLOADED_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_secs(10),
+    Duration::from_secs(20),
+    Duration::from_secs(40),
+    Duration::from_secs(80),
+    Duration::from_secs(160),
+];
+const SERVER_OVERLOADED_MAX_RETRIES: u64 = SERVER_OVERLOADED_RETRY_DELAYS.len() as u64;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ResponsesStreamRequest {
@@ -17,8 +30,17 @@ pub(crate) enum ResponsesStreamRequest {
     RemoteCompactionV2,
 }
 
+pub(crate) fn should_retry_server_overload_in_core(
+    err: &CodexErr,
+    turn_context: &TurnContext,
+) -> bool {
+    matches!(err, CodexErr::ServerOverloaded)
+        && !crate::guardian::is_guardian_reviewer_source(&turn_context.session_source)
+}
+
 /// Handles a retryable stream error and returns `Ok(())` when the caller should
 /// retry the request loop.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_retryable_response_stream_error(
     retries: &mut u64,
     max_retries: u64,
@@ -27,8 +49,16 @@ pub(crate) async fn handle_retryable_response_stream_error(
     sess: &Session,
     turn_context: &TurnContext,
     request: ResponsesStreamRequest,
+    cancellation_token: CancellationToken,
 ) -> Result<(), CodexErr> {
-    if *retries >= max_retries
+    let is_server_overloaded = matches!(&err, CodexErr::ServerOverloaded);
+    let max_retries = if is_server_overloaded {
+        SERVER_OVERLOADED_MAX_RETRIES
+    } else {
+        max_retries
+    };
+    if !is_server_overloaded
+        && *retries >= max_retries
         && client_session.try_switch_fallback_transport(
             &turn_context.session_telemetry,
             &turn_context.model_info,
@@ -49,6 +79,9 @@ pub(crate) async fn handle_retryable_response_stream_error(
         *retries += 1;
         let retry_count = *retries;
         let delay = match &err {
+            CodexErr::ServerOverloaded => positive_jitter(
+                SERVER_OVERLOADED_RETRY_DELAYS[retry_count.saturating_sub(1) as usize],
+            ),
             CodexErr::Stream(_, requested_delay) => {
                 requested_delay.unwrap_or_else(|| backoff(retry_count))
             }
@@ -58,7 +91,8 @@ pub(crate) async fn handle_retryable_response_stream_error(
 
         // In release builds, hide the first websocket retry notification to reduce noisy
         // transient reconnect messages. In debug builds, keep full visibility for diagnosis.
-        let report_error = retry_count > 1
+        let report_error = is_server_overloaded
+            || retry_count > 1
             || cfg!(debug_assertions)
             || !sess.services.model_client.responses_websocket_enabled();
         if report_error {
@@ -71,8 +105,10 @@ pub(crate) async fn handle_retryable_response_stream_error(
             )
             .await;
         }
-        tokio::time::sleep(delay).await;
-        return Ok(());
+        return tokio::select! {
+            () = tokio::time::sleep(delay) => Ok(()),
+            () = cancellation_token.cancelled() => Err(CodexErr::TurnAborted),
+        };
     }
 
     Err(err)

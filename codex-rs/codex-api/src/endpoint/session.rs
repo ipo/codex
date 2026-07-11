@@ -1,3 +1,4 @@
+use crate::api_bridge::is_server_overloaded_transport_error;
 use crate::auth::SharedAuthProvider;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -21,6 +22,13 @@ pub(crate) struct EndpointSession<T: HttpTransport> {
     provider: Provider,
     auth: SharedAuthProvider,
     request_telemetry: Option<Arc<dyn RequestTelemetry>>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) enum ServerOverloadRetryMode {
+    #[default]
+    TransportManaged,
+    CallerManaged,
 }
 
 impl<T: HttpTransport> EndpointSession<T> {
@@ -107,6 +115,7 @@ impl<T: HttpTransport> EndpointSession<T> {
                     transport.execute(req).await
                 }
             },
+            |_| true,
         )
         .await?;
 
@@ -125,6 +134,7 @@ impl<T: HttpTransport> EndpointSession<T> {
         path: &str,
         extra_headers: HeaderMap,
         body: Option<EncodedJsonBody>,
+        server_overload_retry_mode: ServerOverloadRetryMode,
         configure: C,
     ) -> Result<StreamResponse, ApiError>
     where
@@ -147,6 +157,12 @@ impl<T: HttpTransport> EndpointSession<T> {
                     let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
                     transport.stream(req).await
                 }
+            },
+            |err| {
+                !matches!(
+                    server_overload_retry_mode,
+                    ServerOverloadRetryMode::CallerManaged
+                ) || !is_server_overloaded_transport_error(err)
             },
         )
         .await?;
