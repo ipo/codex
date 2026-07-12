@@ -33,8 +33,8 @@
 //!    - If "(shift+tab to cycle)" cannot fit, also hide the right-side
 //!      context to avoid too many state transitions in quick succession.
 //!    - Finally, try a mode-only line (with and without context), and fall
-//!      back through truncated-branch, version-only, and bare Plan-mode
-//!      identities before hiding the left-side footer.
+//!      back through timestamp-free, truncated-branch, version-only, and bare
+//!      Plan-mode identities before hiding the left-side footer.
 //! 3. When collapse chooses a specific line, callers render it via
 //!    `render_footer_line`. Otherwise, callers render the straightforward
 //!    mode-to-text mapping via `render_footer_from_props`.
@@ -2153,6 +2153,10 @@ mod tests {
             "full build identity should remain visible"
         );
         assert!(
+            collapsed.contains("built 2026-07-12T13:31:30Z"),
+            "build timestamp should remain visible"
+        );
+        assert!(
             !collapsed.contains("shift+tab to cycle"),
             "compact mode indicator should be used when space is tight"
         );
@@ -2183,7 +2187,7 @@ mod tests {
         assert_eq!(
             labels,
             [
-                "Plan mode · feature/robustness@0.144.1".to_string(),
+                "Plan mode · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z".to_string(),
                 "Pair Programming mode".to_string(),
                 "Execute mode".to_string(),
             ]

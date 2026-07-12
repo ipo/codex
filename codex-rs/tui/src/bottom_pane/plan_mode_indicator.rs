@@ -2,6 +2,8 @@ use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 #[cfg(not(test))]
 use crate::version::CODEX_BUILD_BRANCH;
 #[cfg(not(test))]
+use crate::version::CODEX_BUILD_TIMESTAMP;
+#[cfg(not(test))]
 use crate::version::CODEX_CLI_VERSION;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -18,11 +20,16 @@ const MIN_TRUNCATED_BRANCH_WIDTH: usize = 4;
 struct BuildIdentity<'a> {
     branch: &'a str,
     version: &'a str,
+    timestamp: &'a str,
 }
 
 impl<'a> BuildIdentity<'a> {
-    const fn new(branch: &'a str, version: &'a str) -> Self {
-        Self { branch, version }
+    const fn new(branch: &'a str, version: &'a str, timestamp: &'a str) -> Self {
+        Self {
+            branch,
+            version,
+            timestamp,
+        }
     }
 }
 
@@ -37,11 +44,11 @@ pub(super) fn line_fitting_width(show_cycle_hint: bool, max_width: usize) -> Opt
 fn current_build_identity() -> BuildIdentity<'static> {
     #[cfg(test)]
     {
-        BuildIdentity::new("feature/robustness", "0.144.1")
+        BuildIdentity::new("feature/robustness", "0.144.1", "2026-07-12T13:31:30Z")
     }
     #[cfg(not(test))]
     {
-        BuildIdentity::new(CODEX_BUILD_BRANCH, CODEX_CLI_VERSION)
+        BuildIdentity::new(CODEX_BUILD_BRANCH, CODEX_CLI_VERSION, CODEX_BUILD_TIMESTAMP)
     }
 }
 
@@ -60,6 +67,11 @@ fn line_fitting_width_for(
         if without_cycle_hint.width() <= max_width {
             return Some(without_cycle_hint);
         }
+    }
+
+    let without_timestamp = branch_version_line_for(identity);
+    if without_timestamp.width() <= max_width {
+        return Some(without_timestamp);
     }
 
     let fixed_width = UnicodeWidthStr::width(MODE_LABEL)
@@ -87,6 +99,15 @@ fn line_fitting_width_for(
 
 fn full_line_for(identity: BuildIdentity<'_>, show_cycle_hint: bool) -> Line<'static> {
     let mut line = mode_line(show_cycle_hint);
+    line.push_span(BUILD_SEPARATOR.dim());
+    line.push_span(format!("{}@{}", identity.branch, identity.version).dim());
+    line.push_span(BUILD_SEPARATOR.dim());
+    line.push_span(format!("built {}", identity.timestamp).dim());
+    line
+}
+
+fn branch_version_line_for(identity: BuildIdentity<'_>) -> Line<'static> {
+    let mut line = mode_only_line();
     line.push_span(BUILD_SEPARATOR.dim());
     line.push_span(format!("{}@{}", identity.branch, identity.version).dim());
     line
