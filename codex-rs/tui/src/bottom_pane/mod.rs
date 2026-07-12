@@ -140,6 +140,7 @@ pub(crate) use title_setup::preview_line_for_title_items;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
+mod plan_mode_indicator;
 pub(crate) mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
