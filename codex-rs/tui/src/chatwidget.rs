@@ -399,6 +399,8 @@ use self::review::ReviewState;
 #[cfg(test)]
 pub(crate) use self::review_popups::show_review_commit_picker_with_entries;
 mod safety_buffering;
+mod safety_stop;
+use self::safety_stop::SafetyStopSource;
 mod service_tiers;
 mod settings;
 mod settings_popups;

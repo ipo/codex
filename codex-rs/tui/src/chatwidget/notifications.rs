@@ -23,13 +23,14 @@ impl ChatWidget {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(super) enum Notification {
     AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
     ElicitationRequested { server_name: String },
     PlanModePrompt { title: String },
+    SafetyAlert,
 }
 
 impl Notification {
@@ -62,6 +63,7 @@ impl Notification {
             Notification::PlanModePrompt { title } => {
                 format!("Plan mode prompt: {title}")
             }
+            Notification::SafetyAlert => "Codex stopped: This content can't be shown".to_string(),
         }
     }
 
@@ -72,6 +74,7 @@ impl Notification {
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. } => "approval-requested",
             Notification::PlanModePrompt { .. } => "plan-mode-prompt",
+            Notification::SafetyAlert => "safety-alert",
         }
     }
 
@@ -81,7 +84,8 @@ impl Notification {
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. }
-            | Notification::PlanModePrompt { .. } => 1,
+            | Notification::PlanModePrompt { .. }
+            | Notification::SafetyAlert => 1,
         }
     }
 
@@ -126,3 +130,7 @@ impl Notification {
 }
 
 const AGENT_NOTIFICATION_PREVIEW_GRAPHEMES: usize = 200;
+
+#[cfg(test)]
+#[path = "notifications_tests.rs"]
+mod tests;
