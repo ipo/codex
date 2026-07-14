@@ -1,0 +1,22 @@
+---
+source: tui/src/bottom_pane/build_provenance_tests.rs
+expression: tiers
+---
+[
+    Some(
+        "Pursuing goal · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z",
+    ),
+    Some(
+        "Pursuing goal · feature/robustness@0.144.1",
+    ),
+    Some(
+        "Pursuing goal · feature/rob…@0.144.1",
+    ),
+    Some(
+        "Pursuing goal · 0.144.1",
+    ),
+    Some(
+        "Pursuing goal",
+    ),
+    None,
+]

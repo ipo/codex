@@ -170,6 +170,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
+use super::GoalStatusIndicator;
 use super::chat_composer_history::ChatComposerHistory;
 use super::chat_composer_history::HistoryEntry;
 use super::chat_composer_history::HistoryEntryResponse;
@@ -179,7 +180,6 @@ use super::footer::CollaborationModeIndicator;
 use super::footer::FooterKeyHints;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
-use super::footer::GoalStatusIndicator;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
 use super::footer::context_window_line;

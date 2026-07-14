@@ -42,6 +42,8 @@
 //! In short: `single_line_footer_layout` chooses *what* best fits, and the two
 //! render helpers choose whether to draw the chosen line or the default
 //! `FooterProps` mapping.
+use crate::bottom_pane::goal_status_indicator;
+use crate::bottom_pane::goal_status_indicator::GoalStatusIndicator;
 use crate::bottom_pane::plan_mode_indicator;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
@@ -95,16 +97,6 @@ pub(crate) enum CollaborationModeIndicator {
     PairProgramming,
     #[allow(dead_code)] // Hidden by current mode filtering; kept for future UI re-enablement.
     Execute,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GoalStatusIndicator {
-    Active { usage: Option<String> },
-    Paused,
-    Blocked,
-    UsageLimited,
-    BudgetLimited { usage: Option<String> },
-    Complete { usage: Option<String> },
 }
 
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
@@ -561,40 +553,6 @@ fn mode_indicator_line_fitting_width(
     }
 }
 
-pub(crate) fn goal_status_indicator_line(
-    indicator: Option<&GoalStatusIndicator>,
-) -> Option<Line<'static>> {
-    let indicator = indicator?;
-    let label = match indicator {
-        GoalStatusIndicator::Active { usage } => {
-            if let Some(usage) = usage {
-                format!("Pursuing goal ({usage})")
-            } else {
-                "Pursuing goal".to_string()
-            }
-        }
-        GoalStatusIndicator::Paused => "Goal paused (/goal resume)".to_string(),
-        GoalStatusIndicator::Blocked => "Goal blocked (/goal resume)".to_string(),
-        GoalStatusIndicator::UsageLimited => "Goal hit usage limits (/goal resume)".to_string(),
-        GoalStatusIndicator::BudgetLimited { usage } => {
-            if let Some(usage) = usage {
-                format!("Goal unmet ({usage})")
-            } else {
-                "Goal abandoned".to_string()
-            }
-        }
-        GoalStatusIndicator::Complete { usage } => {
-            if let Some(usage) = usage {
-                format!("Goal achieved ({usage})")
-            } else {
-                "Goal achieved".to_string()
-            }
-        }
-    };
-
-    Some(Line::from(vec![Span::from(label).magenta()]))
-}
-
 pub(crate) fn status_line_right_indicator_line(
     collaboration_mode_indicator: Option<CollaborationModeIndicator>,
     goal_status_indicator: Option<&GoalStatusIndicator>,
@@ -602,7 +560,7 @@ pub(crate) fn status_line_right_indicator_line(
     show_cycle_hint: bool,
 ) -> Option<Line<'static>> {
     let primary_indicator = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint)
-        .or_else(|| goal_status_indicator_line(goal_status_indicator));
+        .or_else(|| goal_status_indicator::line(goal_status_indicator));
     status_line_right_indicator_line_from_primary(primary_indicator, ide_context_active)
 }
 
@@ -636,7 +594,10 @@ pub(crate) fn status_line_right_indicator_line_fitting_width(
         return without_cycle_hint;
     }
 
-    if collaboration_mode_indicator != Some(CollaborationModeIndicator::Plan) {
+    let primary_has_provenance = collaboration_mode_indicator
+        == Some(CollaborationModeIndicator::Plan)
+        || collaboration_mode_indicator.is_none() && goal_status_indicator.is_some();
+    if !primary_has_provenance {
         return without_cycle_hint;
     }
 
@@ -653,11 +614,12 @@ pub(crate) fn status_line_right_indicator_line_fitting_width(
         return full_identity_without_context;
     }
 
-    let primary_indicator = mode_indicator_line_fitting_width(
-        CollaborationModeIndicator::Plan,
-        /*show_cycle_hint*/ false,
-        max_width,
-    );
+    let primary_indicator = match collaboration_mode_indicator {
+        Some(indicator) => {
+            mode_indicator_line_fitting_width(indicator, /*show_cycle_hint*/ false, max_width)
+        }
+        None => goal_status_indicator::line_fitting_width(goal_status_indicator, max_width),
+    };
     status_line_right_indicator_line_from_primary(
         primary_indicator,
         /*ide_context_active*/ false,
@@ -2191,6 +2153,27 @@ mod tests {
                 "Pair Programming mode".to_string(),
                 "Execute mode".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn plan_indicator_takes_precedence_over_goal_indicator() {
+        let goal = GoalStatusIndicator::Blocked;
+
+        assert_eq!(
+            status_line_right_indicator_line(
+                Some(CollaborationModeIndicator::Plan),
+                Some(&goal),
+                /*ide_context_active*/ false,
+                /*show_cycle_hint*/ false,
+            ),
+            Some(Line::from(vec![
+                "Plan mode".magenta(),
+                " · ".dim(),
+                "feature/robustness@0.144.1".dim(),
+                " · ".dim(),
+                "built 2026-07-12T13:31:30Z".dim(),
+            ]))
         );
     }
 
