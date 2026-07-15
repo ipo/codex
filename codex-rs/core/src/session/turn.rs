@@ -1198,9 +1198,11 @@ async fn run_sampling_request(
                 return Err(CodexErr::ContextWindowExceeded);
             }
             Err(CodexErr::UsageLimitReached(e)) => {
-                let rate_limits = e.rate_limits.clone();
-                if let Some(rate_limits) = rate_limits {
-                    sess.update_rate_limits(&turn_context, *rate_limits).await;
+                if let Some(mut rate_limits) = e.rate_limits.as_deref().cloned() {
+                    rate_limits.rate_limit_reached_type = rate_limits
+                        .rate_limit_reached_type
+                        .or(e.rate_limit_reached_type);
+                    sess.update_rate_limits(&turn_context, rate_limits).await;
                 }
                 return Err(CodexErr::UsageLimitReached(e));
             }

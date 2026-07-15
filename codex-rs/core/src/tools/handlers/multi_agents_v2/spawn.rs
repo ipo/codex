@@ -6,6 +6,7 @@ use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
 use crate::agent_communication::AgentCommunicationContext;
 use crate::agent_communication::AgentCommunicationKind;
+use crate::tools::handlers::multi_agent_spawn_routing::record_spawn_agent_routing_telemetry;
 use crate::tools::handlers::multi_agent_spawn_routing::route_spawn_agent_config;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
@@ -161,23 +162,7 @@ async fn handle_spawn_agent(
     )
     .await;
     let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    turn.session_telemetry.counter(
-        "codex.multi_agent.spawn",
-        /*inc*/ 1,
-        &[
-            ("role", role_tag),
-            ("version", "v2"),
-            ("backend_route", routing_decision.backend_route.as_str()),
-            (
-                "quota_fallback",
-                if routing_decision.quota_fallback {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
-        ],
-    );
+    record_spawn_agent_routing_telemetry(&turn.session_telemetry, role_tag, "v2", routing_decision);
     let task_name = String::from(new_agent_path);
 
     let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;

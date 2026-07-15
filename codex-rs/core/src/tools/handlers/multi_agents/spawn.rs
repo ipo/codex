@@ -6,6 +6,7 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::tools::handlers::multi_agent_spawn_routing::record_spawn_agent_routing_telemetry;
 use crate::tools::handlers::multi_agent_spawn_routing::route_spawn_agent_config;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
@@ -220,23 +221,7 @@ async fn handle_spawn_agent(
         .await;
     let new_thread_id = result?.thread_id;
     let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    turn.session_telemetry.counter(
-        "codex.multi_agent.spawn",
-        /*inc*/ 1,
-        &[
-            ("role", role_tag),
-            ("version", "v1"),
-            ("backend_route", routing_decision.backend_route.as_str()),
-            (
-                "quota_fallback",
-                if routing_decision.quota_fallback {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
-        ],
-    );
+    record_spawn_agent_routing_telemetry(&turn.session_telemetry, role_tag, "v1", routing_decision);
 
     Ok(SpawnAgentResult {
         agent_id: new_thread_id.to_string(),

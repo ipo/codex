@@ -1,4 +1,5 @@
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
+use codex_otel::SessionTelemetry;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::SubagentBackendRoute;
@@ -82,6 +83,31 @@ pub(crate) async fn route_spawn_agent_config(
         config.model_reasoning_effort = parent_reasoning_effort.cloned();
     }
     decision
+}
+
+pub(crate) fn record_spawn_agent_routing_telemetry(
+    session_telemetry: &SessionTelemetry,
+    role: &str,
+    version: &str,
+    decision: SpawnAgentRoutingDecision,
+) {
+    session_telemetry.counter(
+        "codex.multi_agent.spawn",
+        /*inc*/ 1,
+        &[
+            ("role", role),
+            ("version", version),
+            ("backend_route", decision.backend_route.as_str()),
+            (
+                "quota_fallback",
+                if decision.quota_fallback {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+        ],
+    );
 }
 
 fn is_main_session_route_candidate(input: &SpawnAgentRoutingInput<'_>) -> bool {

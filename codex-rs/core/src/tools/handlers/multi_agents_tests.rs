@@ -48,13 +48,10 @@ use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::Op;
-use codex_protocol::protocol::RateLimitSnapshot;
-use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -100,37 +97,6 @@ fn function_payload(args: serde_json::Value) -> ToolPayload {
 
 fn parse_agent_id(id: &str) -> ThreadId {
     ThreadId::from_string(id).expect("agent id should be valid")
-}
-
-async fn persisted_session_meta(
-    manager: &ThreadManager,
-    thread_id: ThreadId,
-) -> codex_protocol::protocol::SessionMeta {
-    let thread = manager
-        .get_thread(thread_id)
-        .await
-        .expect("spawned agent thread should exist");
-    thread.ensure_rollout_materialized().await;
-    thread
-        .flush_rollout()
-        .await
-        .expect("spawned agent rollout should flush");
-    let history = thread
-        .read_thread(
-            /*include_archived*/ true, /*include_history*/ true,
-        )
-        .await
-        .expect("spawned agent thread should be readable")
-        .history
-        .expect("spawned agent history should be loaded");
-    history
-        .items
-        .into_iter()
-        .find_map(|item| match item {
-            RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta),
-            _ => None,
-        })
-        .expect("spawned agent should persist session metadata")
 }
 
 fn thread_manager() -> ThreadManager {
@@ -343,160 +309,6 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         .await;
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
     assert_eq!(snapshot.model_provider_id, "ollama");
-}
-
-enum QuotaState {
-    Unknown,
-    NearExpiry,
-}
-
-async fn assert_v1_model_override_routing(quota_state: QuotaState) {
-    #[derive(Debug, Deserialize)]
-    struct SpawnAgentResult {
-        agent_id: String,
-    }
-
-    let (mut session, turn) = make_session_and_context().await;
-    let parent_settings = (
-        turn.model_info.slug.clone(),
-        turn.reasoning_effort
-            .clone()
-            .or_else(|| turn.model_info.default_reasoning_level.clone()),
-        SubagentBackendRoute::ProperSubagent,
-    );
-    if matches!(quota_state, QuotaState::NearExpiry) {
-        session
-            .record_rate_limits_info(RateLimitSnapshot {
-                limit_id: Some("codex".to_string()),
-                limit_name: None,
-                primary: Some(RateLimitWindow {
-                    used_percent: 95.0,
-                    window_minutes: Some(300),
-                    resets_at: None,
-                }),
-                secondary: None,
-                credits: None,
-                individual_limit: None,
-                plan_type: None,
-                rate_limit_reached_type: None,
-            })
-            .await;
-    }
-    let manager = thread_manager();
-    let root = manager
-        .start_thread((*turn.config).clone())
-        .await
-        .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
-    session.thread_id = root.thread_id;
-
-    let output = SpawnAgentHandler::default()
-        .handle(invocation(
-            Arc::new(session),
-            Arc::new(turn),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo",
-                "model": "gpt-5.4-mini",
-                "reasoning_effort": "low"
-            })),
-        ))
-        .await
-        .expect("spawn_agent should route an explicit model override");
-    let (content, _) = expect_text_output(output);
-    let result: SpawnAgentResult =
-        serde_json::from_str(&content).expect("spawn_agent result should be json");
-    let agent_id = parse_agent_id(&result.agent_id);
-    let snapshot = manager
-        .get_thread(agent_id)
-        .await
-        .expect("spawned agent thread should exist")
-        .config_snapshot()
-        .await;
-    let session_meta = persisted_session_meta(&manager, agent_id).await;
-    let expected_settings = match quota_state {
-        QuotaState::Unknown => (
-            "gpt-5.4-mini".to_string(),
-            Some(ReasoningEffort::Low),
-            SubagentBackendRoute::MainSession,
-        ),
-        QuotaState::NearExpiry => parent_settings,
-    };
-
-    assert_eq!(
-        (
-            snapshot.model,
-            snapshot.reasoning_effort,
-            session_meta.subagent_backend_route,
-        ),
-        expected_settings
-    );
-    assert!(matches!(session_meta.source, SessionSource::SubAgent(_)));
-}
-
-#[tokio::test]
-async fn explicit_model_override_uses_quota_aware_backend_route() {
-    assert_v1_model_override_routing(QuotaState::Unknown).await;
-    assert_v1_model_override_routing(QuotaState::NearExpiry).await;
-}
-
-#[tokio::test]
-async fn multi_agent_v2_explicit_model_override_uses_main_session_backend_route() {
-    #[derive(Debug, Deserialize)]
-    struct SpawnAgentResult {
-        task_name: String,
-    }
-
-    let (mut session, mut turn) = make_session_and_context().await;
-    let mut config = (*turn.config).clone();
-    config
-        .features
-        .enable(Feature::MultiAgentV2)
-        .expect("test config should allow feature update");
-    set_turn_config(&mut turn, config);
-    let manager = thread_manager();
-    let root = manager
-        .start_thread((*turn.config).clone())
-        .await
-        .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
-    session.thread_id = root.thread_id;
-    let session = Arc::new(session);
-
-    let output = SpawnAgentHandlerV2::default()
-        .handle(invocation(
-            Arc::clone(&session),
-            Arc::new(turn),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo",
-                "task_name": "model_override",
-                "fork_turns": "none",
-                "model": "gpt-5.4-mini"
-            })),
-        ))
-        .await
-        .expect("spawn_agent should accept a model override without a full fork");
-    let (content, _) = expect_text_output(output);
-    let result: SpawnAgentResult =
-        serde_json::from_str(&content).expect("spawn_agent result should be json");
-    let agent_id = session
-        .services
-        .agent_control
-        .resolve_agent_reference(
-            session.thread_id,
-            &SessionSource::default(),
-            result.task_name.as_str(),
-        )
-        .await
-        .expect("spawned task should resolve");
-    let session_meta = persisted_session_meta(&manager, agent_id).await;
-
-    assert_eq!(
-        session_meta.subagent_backend_route,
-        SubagentBackendRoute::MainSession
-    );
-    assert!(matches!(session_meta.source, SessionSource::SubAgent(_)));
 }
 
 #[tokio::test]

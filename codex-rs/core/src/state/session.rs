@@ -204,17 +204,18 @@ impl SessionState {
     }
 
     pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
+        let snapshot = merge_rate_limit_fields(/*previous*/ None, snapshot);
+        debug_assert!(snapshot.limit_id.is_some());
         let limit_id = snapshot
             .limit_id
             .clone()
             .unwrap_or_else(|| "codex".to_string());
         let bucket_snapshot =
-            merge_rate_limit_fields(self.rate_limits_by_id.get(&limit_id), snapshot);
-        self.rate_limits_by_id
-            .insert(limit_id, bucket_snapshot.clone());
+            merge_rate_limit_bucket_fields(self.rate_limits_by_id.get(&limit_id), snapshot.clone());
+        self.rate_limits_by_id.insert(limit_id, bucket_snapshot);
         self.latest_rate_limits = Some(merge_rate_limit_fields(
             self.latest_rate_limits.as_ref(),
-            bucket_snapshot,
+            snapshot,
         ));
     }
 
@@ -332,9 +333,16 @@ fn merge_rate_limit_fields(
     previous: Option<&RateLimitSnapshot>,
     mut snapshot: RateLimitSnapshot,
 ) -> RateLimitSnapshot {
-    if snapshot.limit_id.is_none() {
-        snapshot.limit_id = Some("codex".to_string());
-    }
+    snapshot.limit_id = Some(
+        snapshot
+            .limit_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|limit_id| !limit_id.is_empty())
+            .unwrap_or("codex")
+            .to_ascii_lowercase()
+            .replace('-', "_"),
+    );
     if snapshot.credits.is_none() {
         snapshot.credits = previous.and_then(|prior| prior.credits.clone());
     }
@@ -343,6 +351,29 @@ fn merge_rate_limit_fields(
     }
     if snapshot.plan_type.is_none() {
         snapshot.plan_type = previous.and_then(|prior| prior.plan_type);
+    }
+    snapshot
+}
+
+fn merge_rate_limit_bucket_fields(
+    previous: Option<&RateLimitSnapshot>,
+    snapshot: RateLimitSnapshot,
+) -> RateLimitSnapshot {
+    let has_quota_update = snapshot.primary.is_some()
+        || snapshot.secondary.is_some()
+        || snapshot.rate_limit_reached_type.is_some();
+    let mut snapshot = merge_rate_limit_fields(previous, snapshot);
+    if snapshot.limit_name.is_none() {
+        snapshot.limit_name = previous.and_then(|prior| prior.limit_name.clone());
+    }
+    if snapshot.primary.is_none() {
+        snapshot.primary = previous.and_then(|prior| prior.primary.clone());
+    }
+    if snapshot.secondary.is_none() {
+        snapshot.secondary = previous.and_then(|prior| prior.secondary.clone());
+    }
+    if !has_quota_update && snapshot.rate_limit_reached_type.is_none() {
+        snapshot.rate_limit_reached_type = previous.and_then(|prior| prior.rate_limit_reached_type);
     }
     snapshot
 }
