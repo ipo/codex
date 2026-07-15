@@ -17,6 +17,8 @@ use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
+use codex_api::RawMemory;
+use codex_api::RawMemoryMetadata;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_http_client::HttpClientFactory;
@@ -94,7 +96,7 @@ fn test_model_client_with_route(
     subagent_backend_route: SubagentBackendRoute,
 ) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
-    ModelClient::new(
+    ModelClient::new_with_subagent_backend_route(
         /*auth_manager*/ None,
         AgentIdentityAuthPolicy::JwtOnly,
         ThreadId::new(),
@@ -147,7 +149,6 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         thread_id,
         provider,
         SessionSource::Cli,
-        Default::default(),
         "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -621,6 +622,80 @@ async fn summarize_memories_returns_empty_for_empty_input() {
 }
 
 #[tokio::test]
+async fn memory_summarize_request_uses_the_selected_thread_spawn_backend_route() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/memories/trace_summarize"))
+        .respond_with(ResponseTemplate::new(/*status*/ 200).set_body_json(json!({"output": []})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let parent_thread_id = ThreadId::new();
+    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+
+    for route in [
+        SubagentBackendRoute::ProperSubagent,
+        SubagentBackendRoute::MainSession,
+    ] {
+        let provider =
+            create_oss_provider_with_base_url(&format!("{}/v1", server.uri()), WireApi::Responses);
+        let client = ModelClient::new_with_subagent_backend_route(
+            /*auth_manager*/ None,
+            AgentIdentityAuthPolicy::JwtOnly,
+            ThreadId::new(),
+            provider,
+            session_source.clone(),
+            route,
+            "test_originator".to_string(),
+            /*model_verbosity*/ None,
+            /*enable_request_compression*/ false,
+            /*include_timing_metrics*/ false,
+            /*beta_features_header*/ None,
+            /*item_ids_enabled*/ false,
+            /*concurrent_reasoning_summaries_enabled*/ false,
+            /*attestation_provider*/ None,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
+        client
+            .summarize_memories(
+                vec![RawMemory {
+                    id: route.as_str().to_string(),
+                    metadata: RawMemoryMetadata {
+                        source_path: "/tmp/trace.json".to_string(),
+                    },
+                    items: vec![json!({"type": "message"})],
+                }],
+                &test_model_info(),
+                /*effort*/ None,
+                &test_session_telemetry(),
+            )
+            .await
+            .expect("memory summarize request should succeed");
+    }
+
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| {
+                request
+                    .headers
+                    .get(X_OPENAI_SUBAGENT_HEADER)
+                    .and_then(|value| value.to_str().ok())
+            })
+            .collect::<Vec<_>>(),
+        [Some("collab_spawn"), None]
+    );
+}
+
+#[tokio::test]
 async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let attempt = started_inference_attempt(&temp)?;
@@ -868,7 +943,6 @@ fn model_client_with_counting_attestation(
         ThreadId::new(),
         provider,
         SessionSource::Exec,
-        Default::default(),
         "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,

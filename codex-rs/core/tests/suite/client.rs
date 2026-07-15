@@ -1333,7 +1333,6 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         thread_id,
         provider,
         SessionSource::Exec,
-        Default::default(),
         "test_originator".to_string(),
         config.model_verbosity,
         /*enable_request_compression*/ false,
@@ -3006,7 +3005,6 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         thread_id,
         provider.clone(),
         SessionSource::Exec,
-        Default::default(),
         "test_originator".to_string(),
         config.model_verbosity,
         /*enable_request_compression*/ false,
@@ -3282,6 +3280,10 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         .insert_header("x-codex-primary-over-secondary-limit-percent", "95.0")
         .insert_header("x-codex-primary-window-minutes", "15")
         .insert_header("x-codex-secondary-window-minutes", "60")
+        .insert_header(
+            "x-codex-rate-limit-reached-type",
+            "workspace_member_usage_limit_reached",
+        )
         .set_body_json(json!({
             "error": {
                 "type": "usage_limit_reached",
@@ -3318,7 +3320,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         "credits": null,
         "individual_limit": null,
         "plan_type": null,
-        "rate_limit_reached_type": null
+        "rate_limit_reached_type": "workspace_member_usage_limit_reached"
     });
 
     let submission_id = codex
@@ -3354,7 +3356,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
         unreachable!();
     };
     assert!(
-        error_event.message.to_lowercase().contains("usage limit"),
+        error_event.message.to_lowercase().contains("spend cap"),
         "unexpected error message for submission {submission_id}: {}",
         error_event.message
     );

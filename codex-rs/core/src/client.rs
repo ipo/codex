@@ -423,6 +423,43 @@ impl ModelClient {
         thread_id: ThreadId,
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
+        originator: String,
+        model_verbosity: Option<VerbosityConfig>,
+        enable_request_compression: bool,
+        include_timing_metrics: bool,
+        beta_features_header: Option<String>,
+        item_ids_enabled: bool,
+        concurrent_reasoning_summaries_enabled: bool,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        http_client_factory: HttpClientFactory,
+    ) -> Self {
+        Self::new_with_subagent_backend_route(
+            auth_manager,
+            agent_identity_policy,
+            thread_id,
+            provider_info,
+            session_source,
+            SubagentBackendRoute::default(),
+            originator,
+            model_verbosity,
+            enable_request_compression,
+            include_timing_metrics,
+            beta_features_header,
+            item_ids_enabled,
+            concurrent_reasoning_summaries_enabled,
+            attestation_provider,
+            http_client_factory,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Creates a session-scoped client with an explicit logical-subagent backend route.
+    pub fn new_with_subagent_backend_route(
+        auth_manager: Option<Arc<AuthManager>>,
+        agent_identity_policy: AgentIdentityAuthPolicy,
+        thread_id: ThreadId,
+        provider_info: ModelProviderInfo,
+        session_source: SessionSource,
         subagent_backend_route: SubagentBackendRoute,
         originator: String,
         model_verbosity: Option<VerbosityConfig>,

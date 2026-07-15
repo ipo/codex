@@ -507,7 +507,6 @@ fn test_model_client_session() -> crate::client::ModelClientSession {
         thread_id,
         ModelProviderInfo::create_openai_provider(/* base_url */ /*base_url*/ None),
         codex_protocol::protocol::SessionSource::Exec,
-        Default::default(),
         "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -5523,7 +5522,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         )),
         attestation_provider: None,
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
-        model_client: ModelClient::new(
+        model_client: ModelClient::new_with_subagent_backend_route(
             Some(auth_manager.clone()),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,
@@ -7660,7 +7659,7 @@ where
         )),
         attestation_provider: None,
         time_provider: Arc::new(crate::current_time::SystemTimeProvider),
-        model_client: ModelClient::new(
+        model_client: ModelClient::new_with_subagent_backend_route(
             Some(Arc::clone(&auth_manager)),
             AgentIdentityAuthPolicy::JwtOnly,
             thread_id,

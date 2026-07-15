@@ -56,6 +56,7 @@ const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
 mod execution;
 mod legacy;
 mod residency;
+mod resume_settings;
 mod spawn;
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -25,6 +25,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -3151,10 +3152,13 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
 
+    let mut child_config = harness.config.clone();
+    child_config.model = Some("gpt-5.4".to_string());
+    child_config.model_reasoning_effort = Some(ReasoningEffort::Low);
     let child_thread_id = harness
         .control
-        .spawn_agent(
-            harness.config.clone(),
+        .spawn_agent_with_metadata(
+            child_config,
             text_input("hello child"),
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -3163,9 +3167,14 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
                 agent_nickname: None,
                 agent_role: Some("explorer".to_string()),
             })),
+            SpawnAgentOptions {
+                subagent_backend_route: SubagentBackendRoute::MainSession,
+                ..Default::default()
+            },
         )
         .await
-        .expect("child spawn should succeed");
+        .expect("child spawn should succeed")
+        .thread_id;
     let grandchild_thread_id = harness
         .control
         .spawn_agent(
@@ -3194,6 +3203,18 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
         .expect("grandchild thread should exist");
     persist_thread_for_tree_resume(&parent_thread, "parent persisted").await;
     persist_thread_for_tree_resume(&child_thread, "child persisted").await;
+    let child_turn_context = child_thread.codex.session.new_default_turn().await;
+    child_thread
+        .codex
+        .session
+        .persist_rollout_items(&[RolloutItem::TurnContext(
+            child_turn_context.to_turn_context_item(),
+        )])
+        .await;
+    child_thread
+        .flush_rollout()
+        .await
+        .expect("child model settings should flush");
     persist_thread_for_tree_resume(&grandchild_thread, "grandchild persisted").await;
     wait_for_live_thread_spawn_children(&harness.control, parent_thread_id, &[child_thread_id])
         .await;
@@ -3228,6 +3249,20 @@ async fn resume_agent_from_rollout_reopens_open_descendants_after_manager_shutdo
     assert_ne!(
         harness.control.get_status(grandchild_thread_id).await,
         AgentStatus::NotFound
+    );
+    let resumed_child_snapshot = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("resumed child should be loaded")
+        .config_snapshot()
+        .await;
+    assert_eq!(
+        (
+            resumed_child_snapshot.model.as_str(),
+            resumed_child_snapshot.reasoning_effort,
+        ),
+        ("gpt-5.4", Some(ReasoningEffort::Low))
     );
 
     let _ = harness

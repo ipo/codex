@@ -1537,6 +1537,7 @@ async fn seed_pathless_store_thread(
             forked_from_id: None,
             parent_thread_id: None,
             source: ProtocolSessionSource::Cli,
+            subagent_backend_route: Default::default(),
             thread_source: None,
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
