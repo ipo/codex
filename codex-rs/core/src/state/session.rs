@@ -27,6 +27,7 @@ pub(crate) struct SessionState {
     pub(crate) session_configuration: SessionConfiguration,
     pub(crate) history: ContextManager,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    rate_limits_by_id: HashMap<String, RateLimitSnapshot>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
     pub(crate) additional_context: AdditionalContextStore,
@@ -64,6 +65,7 @@ impl SessionState {
             session_configuration,
             history,
             latest_rate_limits: None,
+            rate_limits_by_id: HashMap::new(),
             server_reasoning_included: false,
             mcp_dependency_prompted: HashSet::new(),
             additional_context: AdditionalContextStore::default(),
@@ -202,10 +204,22 @@ impl SessionState {
     }
 
     pub(crate) fn set_rate_limits(&mut self, snapshot: RateLimitSnapshot) {
+        let limit_id = snapshot
+            .limit_id
+            .clone()
+            .unwrap_or_else(|| "codex".to_string());
+        let bucket_snapshot =
+            merge_rate_limit_fields(self.rate_limits_by_id.get(&limit_id), snapshot);
+        self.rate_limits_by_id
+            .insert(limit_id, bucket_snapshot.clone());
         self.latest_rate_limits = Some(merge_rate_limit_fields(
             self.latest_rate_limits.as_ref(),
-            snapshot,
+            bucket_snapshot,
         ));
+    }
+
+    pub(crate) fn codex_rate_limits(&self) -> Option<RateLimitSnapshot> {
+        self.rate_limits_by_id.get("codex").cloned()
     }
 
     pub(crate) fn token_info_and_rate_limits(

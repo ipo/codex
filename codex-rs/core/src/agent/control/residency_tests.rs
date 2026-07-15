@@ -145,6 +145,7 @@ async fn spawn_v2_subagent(
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
+            /*subagent_backend_route*/ Default::default(),
         )
         .await
         .expect("spawn v2 subagent")

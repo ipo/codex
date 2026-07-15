@@ -6,6 +6,7 @@ use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
+use crate::tools::handlers::multi_agent_spawn_routing::route_spawn_agent_config;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v1;
 use codex_tools::ToolSpec;
@@ -110,6 +111,14 @@ async fn handle_spawn_agent(
             .await
             .map_err(FunctionCallError::RespondToModel)?;
     }
+    let routing_decision = route_spawn_agent_config(
+        &session,
+        turn.as_ref(),
+        &mut config,
+        /*has_explicit_model_or_effort*/
+        args.model.is_some() || args.reasoning_effort.is_some(),
+    )
+    .await;
     apply_spawn_agent_service_tier(
         &session,
         &mut config,
@@ -134,6 +143,7 @@ async fn handle_spawn_agent(
             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
             parent_thread_id: Some(session.thread_id),
             environments: Some(turn.environments.to_selections()),
+            subagent_backend_route: routing_decision.backend_route,
         },
     ))
     .await
@@ -213,7 +223,19 @@ async fn handle_spawn_agent(
     turn.session_telemetry.counter(
         "codex.multi_agent.spawn",
         /*inc*/ 1,
-        &[("role", role_tag), ("version", "v1")],
+        &[
+            ("role", role_tag),
+            ("version", "v1"),
+            ("backend_route", routing_decision.backend_route.as_str()),
+            (
+                "quota_fallback",
+                if routing_decision.quota_fallback {
+                    "true"
+                } else {
+                    "false"
+                },
+            ),
+        ],
     );
 
     Ok(SpawnAgentResult {

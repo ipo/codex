@@ -121,6 +121,23 @@ async fn set_rate_limits_defaults_to_codex_when_limit_id_missing_after_other_buc
             .and_then(|v| v.limit_id.clone()),
         Some("codex".to_string())
     );
+    assert_eq!(
+        state.codex_rate_limits(),
+        Some(RateLimitSnapshot {
+            limit_id: Some("codex".to_string()),
+            limit_name: None,
+            primary: Some(RateLimitWindow {
+                used_percent: 30.0,
+                window_minutes: Some(60),
+                resets_at: Some(300),
+            }),
+            secondary: None,
+            credits: None,
+            individual_limit: None,
+            plan_type: None,
+            rate_limit_reached_type: None,
+        })
+    );
 }
 
 #[tokio::test]
@@ -128,7 +145,7 @@ async fn set_rate_limits_carries_account_metadata_from_codex_to_codex_other() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);
 
-    state.set_rate_limits(RateLimitSnapshot {
+    let initial = RateLimitSnapshot {
         limit_id: Some("codex".to_string()),
         limit_name: Some("codex".to_string()),
         primary: Some(RateLimitWindow {
@@ -150,7 +167,8 @@ async fn set_rate_limits_carries_account_metadata_from_codex_to_codex_other() {
         }),
         plan_type: Some(codex_protocol::account::PlanType::Plus),
         rate_limit_reached_type: None,
-    });
+    };
+    state.set_rate_limits(initial.clone());
 
     state.set_rate_limits(RateLimitSnapshot {
         limit_id: Some("codex_other".to_string()),
@@ -193,4 +211,5 @@ async fn set_rate_limits_carries_account_metadata_from_codex_to_codex_other() {
             rate_limit_reached_type: None,
         })
     );
+    assert_eq!(state.codex_rate_limits(), Some(initial));
 }

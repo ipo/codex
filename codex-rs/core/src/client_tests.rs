@@ -44,6 +44,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::InferenceTraceAttempt;
@@ -85,20 +86,21 @@ const TEST_CHATGPT_ID_TOKEN: &str = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWF
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
-    test_model_client_with_thread_id(ThreadId::new(), session_source)
+    test_model_client_with_route(session_source, SubagentBackendRoute::ProperSubagent)
 }
 
-fn test_model_client_with_thread_id(
-    thread_id: ThreadId,
+fn test_model_client_with_route(
     session_source: SessionSource,
+    subagent_backend_route: SubagentBackendRoute,
 ) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     ModelClient::new(
         /*auth_manager*/ None,
         AgentIdentityAuthPolicy::JwtOnly,
-        thread_id,
+        ThreadId::new(),
         provider,
         session_source,
+        subagent_backend_route,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -145,6 +147,7 @@ async fn compact_uses_bearer_after_agent_identity_session_fallback() -> anyhow::
         thread_id,
         provider,
         SessionSource::Cli,
+        Default::default(),
         "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -515,12 +518,9 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
     let client_metadata =
         client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
     let parent_thread_id = parent_thread_id.to_string();
-    let turn_metadata: serde_json::Value = serde_json::from_str(
-        client_metadata
-            .get(X_CODEX_TURN_METADATA_HEADER)
-            .expect("turn metadata"),
-    )
-    .expect("valid turn metadata");
+    let turn_metadata: serde_json::Value =
+        serde_json::from_str(&client_metadata[X_CODEX_TURN_METADATA_HEADER])
+            .expect("valid turn metadata");
     for (client_key, metadata_key, expected) in [
         (
             X_CODEX_INSTALLATION_ID_HEADER,
@@ -552,6 +552,53 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             .get(X_OPENAI_SUBAGENT_HEADER)
             .map(String::as_str),
         Some("collab_spawn")
+    );
+}
+
+#[tokio::test]
+async fn main_session_route_omits_backend_projection_but_keeps_logical_subagent_metadata() {
+    let client = test_model_client_with_route(
+        SessionSource::SubAgent(SubAgentSource::Other("collab_spawn".to_string())),
+        SubagentBackendRoute::MainSession,
+    );
+    let responses_metadata = test_responses_metadata_for_client(
+        &client,
+        Some("turn-123"),
+        "window-123".to_string(),
+        None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+
+    let client_metadata =
+        client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
+    let turn_metadata: serde_json::Value = serde_json::from_str(
+        client_metadata
+            .get(X_CODEX_TURN_METADATA_HEADER)
+            .expect("turn metadata"),
+    )
+    .expect("valid turn metadata");
+    let options = client
+        .new_session()
+        .build_responses_options(
+            &responses_metadata,
+            codex_api::Compression::None,
+            /*use_responses_lite*/ false,
+        )
+        .await;
+
+    assert_eq!(
+        (
+            client
+                .build_subagent_headers()
+                .contains_key(X_OPENAI_SUBAGENT_HEADER),
+            client_metadata.contains_key(X_OPENAI_SUBAGENT_HEADER),
+            client
+                .build_responses_compatibility_headers(&responses_metadata)
+                .contains_key(X_OPENAI_SUBAGENT_HEADER),
+            options.session_source,
+            turn_metadata["subagent_kind"].as_str(),
+        ),
+        (false, false, false, None, Some("collab_spawn"))
     );
 }
 
@@ -821,6 +868,7 @@ fn model_client_with_counting_attestation(
         ThreadId::new(),
         provider,
         SessionSource::Exec,
+        Default::default(),
         "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,

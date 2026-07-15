@@ -84,6 +84,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
@@ -201,6 +202,7 @@ struct ModelClientState {
     provider: SharedModelProvider,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
+    subagent_backend_route: SubagentBackendRoute,
     originator: String,
     model_verbosity: Option<VerbosityConfig>,
     enable_request_compression: bool,
@@ -421,6 +423,7 @@ impl ModelClient {
         thread_id: ThreadId,
         provider_info: ModelProviderInfo,
         session_source: SessionSource,
+        subagent_backend_route: SubagentBackendRoute,
         originator: String,
         model_verbosity: Option<VerbosityConfig>,
         enable_request_compression: bool,
@@ -445,6 +448,7 @@ impl ModelClient {
                 provider: model_provider,
                 auth_env_telemetry,
                 session_source,
+                subagent_backend_route,
                 originator,
                 model_verbosity,
                 enable_request_compression,
@@ -725,7 +729,8 @@ impl ModelClient {
     fn build_subagent_headers(&self) -> ApiHeaderMap {
         let mut extra_headers = ApiHeaderMap::new();
         add_originator_header(&mut extra_headers, self.state.originator.as_str());
-        if let Some(subagent) = subagent_header_value(&self.state.session_source)
+        if self.state.subagent_backend_route.is_proper_subagent()
+            && let Some(subagent) = subagent_header_value(&self.state.session_source)
             && let Ok(val) = HeaderValue::from_str(&subagent)
         {
             extra_headers.insert(X_OPENAI_SUBAGENT_HEADER, val);
@@ -747,6 +752,9 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
     ) -> ApiHeaderMap {
         let mut extra_headers = responses_metadata.compatibility_headers();
+        if !self.state.subagent_backend_route.is_proper_subagent() {
+            extra_headers.remove(X_OPENAI_SUBAGENT_HEADER);
+        }
         if matches!(
             self.state.session_source,
             SessionSource::Internal(InternalSessionSource::MemoryConsolidation)
@@ -764,12 +772,23 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
         use_responses_lite: bool,
     ) -> HashMap<String, String> {
-        let mut client_metadata = responses_metadata.client_metadata();
+        let mut client_metadata = self.build_responses_client_metadata(responses_metadata);
         if use_responses_lite {
             client_metadata.insert(
                 WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_string(),
                 "true".to_string(),
             );
+        }
+        client_metadata
+    }
+
+    fn build_responses_client_metadata(
+        &self,
+        responses_metadata: &CodexResponsesMetadata,
+    ) -> HashMap<String, String> {
+        let mut client_metadata = responses_metadata.client_metadata();
+        if !self.state.subagent_backend_route.is_proper_subagent() {
+            client_metadata.remove(X_OPENAI_SUBAGENT_HEADER);
         }
         client_metadata
     }
@@ -915,7 +934,7 @@ impl ModelClient {
             service_tier,
             prompt_cache_key,
             text,
-            client_metadata: Some(responses_metadata.client_metadata()),
+            client_metadata: Some(self.build_responses_client_metadata(responses_metadata)),
         };
         Ok(request)
     }
@@ -1146,7 +1165,12 @@ impl ModelClientSession {
         ApiResponsesOptions {
             session_id: Some(responses_metadata.session_id.to_string()),
             thread_id: Some(responses_metadata.thread_id.to_string()),
-            session_source: Some(self.client.state.session_source.clone()),
+            session_source: self
+                .client
+                .state
+                .subagent_backend_route
+                .is_proper_subagent()
+                .then(|| self.client.state.session_source.clone()),
             extra_headers: {
                 let mut headers = build_responses_headers(
                     self.client.state.beta_features_header.as_deref(),

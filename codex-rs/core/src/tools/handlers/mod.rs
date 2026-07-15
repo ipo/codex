@@ -12,6 +12,7 @@ pub(crate) mod list_available_plugins_to_install_spec;
 mod mcp;
 mod mcp_resource;
 pub(crate) mod mcp_resource_spec;
+pub(crate) mod multi_agent_spawn_routing;
 pub(crate) mod multi_agents;
 pub(crate) mod multi_agents_common;
 pub(crate) mod multi_agents_spec;

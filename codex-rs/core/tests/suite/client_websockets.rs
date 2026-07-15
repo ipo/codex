@@ -2322,6 +2322,7 @@ async fn websocket_harness_with_provider_options(
         thread_id,
         provider.clone(),
         SessionSource::Exec,
+        Default::default(),
         "test_originator".to_string(),
         config.model_verbosity,
         /*enable_request_compression*/ false,

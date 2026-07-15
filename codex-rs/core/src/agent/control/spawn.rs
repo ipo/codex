@@ -322,6 +322,7 @@ impl AgentControl {
                     inheritance.environments,
                     inheritance.exec_policy,
                     options.environments.clone(),
+                    options.subagent_backend_route,
                 ))
                 .await?
             }
@@ -577,6 +578,7 @@ impl AgentControl {
                 inherited_exec_policy,
                 options.environments.clone(),
                 thread_extension_init,
+                options.subagent_backend_route,
             )
             .await
     }

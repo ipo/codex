@@ -1325,6 +1325,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
                 originator: "test_originator".into(),
                 cli_version: "test_version".into(),
                 source: SessionSource::VSCode,
+                subagent_backend_route: Default::default(),
                 thread_source: None,
                 agent_path: None,
                 agent_nickname: None,

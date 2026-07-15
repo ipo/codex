@@ -17,6 +17,7 @@ use strum_macros::EnumIter;
 
 use crate::AgentPath;
 use crate::SessionId;
+pub use crate::SubagentBackendRoute;
 use crate::ThreadId;
 use crate::approvals::ElicitationRequestEvent;
 use crate::capabilities::SelectedCapabilityRoot;
@@ -2672,6 +2673,11 @@ impl InitialHistory {
             .and_then(|meta| meta.parent_thread_id)
     }
 
+    pub fn get_resumed_subagent_backend_route(&self) -> Option<SubagentBackendRoute> {
+        self.get_resumed_session_meta()
+            .map(|meta| meta.subagent_backend_route)
+    }
+
     fn get_session_meta(&self) -> Option<&SessionMeta> {
         match self {
             InitialHistory::New | InitialHistory::Cleared => None,
@@ -3027,6 +3033,12 @@ pub struct SessionMeta {
     pub cli_version: String,
     #[serde(default)]
     pub source: SessionSource,
+    /// Sticky routing choice for backend inference requests made by this thread.
+    #[serde(
+        default,
+        skip_serializing_if = "SubagentBackendRoute::is_proper_subagent"
+    )]
+    pub subagent_backend_route: SubagentBackendRoute,
     /// Optional analytics source classification for this thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_source: Option<ThreadSource>,
@@ -3077,6 +3089,7 @@ impl Default for SessionMeta {
             originator: String::new(),
             cli_version: String::new(),
             source: SessionSource::default(),
+            subagent_backend_route: SubagentBackendRoute::default(),
             thread_source: None,
             agent_nickname: None,
             agent_role: None,
@@ -5801,8 +5814,13 @@ mod tests {
         }))?;
 
         assert_eq!(session_meta.history_mode, ThreadHistoryMode::Legacy);
+        assert_eq!(
+            session_meta.subagent_backend_route,
+            SubagentBackendRoute::ProperSubagent
+        );
         let serialized = serde_json::to_value(&session_meta)?;
         assert_eq!(serialized["history_mode"], json!("legacy"));
+        assert_eq!(serialized.get("subagent_backend_route"), None);
         let mut unknown = serialized;
         unknown["history_mode"] = json!("future");
         assert!(serde_json::from_value::<SessionMeta>(unknown).is_err());
@@ -5817,6 +5835,7 @@ mod tests {
                 session_id: thread_id.into(),
                 id: thread_id,
                 history_mode: ThreadHistoryMode::Legacy,
+                subagent_backend_route: SubagentBackendRoute::MainSession,
                 ..SessionMeta::default()
             },
             git: None,
@@ -5830,6 +5849,14 @@ mod tests {
         assert_eq!(
             history.get_history_mode(ThreadHistoryMode::Paginated),
             ThreadHistoryMode::Legacy
+        );
+        assert_eq!(
+            history.get_resumed_subagent_backend_route(),
+            Some(SubagentBackendRoute::MainSession)
+        );
+        assert_eq!(
+            InitialHistory::Forked(vec![session_meta.clone()]).get_resumed_subagent_backend_route(),
+            None
         );
         assert_eq!(
             InitialHistory::Forked(vec![session_meta])

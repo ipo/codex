@@ -205,7 +205,7 @@ fn spawn_agent_tool_caps_reasoning_effort_value_length() {
     }];
 
     assert_eq!(
-        spawn_agent_models_description(&[model]),
+        spawn_agent_models_description(&[model], /*include_service_tiers*/ true),
         format!(
             "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {} (default). Service tiers: priority.",
             "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
@@ -214,7 +214,7 @@ fn spawn_agent_tool_caps_reasoning_effort_value_length() {
 }
 
 #[test]
-fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
+fn spawn_agent_tool_keeps_model_controls_when_spawn_metadata_is_hidden() {
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
         available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
         agent_type_description: "role help".to_string(),
@@ -236,11 +236,13 @@ fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
         .expect("spawn_agent should use object params");
 
     assert!(!properties.contains_key("agent_type"));
-    assert!(!properties.contains_key("model"));
-    assert!(!properties.contains_key("reasoning_effort"));
+    assert!(properties.contains_key("model"));
+    assert!(properties.contains_key("reasoning_effort"));
     assert!(!properties.contains_key("service_tier"));
-    assert!(!description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
-    assert!(!description.contains("Available model overrides"));
+    assert!(description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
+    assert!(description.contains("Available model overrides"));
+    assert!(description.contains("Reasoning efforts: medium (default)."));
+    assert!(!description.contains("Service tiers: priority."));
 }
 
 #[test]

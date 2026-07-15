@@ -45,10 +45,10 @@ impl Default for WaitAgentTimeoutOptions {
 }
 
 pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
-    let available_models_description = (!options.hide_agent_type_model_reasoning)
-        .then(|| spawn_agent_models_description(&options.available_models));
-    let inherited_model_guidance =
-        (!options.hide_agent_type_model_reasoning).then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
+    let available_models_description = spawn_agent_models_description(
+        &options.available_models,
+        /*include_service_tiers*/ !options.hide_agent_type_model_reasoning,
+    );
     let return_value_description =
         "Returns the spawned agent id plus the user-facing nickname when available.";
     let mut properties = spawn_agent_common_properties_v1(&options.agent_type_description);
@@ -62,8 +62,8 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: "spawn_agent".to_string(),
             description: spawn_agent_tool_description(
-                available_models_description.as_deref(),
-                inherited_model_guidance,
+                Some(available_models_description.as_str()),
+                Some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE),
                 return_value_description,
                 options.usage_hint_text,
             ),
@@ -76,10 +76,10 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
 }
 
 pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
-    let available_models_description = (!options.hide_agent_type_model_reasoning)
-        .then(|| spawn_agent_models_description(&options.available_models));
-    let inherited_model_guidance =
-        (!options.hide_agent_type_model_reasoning).then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
+    let available_models_description = spawn_agent_models_description(
+        &options.available_models,
+        /*include_service_tiers*/ !options.hide_agent_type_model_reasoning,
+    );
     let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
     if options.hide_agent_type_model_reasoning {
         hide_spawn_agent_metadata_options(&mut properties);
@@ -95,8 +95,8 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
         description: spawn_agent_tool_description_v2(
-            available_models_description.as_deref(),
-            inherited_model_guidance,
+            Some(available_models_description.as_str()),
+            Some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE),
             options.usage_hint_text,
         ),
         strict: false,
@@ -566,7 +566,7 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
         (
             "fork_context".to_string(),
             JsonSchema::boolean(Some(
-                "True forks the current thread history into the new agent; false or omitted starts with only the initial prompt."
+                "True forks the current thread history into the new agent; false or omitted starts with only the initial prompt. A full-history fork cannot be combined with agent_type, model, or reasoning_effort."
                     .to_string(),
             )),
         ),
@@ -608,7 +608,7 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         (
             "fork_turns".to_string(),
             JsonSchema::string(Some(
-                "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
+                "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns. `all` cannot be combined with agent_type, model, or reasoning_effort; use `none` or a positive integer to select those overrides."
                     .to_string(),
             )),
         ),
@@ -636,8 +636,6 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
 
 fn hide_spawn_agent_metadata_options(properties: &mut BTreeMap<String, JsonSchema>) {
     properties.remove("agent_type");
-    properties.remove("model");
-    properties.remove("reasoning_effort");
     properties.remove("service_tier");
 }
 
@@ -740,7 +738,7 @@ Note that passing `fork_turns="none"` will not pass any surrounding context to t
     tool_description
 }
 
-fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
+fn spawn_agent_models_description(models: &[ModelPreset], include_service_tiers: bool) -> String {
     let visible_models: Vec<&ModelPreset> = models
         .iter()
         .filter(|model| model.show_in_picker)
@@ -779,16 +777,16 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
             } else {
                 format!(" Reasoning efforts: {efforts}.")
             };
-            let service_tiers = model
-                .service_tiers
-                .iter()
-                .map(|tier| tier.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let service_tiers_suffix = if service_tiers.is_empty() {
-                String::new()
-            } else {
+            let service_tiers_suffix = if include_service_tiers && !model.service_tiers.is_empty() {
+                let service_tiers = model
+                    .service_tiers
+                    .iter()
+                    .map(|tier| tier.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 format!(" Service tiers: {service_tiers}.")
+            } else {
+                String::new()
             };
             let model_slug = &model.model;
             let description = &model.description;

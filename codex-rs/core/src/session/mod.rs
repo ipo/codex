@@ -121,6 +121,7 @@ use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -421,6 +422,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) conversation_history: InitialHistory,
     pub(crate) requested_history_mode: Option<ThreadHistoryMode>,
     pub(crate) session_source: SessionSource,
+    pub(crate) subagent_backend_route: SubagentBackendRoute,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
@@ -513,6 +515,7 @@ impl Codex {
             conversation_history,
             requested_history_mode,
             session_source,
+            subagent_backend_route,
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
@@ -666,6 +669,7 @@ impl Codex {
             app_server_client_name: None,
             app_server_client_version: None,
             session_source,
+            subagent_backend_route,
             history_mode,
             forked_from_thread_id,
             parent_thread_id,
@@ -3773,6 +3777,11 @@ impl Session {
             let mut state = self.state.lock().await;
             state.set_rate_limits(new_rate_limits);
         }
+    }
+
+    pub(crate) async fn codex_rate_limits(&self) -> Option<RateLimitSnapshot> {
+        let state = self.state.lock().await;
+        state.codex_rate_limits()
     }
 
     pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {
