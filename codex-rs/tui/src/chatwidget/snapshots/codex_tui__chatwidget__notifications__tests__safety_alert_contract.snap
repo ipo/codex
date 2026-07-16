@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/notifications_tests.rs
+expression: notification.display()
+---
+Codex stopped: This content can't be shown
