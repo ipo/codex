@@ -18,9 +18,9 @@
 //! swap/snapshot the theme for live preview.  All highlighting functions read
 //! the theme via `theme_lock()`.
 //!
-//! **Guardrails:** inputs exceeding 512 KB or 10 000 lines are rejected early
-//! (returns `None`) to prevent pathological CPU/memory usage.  Callers must
-//! fall back to plain unstyled text.
+//! **Guardrails:** inputs exceeding 512 KB, 10 000 lines, or 2 KiB per physical
+//! line are rejected early (returns `None`) to prevent pathological CPU/memory
+//! usage. Callers must fall back to plain unstyled text.
 
 use ratatui::style::Color as RtColor;
 use ratatui::style::Modifier;
@@ -579,6 +579,10 @@ const MAX_HIGHLIGHT_BYTES: usize = 512 * 1024;
 /// Skip highlighting for inputs with more than 10,000 lines.
 const MAX_HIGHLIGHT_LINES: usize = 10_000;
 
+/// Skip highlighting when any physical line exceeds 2 KiB. Long shell tokens
+/// can trigger pathological backtracking before the aggregate limits apply.
+const MAX_HIGHLIGHT_LINE_BYTES: usize = 2 * 1024;
+
 /// Check whether an input exceeds the safe highlighting limits.
 ///
 /// Callers that highlight content in a loop (e.g. per diff-line) should
@@ -609,7 +613,12 @@ fn highlight_to_line_spans_with_theme(
     // Bail out early for oversized inputs to avoid excessive resource usage.
     // Count actual lines (not newline bytes) to avoid an off-by-one when
     // the input does not end with a newline.
-    if code.len() > MAX_HIGHLIGHT_BYTES || code.lines().count() > MAX_HIGHLIGHT_LINES {
+    if code.len() > MAX_HIGHLIGHT_BYTES
+        || code
+            .lines()
+            .any(|line| line.len() > MAX_HIGHLIGHT_LINE_BYTES)
+        || code.lines().count() > MAX_HIGHLIGHT_LINES
+    {
         return None;
     }
 
@@ -1135,6 +1144,16 @@ mod tests {
         let big = "x".repeat(MAX_HIGHLIGHT_BYTES + 1);
         let result = highlight_code_to_styled_spans(&big, "rust");
         assert!(result.is_none(), "oversized input should fall back to None");
+    }
+
+    #[test]
+    fn highlight_long_physical_line_falls_back_to_plain_text() {
+        let token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".repeat(55);
+        let script = format!(
+            "tmux send-keys -t remote-admin-mail 'printf %s {token} | base64 -d > /tmp/script.sh' Enter"
+        );
+
+        assert_eq!(highlight_bash_to_lines(&script), vec![Line::from(script)],);
     }
 
     #[test]

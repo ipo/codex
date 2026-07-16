@@ -1,0 +1,28 @@
+---
+source: tui/src/chatwidget/tests/highlight_guardrail_tests.rs
+expression: "format!(\"{completed_buffer:?}\")"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 181, height: 5 },
+    content: [
+        "• Ran tmux send-keys -t remote-admin-mail 'printf %s ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+        "  │ ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/                                                 ",
+        "  │ ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/                                                 ",
+        "  │ … +25 lines                                                                                                                                                                      ",
+        "  └ (no output)                                                                                                                                                                      ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Green, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 1, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 2, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: BOLD,
+        x: 5, y: 0, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 1, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 4, y: 2, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 15, y: 3, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+        x: 0, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: DIM,
+        x: 15, y: 4, fg: Reset, bg: Reset, underline: Reset, modifier: NONE,
+    ]
+}

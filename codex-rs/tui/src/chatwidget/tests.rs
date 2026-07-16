@@ -242,6 +242,8 @@ mod goal_provenance;
 mod goal_validation;
 mod guardian;
 pub(crate) mod helpers;
+#[path = "tests/highlight_guardrail_tests.rs"]
+mod highlight_guardrails;
 mod history_replay;
 mod mcp_startup;
 mod permissions;
