@@ -4,9 +4,9 @@ use std::time::Instant;
 
 use ratatui::text::Line;
 
+use crate::bottom_pane::GoalStatusIndicator;
 use crate::bottom_pane::footer::CollaborationModeIndicator;
 use crate::bottom_pane::footer::FooterMode;
-use crate::bottom_pane::footer::GoalStatusIndicator;
 use crate::key_hint::KeyBinding;
 #[cfg(test)]
 use std::time::Duration;
