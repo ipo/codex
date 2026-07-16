@@ -90,6 +90,12 @@ pub fn backoff(attempt: u64) -> Duration {
     Duration::from_millis((base as f64 * jitter) as u64)
 }
 
+/// Adds up to 10% positive jitter without allowing a retry earlier than the base delay.
+pub(crate) fn positive_jitter(delay: Duration) -> Duration {
+    let jitter = rand::rng().random_range(1.0..1.1);
+    delay.mul_f64(jitter)
+}
+
 pub(crate) fn error_or_panic(message: impl std::string::ToString) {
     if cfg!(debug_assertions) {
         panic!("{}", message.to_string());

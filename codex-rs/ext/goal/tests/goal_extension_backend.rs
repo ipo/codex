@@ -574,7 +574,7 @@ async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> any
 }
 
 #[tokio::test]
-async fn turn_error_blocks_goal() -> anyhow::Result<()> {
+async fn server_overload_turn_error_blocks_goal() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -591,7 +591,7 @@ async fn turn_error_blocks_goal() -> anyhow::Result<()> {
         .await?;
 
     harness
-        .notify_turn_error("turn-1", CodexErrorInfo::Other)
+        .notify_turn_error("turn-1", CodexErrorInfo::ServerOverloaded)
         .await;
 
     let goal = runtime

@@ -3491,6 +3491,13 @@
           "type": "string"
         },
         {
+          "description": "Capacity failure before the incoming user input was recorded in thread history.",
+          "enum": [
+            "serverOverloadedBeforeInput"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "properties": {
             "httpConnectionFailed": {

@@ -24,6 +24,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -1051,8 +1052,8 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result<()> {
+#[tokio::test]
+async fn remote_compact_v2_retries_capacity_after_stream_retry_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let harness = TestCodexHarness::with_builder(
@@ -1060,7 +1061,7 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
             .with_config(|config| {
                 let _ = config.features.enable(Feature::RemoteCompactionV2);
-                config.model_provider.request_max_retries = Some(0);
+                config.model_provider.request_max_retries = Some(1);
                 config.model_provider.stream_max_retries = Some(2);
             }),
     )
@@ -1082,6 +1083,31 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
                     "encrypted_content": "FAILED_COMPACT_SUMMARY",
                 }
             })])),
+            responses::sse_response(responses::sse_failed(
+                "resp-overloaded-1",
+                "server_is_overloaded",
+                "selected model is at capacity",
+            )),
+            responses::sse_response(responses::sse_failed(
+                "resp-overloaded-2",
+                "server_is_overloaded",
+                "selected model is at capacity",
+            )),
+            responses::sse_response(responses::sse_failed(
+                "resp-overloaded-3",
+                "server_is_overloaded",
+                "selected model is at capacity",
+            )),
+            responses::sse_response(responses::sse_failed(
+                "resp-overloaded-4",
+                "server_is_overloaded",
+                "selected model is at capacity",
+            )),
+            responses::sse_response(responses::sse_failed(
+                "resp-overloaded-5",
+                "server_is_overloaded",
+                "selected model is at capacity",
+            )),
             responses::sse_response(responses::sse(vec![
                 serde_json::json!({
                     "type": "response.output_item.done",
@@ -1113,9 +1139,34 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
         })
         .await?;
     wait_for_turn_complete(&codex).await;
+    tokio::time::pause();
 
     codex.submit(Op::Compact).await?;
-    wait_for_turn_complete(&codex).await;
+    let mut server_overload_retry_messages = Vec::new();
+    loop {
+        match codex.next_event().await?.msg {
+            EventMsg::StreamError(event) => {
+                if event.codex_error_info == Some(CodexErrorInfo::ServerOverloaded) {
+                    server_overload_retry_messages.push(event.message);
+                }
+                tokio::time::advance(Duration::from_secs(600)).await;
+            }
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        server_overload_retry_messages,
+        vec![
+            "Reconnecting... 1/5",
+            "Reconnecting... 2/5",
+            "Reconnecting... 3/5",
+            "Reconnecting... 4/5",
+            "Reconnecting... 5/5",
+        ]
+    );
+    tokio::time::resume();
 
     codex
         .submit(Op::UserInput {
@@ -1133,12 +1184,12 @@ async fn remote_compact_v2_retries_failures_with_stream_retry_budget() -> Result
 
     let response_requests = responses_mock.requests();
     assert_eq!(
-        5,
+        10,
         response_requests.len(),
-        "expected initial turn, failed open, failed stream, compact retry, and follow-up turn"
+        "expected initial turn, two stream failures, five capacity failures, compact retry, and follow-up turn"
     );
 
-    for compact_request in &response_requests[1..=3] {
+    for compact_request in &response_requests[1..=8] {
         assert_eq!("/v1/responses", compact_request.path());
         assert!(
             compact_request
@@ -2189,6 +2240,110 @@ async fn auto_remote_compact_failure_stops_agent_loop() -> Result<()> {
             ),]
         )
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn pre_turn_capacity_recovery_records_incoming_input_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::RemoteCompactionV2);
+                config.model_auto_compact_token_limit = Some(120);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    let overloaded = || {
+        ResponseTemplate::new(503).set_body_json(serde_json::json!({
+            "error": {
+                "code": "server_is_overloaded",
+                "message": "selected model is at capacity"
+            }
+        }))
+    };
+    let responses_mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(sse(vec![
+                responses::ev_assistant_message("initial-assistant", "initial turn complete"),
+                responses::ev_completed_with_tokens(
+                    "initial-response",
+                    /*total_tokens*/ 500_000,
+                ),
+            ])),
+            overloaded(),
+            overloaded(),
+            overloaded(),
+            responses::sse_response(responses::sse(vec![
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "compaction",
+                        "encrypted_content": "RECOVERED_COMPACT_SUMMARY",
+                    }
+                }),
+                responses::ev_completed("resp-compact-recovered"),
+            ])),
+            responses::sse_response(responses::sse(vec![
+                responses::ev_assistant_message("after-retry", "done"),
+                responses::ev_completed("resp-after-retry"),
+            ])),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "turn that exceeds token threshold".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let incoming = "prompt recorded exactly once after capacity recovery";
+    tokio::time::pause();
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: incoming.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    loop {
+        match codex.next_event().await?.msg {
+            EventMsg::StreamError(_) => tokio::time::advance(Duration::from_secs(600)).await,
+            EventMsg::TurnComplete(_) => break,
+            _ => {}
+        }
+    }
+    tokio::time::resume();
+
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 6);
+    for compact_request in &requests[1..5] {
+        let body = compact_request.body_json().to_string();
+        assert!(body.contains("\"type\":\"compaction_trigger\""));
+        assert!(!body.contains(incoming));
+    }
+    let sampling_body = requests[5].body_json().to_string();
+    assert_eq!(sampling_body.matches(incoming).count(), 1);
 
     Ok(())
 }

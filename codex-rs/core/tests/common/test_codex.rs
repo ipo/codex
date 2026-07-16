@@ -305,6 +305,7 @@ pub struct TestCodexBuilder {
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     code_mode_host_program: Option<PathBuf>,
     history_mode: Option<ThreadHistoryMode>,
+    session_source: Option<SessionSource>,
 }
 
 impl TestCodexBuilder {
@@ -330,6 +331,11 @@ impl TestCodexBuilder {
 
     pub fn with_history_mode(mut self, history_mode: ThreadHistoryMode) -> Self {
         self.history_mode = Some(history_mode);
+        self
+    }
+
+    pub fn with_session_source(mut self, session_source: SessionSource) -> Self {
+        self.session_source = Some(session_source);
         self
     }
 
@@ -704,7 +710,7 @@ impl TestCodexBuilder {
                         allow_provider_model_fallback: false,
                         initial_history: InitialHistory::New,
                         history_mode: self.history_mode,
-                        session_source: None,
+                        session_source: self.session_source.clone(),
                         thread_source: None,
                         dynamic_tools: Vec::new(),
                         metrics_service_name: None,
@@ -1250,6 +1256,7 @@ pub fn test_codex() -> TestCodexBuilder {
         external_time_provider: None,
         code_mode_host_program: None,
         history_mode: None,
+        session_source: None,
     }
 }
 
