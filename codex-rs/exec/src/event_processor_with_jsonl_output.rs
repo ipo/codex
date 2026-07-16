@@ -10,6 +10,7 @@ use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
@@ -32,6 +33,8 @@ use crate::exec_events::CommandExecutionStatus as ExecCommandExecutionStatus;
 use crate::exec_events::ErrorItem;
 use crate::exec_events::FileChangeItem;
 use crate::exec_events::FileUpdateChange;
+use crate::exec_events::Goal;
+use crate::exec_events::GoalUpdatedEvent;
 use crate::exec_events::ItemCompletedEvent;
 use crate::exec_events::ItemStartedEvent;
 use crate::exec_events::ItemUpdatedEvent;
@@ -406,6 +409,24 @@ impl EventProcessorWithJsonOutput {
         }
     }
 
+    pub fn collect_error(&mut self, message: String) -> CollectedThreadEvents {
+        let error = ThreadErrorEvent { message };
+        self.last_critical_error = Some(error.clone());
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::Error(error)],
+            status: CodexStatus::Running,
+        }
+    }
+
+    pub fn collect_goal_update(&self, goal: &ThreadGoal) -> CollectedThreadEvents {
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::GoalUpdated(GoalUpdatedEvent {
+                goal: Goal::from(goal),
+            })],
+            status: CodexStatus::Running,
+        }
+    }
+
     pub fn collect_thread_events(
         &mut self,
         notification: ServerNotification,
@@ -580,6 +601,8 @@ impl EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             ServerNotification::TurnStarted(_) => {
+                self.final_message = None;
+                self.emit_final_message_on_shutdown = false;
                 events.push(ThreadEvent::TurnStarted(TurnStartedEvent {}));
                 CodexStatus::Running
             }
@@ -610,6 +633,22 @@ impl EventProcessor for EventProcessorWithJsonOutput {
 
     fn process_warning(&mut self, message: String) -> CodexStatus {
         let collected = self.collect_warning(message);
+        for event in collected.events {
+            self.emit(event);
+        }
+        collected.status
+    }
+
+    fn process_error(&mut self, message: String) -> CodexStatus {
+        let collected = self.collect_error(message);
+        for event in collected.events {
+            self.emit(event);
+        }
+        collected.status
+    }
+
+    fn process_goal_update(&mut self, goal: &ThreadGoal) -> CodexStatus {
+        let collected = self.collect_goal_update(goal);
         for event in collected.events {
             self.emit(event);
         }

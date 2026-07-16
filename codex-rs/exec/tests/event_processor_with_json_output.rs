@@ -15,6 +15,8 @@ use codex_app_server_protocol::McpToolCallStatus as ApiMcpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus as ApiPatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as ApiPatchChangeKind;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadGoal as ApiThreadGoal;
+use codex_app_server_protocol::ThreadGoalStatus as ApiThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TokenUsageBreakdown;
@@ -54,6 +56,9 @@ use codex_exec::EventProcessorWithJsonOutput;
 use codex_exec::ExecThreadItem;
 use codex_exec::FileChangeItem;
 use codex_exec::FileUpdateChange as ExecFileUpdateChange;
+use codex_exec::Goal as ExecGoal;
+use codex_exec::GoalStatus as ExecGoalStatus;
+use codex_exec::GoalUpdatedEvent;
 use codex_exec::ItemCompletedEvent;
 use codex_exec::ItemStartedEvent;
 use codex_exec::ItemUpdatedEvent;
@@ -163,6 +168,77 @@ fn turn_started_emits_turn_started_event() {
             status: CodexStatus::Running,
         }
     );
+}
+
+#[test]
+fn goal_update_uses_the_documented_json_shape_and_serializes_every_status() {
+    let processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+    let goal = ApiThreadGoal {
+        thread_id: "thr_123".to_string(),
+        objective: "finish the migration".to_string(),
+        status: ApiThreadGoalStatus::Active,
+        token_budget: None,
+        tokens_used: 1234,
+        time_used_seconds: 56,
+        created_at: 1_776_272_400,
+        updated_at: 1_776_272_456,
+    };
+    let collected = processor.collect_goal_update(&goal);
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::GoalUpdated(GoalUpdatedEvent {
+                goal: ExecGoal {
+                    thread_id: "thr_123".to_string(),
+                    objective: "finish the migration".to_string(),
+                    status: ExecGoalStatus::Active,
+                    token_budget: None,
+                    tokens_used: 1234,
+                    time_used_seconds: 56,
+                    created_at: 1_776_272_400,
+                    updated_at: 1_776_272_456,
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(&collected.events[0]).expect("serialize goal event"),
+        json!({
+            "type": "goal.updated",
+            "goal": {
+                "thread_id": "thr_123",
+                "objective": "finish the migration",
+                "status": "active",
+                "token_budget": null,
+                "tokens_used": 1234,
+                "time_used_seconds": 56,
+                "created_at": 1_776_272_400,
+                "updated_at": 1_776_272_456,
+            }
+        })
+    );
+
+    for (status, expected) in [
+        (ApiThreadGoalStatus::Active, "active"),
+        (ApiThreadGoalStatus::Paused, "paused"),
+        (ApiThreadGoalStatus::Blocked, "blocked"),
+        (ApiThreadGoalStatus::UsageLimited, "usageLimited"),
+        (ApiThreadGoalStatus::BudgetLimited, "budgetLimited"),
+        (ApiThreadGoalStatus::Complete, "complete"),
+    ] {
+        let event = ThreadEvent::GoalUpdated(GoalUpdatedEvent {
+            goal: ExecGoal {
+                status: status.into(),
+                ..ExecGoal::from(&goal)
+            },
+        });
+        assert_eq!(
+            serde_json::to_value(event).expect("serialize goal status")["goal"]["status"],
+            expected
+        );
+    }
 }
 
 #[test]

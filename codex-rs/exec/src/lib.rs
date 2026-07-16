@@ -9,6 +9,8 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub(crate) mod event_processor_with_jsonl_output;
 pub(crate) mod exec_events;
+mod goal_prompt;
+mod goal_run;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -31,6 +33,9 @@ use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::Thread as AppServerThread;
+use codex_app_server_protocol::ThreadGoalSetParams;
+use codex_app_server_protocol::ThreadGoalSetResponse;
+use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem as AppServerThreadItem;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
@@ -116,6 +121,9 @@ pub use exec_events::CommandExecutionStatus;
 pub use exec_events::ErrorItem;
 pub use exec_events::FileChangeItem;
 pub use exec_events::FileUpdateChange;
+pub use exec_events::Goal;
+pub use exec_events::GoalStatus;
+pub use exec_events::GoalUpdatedEvent;
 pub use exec_events::ItemCompletedEvent;
 pub use exec_events::ItemStartedEvent;
 pub use exec_events::ItemUpdatedEvent;
@@ -159,6 +167,10 @@ use uuid::Uuid;
 
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::EventProcessor;
+use crate::goal_prompt::GoalInvocation;
+use crate::goal_prompt::GoalPreflight;
+use crate::goal_prompt::classify_goal_prompt;
+use crate::goal_run::GoalRun;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
@@ -168,9 +180,56 @@ enum InitialOperation {
         items: Vec<UserInput>,
         output_schema: Option<Value>,
     },
+    Goal {
+        objective: String,
+    },
     Review {
         review_request: ReviewRequest,
     },
+}
+
+enum ActiveOperation {
+    Turn { task_id: String },
+    Goal(GoalRun),
+}
+
+fn initial_operation_from_prompt(
+    prompt_text: String,
+    images: Vec<PathBuf>,
+    output_schema_path: Option<PathBuf>,
+    config: &Config,
+    invocation: GoalInvocation,
+) -> anyhow::Result<(InitialOperation, String)> {
+    let goal_objective = classify_goal_prompt(
+        &prompt_text,
+        config,
+        GoalPreflight {
+            invocation,
+            image_count: images.len(),
+            output_schema_present: output_schema_path.is_some(),
+        },
+    )?;
+    if let Some(objective) = goal_objective {
+        return Ok((InitialOperation::Goal { objective }, prompt_text));
+    }
+
+    let mut items = images
+        .into_iter()
+        .map(|path| UserInput::LocalImage { path, detail: None })
+        .collect::<Vec<_>>();
+    items.push(UserInput::Text {
+        text: prompt_text.clone(),
+        // CLI input doesn't track UI element ranges, so none are available here.
+        text_elements: Vec::new(),
+    });
+    let output_schema = load_output_schema(output_schema_path);
+    Ok((
+        InitialOperation::UserTurn {
+            items,
+            output_schema,
+        },
+        prompt_text,
+    ))
 }
 
 enum StdinPromptBehavior {
@@ -701,23 +760,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             last_message_file.clone(),
         )),
     };
-    if oss {
-        // We're in the oss section, so provider_id should be Some
-        // Let's handle None case gracefully though just in case
-        let provider_id = match model_provider.as_ref() {
-            Some(id) => id,
-            None => {
-                error!("OSS provider unexpectedly not set when oss flag is used");
-                return Err(anyhow::anyhow!(
-                    "OSS provider not set but oss flag was used"
-                ));
-            }
-        };
-        ensure_oss_provider_ready(provider_id, &config)
-            .await
-            .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
-    }
-
     let default_cwd = config.cwd.to_path_buf();
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_effort = config.model_reasoning_effort.clone();
@@ -741,46 +783,46 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 })
                 .or(root_prompt);
             let prompt_text = resolve_prompt(prompt_arg);
-            let mut items: Vec<UserInput> = imgs
+            let images = imgs
                 .into_iter()
                 .chain(args.images.iter().cloned())
-                .map(|path| UserInput::LocalImage { path, detail: None })
                 .collect();
-            items.push(UserInput::Text {
-                text: prompt_text.clone(),
-                // CLI input doesn't track UI element ranges, so none are available here.
-                text_elements: Vec::new(),
-            });
-            let output_schema = load_output_schema(output_schema_path.clone());
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
+            initial_operation_from_prompt(
                 prompt_text,
-            )
+                images,
+                output_schema_path.clone(),
+                &config,
+                GoalInvocation::Resume,
+            )?
         }
         (None, root_prompt, imgs) => {
             let prompt_text = resolve_root_prompt(root_prompt);
-            let mut items: Vec<UserInput> = imgs
-                .into_iter()
-                .map(|path| UserInput::LocalImage { path, detail: None })
-                .collect();
-            items.push(UserInput::Text {
-                text: prompt_text.clone(),
-                // CLI input doesn't track UI element ranges, so none are available here.
-                text_elements: Vec::new(),
-            });
-            let output_schema = load_output_schema(output_schema_path);
-            (
-                InitialOperation::UserTurn {
-                    items,
-                    output_schema,
-                },
+            initial_operation_from_prompt(
                 prompt_text,
-            )
+                imgs,
+                output_schema_path,
+                &config,
+                GoalInvocation::Fresh,
+            )?
         }
     };
+
+    if oss {
+        // We're in the oss section, so provider_id should be Some
+        // Let's handle None case gracefully though just in case
+        let provider_id = match model_provider.as_ref() {
+            Some(id) => id,
+            None => {
+                error!("OSS provider unexpectedly not set when oss flag is used");
+                return Err(anyhow::anyhow!(
+                    "OSS provider not set but oss flag was used"
+                ));
+            }
+        };
+        ensure_oss_provider_ready(provider_id, &config)
+            .await
+            .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
+    }
 
     // When --yolo (dangerously_bypass_approvals_and_sandbox) is set, also skip the git repo check
     // since the user is explicitly running in an externally sandboxed environment.
@@ -885,7 +927,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         }
     });
 
-    let task_id = match initial_operation {
+    let active_operation = match initial_operation {
         InitialOperation::UserTurn {
             items,
             output_schema,
@@ -923,7 +965,26 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             .map_err(anyhow::Error::msg)?;
             let task_id = response.turn.id;
             info!("Sent prompt with event ID: {task_id}");
-            task_id
+            ActiveOperation::Turn { task_id }
+        }
+        InitialOperation::Goal { objective } => {
+            let response: ThreadGoalSetResponse = send_request_with_response(
+                &client,
+                ClientRequest::ThreadGoalSet {
+                    request_id: request_ids.next(),
+                    params: ThreadGoalSetParams {
+                        thread_id: primary_thread_id_for_span.clone(),
+                        objective: Some(objective),
+                        status: Some(ThreadGoalStatus::Active),
+                        token_budget: None,
+                    },
+                },
+                "thread/goal/set",
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+            let _ = event_processor.process_goal_update(&response.goal);
+            ActiveOperation::Goal(GoalRun::new(primary_thread_id_for_span.clone()))
         }
         InitialOperation::Review { review_request } => {
             let response: ReviewStartResponse = send_request_with_response(
@@ -948,106 +1009,121 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             ));
             let task_id = response.turn.id;
             info!("Sent review request with event ID: {task_id}");
-            task_id
+            ActiveOperation::Turn { task_id }
         }
     };
-    exec_span.record("turn.id", task_id.as_str());
 
-    // Run the loop until the task is complete.
-    // Track whether a fatal error was reported by the server so we can
-    // exit with a non-zero status for automation-friendly signaling.
-    let mut error_seen = false;
-    let mut interrupt_channel_open = true;
     let primary_thread_id_for_requests = primary_thread_id.to_string();
-    loop {
-        let server_event = tokio::select! {
-            maybe_interrupt = interrupt_rx.recv(), if interrupt_channel_open => {
-                if maybe_interrupt.is_none() {
-                    interrupt_channel_open = false;
+    let mut error_seen = false;
+    let task_id = match active_operation {
+        ActiveOperation::Goal(goal_run) => {
+            error_seen = match crate::goal_run::follow_goal(
+                &mut client,
+                &mut request_ids,
+                event_processor.as_mut(),
+                &mut interrupt_rx,
+                goal_run,
+                &exec_span,
+            )
+            .await
+            {
+                crate::goal_run::GoalRunOutcome::Complete => false,
+                crate::goal_run::GoalRunOutcome::Failed => true,
+            };
+            None
+        }
+        ActiveOperation::Turn { task_id } => Some(task_id),
+    };
+
+    if let Some(task_id) = task_id {
+        exec_span.record("turn.id", task_id.as_str());
+        // Run the original single-turn loop unchanged for ordinary prompts and reviews.
+        let mut interrupt_channel_open = true;
+        loop {
+            let server_event = tokio::select! {
+                maybe_interrupt = interrupt_rx.recv(), if interrupt_channel_open => {
+                    if maybe_interrupt.is_none() {
+                        interrupt_channel_open = false;
+                        continue;
+                    }
+                    if let Err(err) = interrupt_turn(
+                        &client,
+                        &mut request_ids,
+                        &primary_thread_id_for_requests,
+                        &task_id,
+                    )
+                    .await
+                    {
+                        warn!("turn/interrupt failed: {err}");
+                    }
                     continue;
                 }
-                if let Err(err) = send_request_with_response::<TurnInterruptResponse>(
-                    &client,
-                    ClientRequest::TurnInterrupt {
-                        request_id: request_ids.next(),
-                        params: TurnInterruptParams {
-                            thread_id: primary_thread_id_for_requests.clone(),
-                            turn_id: task_id.clone(),
-                        },
-                    },
-                    "turn/interrupt",
-                )
-                .await
-                {
-                    warn!("turn/interrupt failed: {err}");
+                maybe_event = client.next_event() => maybe_event,
+            };
+
+            let Some(server_event) = server_event else {
+                break;
+            };
+
+            match server_event {
+                InProcessServerEvent::ServerRequest(request) => {
+                    handle_server_request(&client, request, &mut error_seen).await;
                 }
-                continue;
-            }
-            maybe_event = client.next_event() => maybe_event,
-        };
-
-        let Some(server_event) = server_event else {
-            break;
-        };
-
-        match server_event {
-            InProcessServerEvent::ServerRequest(request) => {
-                handle_server_request(&client, request, &mut error_seen).await;
-            }
-            InProcessServerEvent::ServerNotification(mut notification) => {
-                if let ServerNotification::Error(payload) = &notification {
-                    if payload.thread_id == primary_thread_id_for_requests
-                        && payload.turn_id == task_id
-                        && !payload.will_retry
+                InProcessServerEvent::ServerNotification(mut notification) => {
+                    if let ServerNotification::Error(payload) = &notification {
+                        if payload.thread_id == primary_thread_id_for_requests
+                            && payload.turn_id == task_id
+                            && !payload.will_retry
+                        {
+                            error_seen = true;
+                        }
+                    } else if let ServerNotification::TurnCompleted(payload) = &notification
+                        && payload.thread_id == primary_thread_id_for_requests
+                        && payload.turn.id == task_id
+                        && matches!(
+                            payload.turn.status,
+                            codex_app_server_protocol::TurnStatus::Failed
+                                | codex_app_server_protocol::TurnStatus::Interrupted
+                        )
                     {
                         error_seen = true;
                     }
-                } else if let ServerNotification::TurnCompleted(payload) = &notification
-                    && payload.thread_id == primary_thread_id_for_requests
-                    && payload.turn.id == task_id
-                    && matches!(
-                        payload.turn.status,
-                        codex_app_server_protocol::TurnStatus::Failed
-                            | codex_app_server_protocol::TurnStatus::Interrupted
-                    )
-                {
-                    error_seen = true;
-                }
 
-                if should_process_notification(
-                    &notification,
-                    &primary_thread_id_for_requests,
-                    &task_id,
-                ) {
-                    maybe_backfill_turn_completed_items(
-                        config.ephemeral,
-                        &client,
-                        &mut request_ids,
-                        &mut notification,
-                    )
-                    .await;
+                    if should_process_notification(
+                        &notification,
+                        &primary_thread_id_for_requests,
+                        &task_id,
+                    ) {
+                        maybe_backfill_turn_completed_items(
+                            config.ephemeral,
+                            &client,
+                            &mut request_ids,
+                            &mut notification,
+                        )
+                        .await;
 
-                    match event_processor.process_server_notification(notification) {
-                        CodexStatus::Running => {}
-                        CodexStatus::InitiateShutdown => {
-                            if let Err(err) = request_shutdown(
-                                &client,
-                                &mut request_ids,
-                                &primary_thread_id_for_requests,
-                            )
-                            .await
-                            {
-                                warn!("thread/unsubscribe failed during shutdown: {err}");
+                        match event_processor.process_server_notification(notification) {
+                            CodexStatus::Running => {}
+                            CodexStatus::InitiateShutdown => {
+                                if let Err(err) = request_shutdown(
+                                    &client,
+                                    &mut request_ids,
+                                    &primary_thread_id_for_requests,
+                                )
+                                .await
+                                {
+                                    warn!("thread/unsubscribe failed during shutdown: {err}");
+                                }
+                                break;
                             }
-                            break;
                         }
                     }
                 }
-            }
-            InProcessServerEvent::Lagged { skipped } => {
-                let message = lagged_event_warning_message(skipped);
-                warn!("{message}");
-                event_processor.process_warning(message);
+                InProcessServerEvent::Lagged { skipped } => {
+                    let message = lagged_event_warning_message(skipped);
+                    warn!("{message}");
+                    event_processor.process_warning(message);
+                }
             }
         }
     }
@@ -1171,6 +1247,27 @@ where
             format!("{method}: {err}")
         }
     })
+}
+
+async fn interrupt_turn(
+    client: &InProcessAppServerClient,
+    request_ids: &mut RequestIdSequencer,
+    thread_id: &str,
+    turn_id: &str,
+) -> Result<(), String> {
+    send_request_with_response::<TurnInterruptResponse>(
+        client,
+        ClientRequest::TurnInterrupt {
+            request_id: request_ids.next(),
+            params: TurnInterruptParams {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+            },
+        },
+        "turn/interrupt",
+    )
+    .await
+    .map(|_| ())
 }
 
 fn session_configured_from_thread_start_response(
