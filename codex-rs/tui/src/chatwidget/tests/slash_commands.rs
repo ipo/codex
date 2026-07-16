@@ -72,6 +72,11 @@ fn queue_goal_with_large_paste(chat: &mut ChatWidget, paste: String) {
     chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 }
 
+fn submit_initial_text(chat: &mut ChatWidget, text: &str) -> InitialUserMessageSubmission {
+    chat.initial_user_message = Some(UserMessage::from(text));
+    chat.submit_initial_user_message_if_pending()
+}
+
 fn recall_latest_after_clearing(chat: &mut ChatWidget) -> String {
     chat.bottom_pane
         .set_composer_text(String::new(), Vec::new(), Vec::new());
@@ -603,6 +608,222 @@ async fn queued_unknown_slash_reports_error_when_dequeued() {
         "expected delayed slash error, got {rendered:?}"
     );
     assert!(chat.input_queue.queued_user_messages.is_empty());
+}
+
+#[tokio::test]
+async fn initial_goal_uses_queued_slash_dispatch_without_submitting_a_user_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    assert_eq!(
+        submit_initial_text(&mut chat, "/goal investigate the flaky test"),
+        InitialUserMessageSubmission::Stop
+    );
+
+    assert_eq!(
+        next_goal_draft(&mut rx, thread_id),
+        crate::goal_files::GoalDraft {
+            objective: "investigate the flaky test".to_string(),
+            ..Default::default()
+        }
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn initial_recognized_command_matches_queued_composer_dispatch() {
+    let (mut initial_chat, _initial_rx, mut initial_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    initial_chat.thread_id = Some(ThreadId::new());
+    let initial_result = submit_initial_text(&mut initial_chat, "/rename Better title");
+
+    let (mut queued_chat, _queued_rx, mut queued_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    queued_chat.thread_id = Some(ThreadId::new());
+    let queued_result = queued_chat.submit_queued_slash_prompt(QueuedUserMessage::new(
+        UserMessage::from("/rename Better title"),
+        QueuedInputAction::ParseSlash,
+    ));
+
+    assert_eq!(initial_result, InitialUserMessageSubmission::Continue);
+    assert_eq!(queued_result, QueueDrain::Continue);
+    assert_eq!(initial_op_rx.try_recv(), queued_op_rx.try_recv());
+    assert_matches!(initial_op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn initial_goal_respects_feature_gating() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ false);
+    chat.thread_id = Some(ThreadId::new());
+
+    assert_eq!(
+        submit_initial_text(&mut chat, "/goal disabled objective"),
+        InitialUserMessageSubmission::Continue
+    );
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    let rendered = events
+        .iter()
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!("initial_goal_feature_disabled", rendered);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AppEvent::SetThreadGoalDraft { .. }))
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn initial_unknown_slash_reports_the_existing_error() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    assert_eq!(
+        submit_initial_text(&mut chat, "/does-not-exist"),
+        InitialUserMessageSubmission::Continue
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!("initial_unknown_slash", rendered);
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn initial_nested_slash_name_remains_plain_model_input() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    assert_eq!(
+        submit_initial_text(&mut chat, "/project/command keep this literal"),
+        InitialUserMessageSubmission::Stop
+    );
+
+    let Op::UserTurn { items, .. } = next_submit_op(&mut op_rx) else {
+        unreachable!("next_submit_op only returns user turns");
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: "/project/command keep this literal".to_string(),
+            text_elements: Vec::new(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn initial_ordinary_message_keeps_the_complete_submission_payload() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let image_path = chat.config.codex_home.join("initial-image.png");
+    std::fs::write(&image_path, b"png bytes").expect("write local image");
+    let placeholder = "[Image #1]";
+    let text = format!("inspect {placeholder}");
+    let message = UserMessage {
+        text,
+        local_images: vec![LocalImageAttachment {
+            placeholder: placeholder.to_string(),
+            path: image_path.to_path_buf(),
+        }],
+        remote_image_urls: vec!["https://example.com/remote.png".to_string()],
+        text_elements: vec![TextElement::new(
+            (8..8 + placeholder.len()).into(),
+            Some(placeholder.to_string()),
+        )],
+        mention_bindings: Vec::new(),
+    };
+    chat.initial_user_message = Some(message.clone());
+
+    assert_eq!(
+        chat.submit_initial_user_message_if_pending(),
+        InitialUserMessageSubmission::Stop
+    );
+    let actual = next_submit_op(&mut op_rx);
+
+    chat.input_queue.user_turn_pending_start = false;
+    chat.submit_user_message(message);
+    let expected = next_submit_op(&mut op_rx);
+
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn initial_goal_marks_cli_images_as_unpositioned() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+    let image_path = chat.config.codex_home.join("goal-image.png");
+    std::fs::write(&image_path, b"png bytes").expect("write local image");
+    chat.initial_user_message = create_initial_user_message(
+        Some("/goal inspect this image".to_string()),
+        vec![image_path.to_path_buf()],
+        Vec::new(),
+    );
+
+    assert_eq!(
+        chat.submit_initial_user_message_if_pending(),
+        InitialUserMessageSubmission::Stop
+    );
+
+    let draft = next_goal_draft(&mut rx, thread_id);
+    assert_eq!(draft.objective, "inspect this image");
+    assert_eq!(
+        draft.local_images,
+        vec![LocalImageAttachment {
+            placeholder: String::new(),
+            path: image_path.to_path_buf(),
+        }]
+    );
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn initial_queue_drain_outcome_preserves_follow_up_ordering() {
+    let (mut continue_chat, _continue_rx, mut continue_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    continue_chat.queue_user_message(UserMessage::from("after unknown"));
+    continue_chat.thread_id = Some(ThreadId::new());
+    let continue_result = submit_initial_text(&mut continue_chat, "/does-not-exist");
+    assert_eq!(continue_result, InitialUserMessageSubmission::Continue);
+    continue_chat.maybe_send_next_queued_input();
+    assert_matches!(
+        next_submit_op(&mut continue_op_rx),
+        Op::UserTurn { items, .. }
+            if items == vec![UserInput::Text {
+                text: "after unknown".to_string(),
+                text_elements: Vec::new(),
+            }]
+    );
+
+    let (mut stop_chat, mut stop_rx, mut stop_op_rx) =
+        make_chatwidget_manual(/*model_override*/ None).await;
+    stop_chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+    stop_chat.queue_user_message(UserMessage::from("after goal"));
+    let thread_id = ThreadId::new();
+    stop_chat.thread_id = Some(thread_id);
+    let stop_result = submit_initial_text(&mut stop_chat, "/goal wait first");
+    assert_eq!(stop_result, InitialUserMessageSubmission::Stop);
+    assert_eq!(
+        next_goal_draft(&mut stop_rx, thread_id).objective,
+        "wait first"
+    );
+    assert_eq!(stop_chat.queued_user_message_texts(), vec!["after goal"]);
+    assert_no_submit_op(&mut stop_op_rx);
 }
 
 #[tokio::test]

@@ -136,7 +136,9 @@ impl ChatWidget {
         if self.connectors_enabled() {
             self.prefetch_connectors();
         }
-        self.submit_initial_user_message_if_pending();
+        if self.submit_initial_user_message_if_pending() == InitialUserMessageSubmission::Continue {
+            self.maybe_send_next_queued_input();
+        }
         if display == SessionConfiguredDisplay::Normal
             && let Some(forked_from_id) = forked_from_id
         {

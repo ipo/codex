@@ -61,6 +61,13 @@ pub(super) struct QueuedUserMessage {
     pub(super) user_message: UserMessage,
     pub(super) action: QueuedInputAction,
     pub(super) pending_pastes: Vec<(String, String)>,
+    pub(super) source: QueuedUserMessageSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum QueuedUserMessageSource {
+    Composer,
+    Initial,
 }
 
 impl QueuedUserMessage {
@@ -69,6 +76,7 @@ impl QueuedUserMessage {
             user_message,
             action,
             pending_pastes: Vec::new(),
+            source: QueuedUserMessageSource::Composer,
         }
     }
 
@@ -93,6 +101,13 @@ impl Deref for QueuedUserMessage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum QueueDrain {
+    Continue,
+    Stop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InitialUserMessageSubmission {
+    NoMessage,
     Continue,
     Stop,
 }
