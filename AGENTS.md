@@ -60,12 +60,32 @@ In the codex-rs folder where the rust code lives:
   - Avoid adding new standalone methods to `codex-rs/tui/src/chatwidget.rs` unless the change is
     trivial; prefer new modules/files and keep `chatwidget.rs` focused on orchestration.
 - When running Rust commands (e.g. `just fix` or `just test`) be patient with the command and never try to kill them using the PID. Rust lock can make the execution slow, this is expected.
+- After every build, test, lint, or other command that creates compilation artifacts, check the
+  resulting disk usage and promptly remove artifacts that are no longer immediately useful.
+  - Give temporary worktrees and one-off validation runs their own disposable target directories;
+    remove those directories as soon as that validation stage is complete.
+  - Keep only cached artifacts needed by the current worktree's next immediate command. Do not
+    retain duplicate build caches "just in case."
+  - At the end of the task, remove remaining temporary build artifacts. Never remove user-owned or
+    broadly shared caches unless the user has explicitly authorized it.
+
+## Locally installed Codex builds
+
+- Build Codex binaries intended for local installation or daily use with the `release` profile.
+  `scripts/build_codex_package.py` defaults to `dev-small`, so always pass
+  `--cargo-profile release`; never install a `dev` or `dev-small` build.
+- Keep debug symbols in locally installed `codex` and `codex-code-mode-host` binaries; do not strip
+  them.
+- On Linux, finalize `bwrap` first, hash the exact bytes that will be packaged, and build Codex with
+  that digest in `CODEX_BWRAP_SHA256`.
 
 Run `just fmt` (in the `codex-rs` directory) automatically after you have finished making code changes anywhere in this repository; do not ask for approval to run it. Additionally, run the tests:
 
 1. Do not run `cargo test` directly. Use `just test` so test execution follows the repo defaults.
 2. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `just test -p codex-tui`.
-3. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `just test`. Avoid `--all-features` for routine local runs because it expands the build matrix and can significantly increase `target/` disk usage; use it only when you specifically need full feature coverage. project-specific or individual tests can be run without asking the user, but do ask the user before running the complete test suite.
+3. Do not run the complete workspace test suite locally. Leave full-suite validation to CI; project-specific or individual tests can be run without asking the user.
+
+Do not run Bazel builds for local validation. When a local executable is needed, use the narrowest Cargo or `just` build target that produces the required binary. Leave full workspace builds and broad validation builds to CI.
 
 Before finalizing a large change to `codex-rs`, run `just fix -p <project>` (in `codex-rs` directory) to fix any linter issues in the code. Prefer scoping with `-p` to avoid slow workspace‑wide Clippy builds; only run `just fix` without `-p` if you changed shared crates. Do not re-run tests after running `fix` or `fmt`.
 
