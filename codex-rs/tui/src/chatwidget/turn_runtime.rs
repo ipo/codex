@@ -5,16 +5,6 @@
 
 use super::*;
 
-const LEGACY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
-    "Invalid prompt: we've limited access to this content for safety reasons.";
-const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
-    "This content was flagged for possible biological risk.";
-
-fn is_safety_access_block_message(message: &str) -> bool {
-    message.starts_with(LEGACY_SAFETY_ACCESS_BLOCK_PREFIX)
-        || message.starts_with(BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX)
-}
-
 impl ChatWidget {
     /// Synchronize the bottom-pane "task running" indicator with the current lifecycles.
     ///
@@ -368,16 +358,6 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    pub(super) fn on_cyber_policy_error(&mut self) {
-        self.input_queue.submit_pending_steers_after_interrupt = false;
-        self.finalize_turn();
-        self.add_to_history(history_cell::new_cyber_policy_error_event());
-        self.request_redraw();
-
-        // After an error ends the turn, try sending the next queued input.
-        self.maybe_send_next_queued_input();
-    }
-
     pub(super) fn on_rate_limit_error(&mut self, error_kind: RateLimitErrorKind, message: String) {
         let usage_limit_error = matches!(error_kind, RateLimitErrorKind::UsageLimit);
         let rate_limit_reached_type = self.codex_rate_limit_reached_type.map(|kind| {
@@ -427,30 +407,18 @@ impl ChatWidget {
         &mut self,
         message: String,
         codex_error_info: Option<AppServerCodexErrorInfo>,
+        source: SafetyStopSource,
     ) {
         if codex_error_info
             .as_ref()
             .is_some_and(|info| self.handle_app_server_steer_rejected_error(info))
         {
-        } else if codex_error_info
-            .as_ref()
-            .is_some_and(is_app_server_cyber_policy_error)
-        {
-            self.on_cyber_policy_error();
-        } else if is_safety_access_block_message(&message)
-            || serde_json::from_str::<serde_json::Value>(&message).is_ok_and(|response| {
-                response["error"]["code"].as_str() == Some("bio_policy")
-                    || response["error"]["message"]
-                        .as_str()
-                        .is_some_and(is_safety_access_block_message)
-            })
-        {
-            self.input_queue.submit_pending_steers_after_interrupt = false;
-            self.finalize_turn();
-            self.add_to_history(history_cell::new_safety_access_block_event());
-            self.request_redraw();
-            self.maybe_send_next_queued_input();
-        } else if let Some(info) = codex_error_info
+            return;
+        }
+        if self.try_handle_safety_stop(&message, codex_error_info.as_ref(), source) {
+            return;
+        }
+        if let Some(info) = codex_error_info
             .as_ref()
             .and_then(app_server_rate_limit_error_kind)
         {
