@@ -137,6 +137,12 @@ impl ChatWidget {
                     self.handle_non_retry_error(
                         notification.error.message,
                         notification.error.codex_error_info,
+                        match replay_kind {
+                            None => SafetyStopSource::Live,
+                            Some(
+                                ReplayKind::ResumeInitialMessages | ReplayKind::ThreadSnapshot,
+                            ) => SafetyStopSource::Replay,
+                        },
                     );
                 }
             }
@@ -269,7 +275,16 @@ impl ChatWidget {
                     {
                         self.last_non_retry_error = None;
                     } else {
-                        self.handle_non_retry_error(error.message, error.codex_error_info);
+                        self.handle_non_retry_error(
+                            error.message,
+                            error.codex_error_info,
+                            match replay_kind {
+                                None => SafetyStopSource::Live,
+                                Some(
+                                    ReplayKind::ResumeInitialMessages | ReplayKind::ThreadSnapshot,
+                                ) => SafetyStopSource::Replay,
+                            },
+                        );
                     }
                 } else {
                     self.last_non_retry_error = None;

@@ -1312,6 +1312,7 @@ async fn live_app_server_cyber_policy_error_renders_dedicated_notice() {
     assert!(rendered.contains("extra caution with cybersecurity requests"));
     assert!(!rendered.contains("server fallback message"));
     assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(chat.pending_notification, Some(Notification::SafetyAlert));
 }
 
 #[tokio::test]
@@ -1337,13 +1338,18 @@ async fn app_server_safety_access_errors_render_dedicated_notice() {
     let mut rendered_cases = Vec::new();
     for (case, message) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        chat.handle_non_retry_error(message, /*codex_error_info*/ None);
+        chat.handle_non_retry_error(
+            message,
+            /*codex_error_info*/ None,
+            SafetyStopSource::Live,
+        );
 
         let cells = drain_insert_history(&mut rx);
         assert_eq!(cells.len(), 1);
         let rendered = lines_to_single_string(&cells[0]);
         assert!(rendered.contains("This content can't be shown"));
         assert!(rendered.contains("biological research"));
+        assert_eq!(chat.pending_notification, Some(Notification::SafetyAlert));
         rendered_cases.push((case, rendered));
     }
 
@@ -1377,6 +1383,7 @@ async fn live_app_server_model_verification_renders_warning() {
     assert!(rendered.contains("extra safety checks are on"));
     assert!(rendered.contains("Trusted Access for Cyber"));
     assert!(rendered.contains("https://chatgpt.com/cyber"));
+    assert_eq!(chat.pending_notification, None);
 }
 
 #[tokio::test]
