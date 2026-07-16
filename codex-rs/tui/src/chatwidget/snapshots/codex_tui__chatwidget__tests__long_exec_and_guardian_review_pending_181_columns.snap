@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests/highlight_guardrail_tests.rs
+expression: normalized_backend_snapshot(pending_terminal.backend())
+---
+"                                                                                                                                                                                     "
+"• Running tmux send-keys -t remote-admin-mail 'printf %s ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/                                                            "
+"  │ ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/                                                 "
+"  │ ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/                                                 "
+"  │ … +25 lines                                                                                                                                                                      "
+"                                                                                                                                                                                     "
+"• Reviewing approval request (0s • esc to interrupt)                                                                                                                                 "
+"  └ tmux send-keys -t remote-admin-mail 'printf %s ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/… "
+"                                                                                                                                                                                     "
+"                                                                                                                                                                                     "
+"› Ask Codex to do anything                                                                                                                                                           "
+"                                                                                                                                                                                     "
+"  gpt-5.6-sol default · /tmp/project                                                                                                                                                 "
