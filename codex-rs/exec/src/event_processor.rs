@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadGoal;
 use codex_core::config::Config;
 use codex_protocol::protocol::SessionConfiguredEvent;
 
@@ -24,6 +25,12 @@ pub(crate) trait EventProcessor {
 
     /// Handle a local exec warning that is not represented as an app-server notification.
     fn process_warning(&mut self, message: String) -> CodexStatus;
+
+    /// Handle a local fatal error that is not represented as an app-server notification.
+    fn process_error(&mut self, message: String) -> CodexStatus;
+
+    /// Report an authoritative persisted goal snapshot.
+    fn process_goal_update(&mut self, goal: &ThreadGoal) -> CodexStatus;
 
     fn print_final_output(&mut self) {}
 }

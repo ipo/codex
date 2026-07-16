@@ -5,6 +5,8 @@ use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ThreadGoal;
+use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
@@ -360,7 +362,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 CodexStatus::Running
             }
-            ServerNotification::TurnStarted(_) => CodexStatus::Running,
+            ServerNotification::TurnStarted(_) => {
+                self.final_message = None;
+                self.final_message_rendered = false;
+                self.emit_final_message_on_shutdown = false;
+                CodexStatus::Running
+            }
             _ => CodexStatus::Running,
         }
     }
@@ -369,6 +376,29 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         eprintln!(
             "{} {message}",
             "warning:".style(self.yellow).style(self.bold)
+        );
+        CodexStatus::Running
+    }
+
+    fn process_error(&mut self, message: String) -> CodexStatus {
+        eprintln!("{} {message}", "ERROR:".style(self.red).style(self.bold));
+        CodexStatus::Running
+    }
+
+    fn process_goal_update(&mut self, goal: &ThreadGoal) -> CodexStatus {
+        let status = match goal.status {
+            ThreadGoalStatus::Active => "active",
+            ThreadGoalStatus::Paused => "paused",
+            ThreadGoalStatus::Blocked => "blocked",
+            ThreadGoalStatus::UsageLimited => "usage limited",
+            ThreadGoalStatus::BudgetLimited => "budget limited",
+            ThreadGoalStatus::Complete => "complete",
+        };
+        eprintln!(
+            "{} {status} ({} tokens, {}s)",
+            "goal:".style(self.bold),
+            format_with_separators(goal.tokens_used),
+            format_with_separators(goal.time_used_seconds),
         );
         CodexStatus::Running
     }
