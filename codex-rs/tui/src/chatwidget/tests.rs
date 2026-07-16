@@ -238,6 +238,7 @@ mod composer_submission;
 mod config_errors;
 mod exec_flow;
 mod goal_menu;
+mod goal_provenance;
 mod goal_validation;
 mod guardian;
 pub(crate) mod helpers;

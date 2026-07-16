@@ -1,0 +1,10 @@
+---
+source: tui/src/bottom_pane/build_provenance_tests.rs
+expression: rendered
+---
+(
+    30,
+    Some(
+        "Pursuing goal · 功能/ro…@9.8.7",
+    ),
+)

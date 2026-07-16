@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/goal_provenance.rs
+expression: "states.join(\"\\n---\\n\")"
+---
+status (80 columns): "  gpt-5.4               Pursuing goal (40K / 50K) · feature/robustness@0.144.1  "
+---
+status + IDE (120 columns): "  gpt-5.4            Pursuing goal (40K / 50K) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z · IDE context  "
+---
+status + Vim (120 columns): "  gpt-5.4            Vim: Normal | Pursuing goal (40K / 50K) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
+---
+all constrained (50 columns): "  gpt-5… Vim: Normal | Pursuing goal (40K / 50K)  "

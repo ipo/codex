@@ -33,7 +33,8 @@
 //!    - If "(shift+tab to cycle)" cannot fit, also hide the right-side
 //!      context to avoid too many state transitions in quick succession.
 //!    - Finally, try a mode-only line (with and without context), and fall
-//!      back to no left-side footer if nothing can fit.
+//!      back through timestamp-free, truncated-branch, version-only, and bare
+//!      Plan-mode identities before hiding the left-side footer.
 //! 3. When collapse chooses a specific line, callers render it via
 //!    `render_footer_line`. Otherwise, callers render the straightforward
 //!    mode-to-text mapping via `render_footer_from_props`.
@@ -41,6 +42,9 @@
 //! In short: `single_line_footer_layout` chooses *what* best fits, and the two
 //! render helpers choose whether to draw the chosen line or the default
 //! `FooterProps` mapping.
+use crate::bottom_pane::goal_status_indicator;
+use crate::bottom_pane::goal_status_indicator::GoalStatusIndicator;
+use crate::bottom_pane::plan_mode_indicator;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::render::line_utils::prefix_lines;
@@ -95,17 +99,6 @@ pub(crate) enum CollaborationModeIndicator {
     Execute,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum GoalStatusIndicator {
-    Active { usage: Option<String> },
-    Paused,
-    Blocked,
-    UsageLimited,
-    BudgetLimited { usage: Option<String> },
-    Complete { usage: Option<String> },
-}
-
-const MODE_CYCLE_HINT: &str = "shift+tab to cycle";
 const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,27 +132,20 @@ impl FooterKeyHints {
 }
 
 impl CollaborationModeIndicator {
-    fn label(self, show_cycle_hint: bool) -> String {
+    fn styled_line(self, show_cycle_hint: bool) -> Line<'static> {
         let suffix = if show_cycle_hint {
-            format!(" ({MODE_CYCLE_HINT})")
+            format!(" ({})", plan_mode_indicator::MODE_CYCLE_HINT)
         } else {
             String::new()
         };
         match self {
-            CollaborationModeIndicator::Plan => format!("Plan mode{suffix}"),
+            CollaborationModeIndicator::Plan => plan_mode_indicator::line(show_cycle_hint),
             CollaborationModeIndicator::PairProgramming => {
-                format!("Pair Programming mode{suffix}")
+                Line::from(vec![format!("Pair Programming mode{suffix}").cyan()])
             }
-            CollaborationModeIndicator::Execute => format!("Execute mode{suffix}"),
-        }
-    }
-
-    fn styled_span(self, show_cycle_hint: bool) -> Span<'static> {
-        let label = self.label(show_cycle_hint);
-        match self {
-            CollaborationModeIndicator::Plan => Span::from(label).magenta(),
-            CollaborationModeIndicator::PairProgramming => Span::from(label).cyan(),
-            CollaborationModeIndicator::Execute => Span::from(label).dim(),
+            CollaborationModeIndicator::Execute => {
+                Line::from(vec![format!("Execute mode{suffix}").dim()])
+            }
         }
     }
 }
@@ -345,7 +331,12 @@ fn left_side_line(
         if !matches!(state.hint, SummaryHintKind::None) {
             line.push_span(" · ".dim());
         }
-        line.push_span(collaboration_mode_indicator.styled_span(state.show_cycle_hint));
+        for span in collaboration_mode_indicator
+            .styled_line(state.show_cycle_hint)
+            .spans
+        {
+            line.push_span(span);
+        }
     }
 
     line
@@ -525,6 +516,15 @@ pub(crate) fn single_line_footer_layout(
                 false, // show_context
             );
         }
+
+        let available_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+        if let Some(line) = mode_indicator_line_fitting_width(
+            collaboration_mode_indicator,
+            /*show_cycle_hint*/ false,
+            available_width,
+        ) {
+            return (SummaryLeft::Custom(line), false);
+        }
     }
 
     (SummaryLeft::None, true)
@@ -534,41 +534,23 @@ pub(crate) fn mode_indicator_line(
     indicator: Option<CollaborationModeIndicator>,
     show_cycle_hint: bool,
 ) -> Option<Line<'static>> {
-    indicator.map(|indicator| Line::from(vec![indicator.styled_span(show_cycle_hint)]))
+    indicator.map(|indicator| indicator.styled_line(show_cycle_hint))
 }
 
-pub(crate) fn goal_status_indicator_line(
-    indicator: Option<&GoalStatusIndicator>,
+fn mode_indicator_line_fitting_width(
+    indicator: CollaborationModeIndicator,
+    show_cycle_hint: bool,
+    max_width: usize,
 ) -> Option<Line<'static>> {
-    let indicator = indicator?;
-    let label = match indicator {
-        GoalStatusIndicator::Active { usage } => {
-            if let Some(usage) = usage {
-                format!("Pursuing goal ({usage})")
-            } else {
-                "Pursuing goal".to_string()
-            }
+    match indicator {
+        CollaborationModeIndicator::Plan => {
+            plan_mode_indicator::line_fitting_width(show_cycle_hint, max_width)
         }
-        GoalStatusIndicator::Paused => "Goal paused (/goal resume)".to_string(),
-        GoalStatusIndicator::Blocked => "Goal blocked (/goal resume)".to_string(),
-        GoalStatusIndicator::UsageLimited => "Goal hit usage limits (/goal resume)".to_string(),
-        GoalStatusIndicator::BudgetLimited { usage } => {
-            if let Some(usage) = usage {
-                format!("Goal unmet ({usage})")
-            } else {
-                "Goal abandoned".to_string()
-            }
+        CollaborationModeIndicator::PairProgramming | CollaborationModeIndicator::Execute => {
+            let line = indicator.styled_line(show_cycle_hint);
+            (line.width() <= max_width).then_some(line)
         }
-        GoalStatusIndicator::Complete { usage } => {
-            if let Some(usage) = usage {
-                format!("Goal achieved ({usage})")
-            } else {
-                "Goal achieved".to_string()
-            }
-        }
-    };
-
-    Some(Line::from(vec![Span::from(label).magenta()]))
+    }
 }
 
 pub(crate) fn status_line_right_indicator_line(
@@ -578,7 +560,76 @@ pub(crate) fn status_line_right_indicator_line(
     show_cycle_hint: bool,
 ) -> Option<Line<'static>> {
     let primary_indicator = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint)
-        .or_else(|| goal_status_indicator_line(goal_status_indicator));
+        .or_else(|| goal_status_indicator::line(goal_status_indicator));
+    status_line_right_indicator_line_from_primary(primary_indicator, ide_context_active)
+}
+
+pub(crate) fn status_line_right_indicator_line_fitting_width(
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    goal_status_indicator: Option<&GoalStatusIndicator>,
+    ide_context_active: bool,
+    show_cycle_hint: bool,
+    max_width: usize,
+) -> Option<Line<'static>> {
+    let full = status_line_right_indicator_line(
+        collaboration_mode_indicator,
+        goal_status_indicator,
+        ide_context_active,
+        show_cycle_hint,
+    );
+    if full.as_ref().is_some_and(|line| line.width() <= max_width) {
+        return full;
+    }
+
+    let without_cycle_hint = status_line_right_indicator_line(
+        collaboration_mode_indicator,
+        goal_status_indicator,
+        ide_context_active,
+        /*show_cycle_hint*/ false,
+    );
+    if without_cycle_hint
+        .as_ref()
+        .is_some_and(|line| line.width() <= max_width)
+    {
+        return without_cycle_hint;
+    }
+
+    let primary_has_provenance = collaboration_mode_indicator
+        == Some(CollaborationModeIndicator::Plan)
+        || collaboration_mode_indicator.is_none() && goal_status_indicator.is_some();
+    if !primary_has_provenance {
+        return without_cycle_hint;
+    }
+
+    let full_identity_without_context = status_line_right_indicator_line(
+        collaboration_mode_indicator,
+        goal_status_indicator,
+        /*ide_context_active*/ false,
+        /*show_cycle_hint*/ false,
+    );
+    if full_identity_without_context
+        .as_ref()
+        .is_some_and(|line| line.width() <= max_width)
+    {
+        return full_identity_without_context;
+    }
+
+    let primary_indicator = match collaboration_mode_indicator {
+        Some(indicator) => {
+            mode_indicator_line_fitting_width(indicator, /*show_cycle_hint*/ false, max_width)
+        }
+        None => goal_status_indicator::line_fitting_width(goal_status_indicator, max_width),
+    };
+    status_line_right_indicator_line_from_primary(
+        primary_indicator,
+        /*ide_context_active*/ false,
+    )
+}
+
+fn status_line_right_indicator_line_from_primary(
+    primary_indicator: Option<Line<'static>>,
+    ide_context_active: bool,
+) -> Option<Line<'static>> {
     let ide_context_indicator = ide_context_active.then(|| Line::from(vec!["IDE context".cyan()]));
     let mut line: Option<Line<'static>> = None;
 
@@ -1379,17 +1430,17 @@ mod tests {
                         ide_context_active,
                         show_cycle_hint,
                     );
-                    let compact = status_line_right_indicator_line(
-                        collaboration_mode_indicator,
-                        /*goal_status_indicator*/ None,
-                        ide_context_active,
-                        /*show_cycle_hint*/ false,
-                    );
                     let full_width = full.as_ref().map(|line| line.width() as u16).unwrap_or(0);
                     if can_show_left_with_context(area, left_width, full_width) {
                         full
                     } else {
-                        compact
+                        status_line_right_indicator_line_fitting_width(
+                            collaboration_mode_indicator,
+                            /*goal_status_indicator*/ None,
+                            ide_context_active,
+                            /*show_cycle_hint*/ false,
+                            area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize,
+                        )
                     }
                 } else {
                     Some(context_line.clone())
@@ -1788,6 +1839,27 @@ mod tests {
             Some(CollaborationModeIndicator::Plan),
         );
 
+        snapshot_footer_with_mode_indicator(
+            "footer_mode_indicator_truncates_build_branch",
+            /*width*/ 34,
+            &props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
+        snapshot_footer_with_mode_indicator(
+            "footer_mode_indicator_version_only",
+            /*width*/ 21,
+            &props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
+        snapshot_footer_with_mode_indicator(
+            "footer_mode_indicator_plan_only",
+            /*width*/ 11,
+            &props,
+            Some(CollaborationModeIndicator::Plan),
+        );
+
         let props = FooterProps {
             mode: FooterMode::ComposerEmpty,
             esc_backtrack_hint: false,
@@ -1964,6 +2036,14 @@ mod tests {
             context_window_line(Some(50), /*used_tokens*/ None),
         );
 
+        snapshot_footer_with_mode_indicator_and_context(
+            "footer_status_line_compacts_build_identity",
+            /*width*/ 34,
+            &props,
+            Some(CollaborationModeIndicator::Plan),
+            context_window_line(Some(50), /*used_tokens*/ None),
+        );
+
         let props = FooterProps {
             mode: FooterMode::ComposerEmpty,
             esc_backtrack_hint: false,
@@ -2031,12 +2111,69 @@ mod tests {
             "mode indicator should remain visible"
         );
         assert!(
+            collapsed.contains("feature/robustness@0.144.1"),
+            "full build identity should remain visible"
+        );
+        assert!(
+            collapsed.contains("built 2026-07-12T13:31:30Z"),
+            "build timestamp should remain visible"
+        );
+        assert!(
             !collapsed.contains("shift+tab to cycle"),
             "compact mode indicator should be used when space is tight"
         );
         assert!(
             screen.contains('…'),
             "status line should be truncated with ellipsis to keep mode indicator"
+        );
+    }
+
+    #[test]
+    fn build_identity_is_plan_only() {
+        let labels = [
+            CollaborationModeIndicator::Plan,
+            CollaborationModeIndicator::PairProgramming,
+            CollaborationModeIndicator::Execute,
+        ]
+        .map(|indicator| {
+            indicator
+                .styled_line(/*show_cycle_hint*/ false)
+                .spans
+                .into_iter()
+                .fold(String::new(), |mut label, span| {
+                    label.push_str(span.content.as_ref());
+                    label
+                })
+        });
+
+        assert_eq!(
+            labels,
+            [
+                "Plan mode · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z".to_string(),
+                "Pair Programming mode".to_string(),
+                "Execute mode".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn plan_indicator_takes_precedence_over_goal_indicator() {
+        let goal = GoalStatusIndicator::Blocked;
+
+        assert_eq!(
+            status_line_right_indicator_line(
+                Some(CollaborationModeIndicator::Plan),
+                Some(&goal),
+                /*ide_context_active*/ false,
+                /*show_cycle_hint*/ false,
+            ),
+            Some(Line::from(vec![
+                "Plan mode".magenta(),
+                " · ".dim(),
+                "feature/robustness@0.144.1".dim(),
+                " · ".dim(),
+                "built 2026-07-12T13:31:30Z".dim(),
+            ]))
         );
     }
 

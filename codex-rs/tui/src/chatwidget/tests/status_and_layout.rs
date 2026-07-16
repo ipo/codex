@@ -3127,7 +3127,10 @@ fn goal_status_indicator_line_formats_goal_text() {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>();
-        assert_eq!(expected, actual);
+        assert_eq!(
+            format!("{expected} · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z"),
+            actual
+        );
     }
 }
 

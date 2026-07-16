@@ -1,0 +1,21 @@
+---
+source: tui/src/chatwidget/tests/goal_provenance.rs
+expression: "states.join(\"\\n---\\n\")"
+---
+active budget: "  gpt-5.4                          Pursuing goal (40K / 50K) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
+---
+active elapsed: "  gpt-5.4                                Pursuing goal (30m) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
+---
+paused: "  gpt-5.4                         Goal paused (/goal resume) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
+---
+blocked: "  gpt-5.4                        Goal blocked (/goal resume) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
+---
+usage limited: "  gpt-5.4               Goal hit usage limits (/goal resume) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
+---
+budget exceeded: "  gpt-5.4                      Goal unmet (51K / 50K tokens) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
+---
+budget absent: "  gpt-5.4                                     Goal abandoned · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
+---
+complete budget: "  gpt-5.4                         Goal achieved (40K tokens) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
+---
+complete elapsed: "  gpt-5.4                            Goal achieved (10h 12m) · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
