@@ -801,8 +801,8 @@ pub(crate) enum AppEvent {
         effort: ReasoningEffort,
     },
 
-    /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
-    OpenPlanReasoningScopePrompt {
+    /// Open the scope prompt for applying the selected model and effort.
+    OpenModelSelectionScopePrompt {
         model: String,
         effort: Option<ReasoningEffort>,
     },

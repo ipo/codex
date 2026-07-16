@@ -194,9 +194,11 @@ const MEMORIES_ENABLE_TITLE: &str = "Enable memories?";
 const MEMORIES_ENABLE_YES: &str = "Yes, enable";
 const MEMORIES_ENABLE_NO: &str = "Not now";
 const MEMORIES_ENABLE_NOTICE: &str = "Memories will be enabled in the next session.";
-const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
-const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
-const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
+const MODEL_SELECTION_SCOPE_TITLE: &str = "Apply model change";
+const MODEL_SELECTION_SCOPE_GLOBAL: &str = "Apply to global default";
+const MODEL_SELECTION_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
+const MODEL_SELECTION_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
+const MODEL_SELECTION_SCOPE_NO_DEFAULTS: &str = "Do not change defaults";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const PET_SELECTION_LOADING_VIEW_ID: &str = "pet-selection-loading";
 const AMBIENT_PET_WRAP_GAP_COLUMNS: u16 = 2;
@@ -520,6 +522,13 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PersistedModelSelectionDefaults {
+    model: String,
+    reasoning_effort: Option<ReasoningEffortConfig>,
+    plan_mode_reasoning_effort: Option<ReasoningEffortConfig>,
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -545,6 +554,8 @@ pub(crate) struct ChatWidget {
     ///
     /// Masks are applied on top of this base mode to derive the effective mode.
     current_collaboration_mode: CollaborationMode,
+    /// Last successfully persisted defaults, kept separate from temporary runtime selections.
+    persisted_model_selection_defaults: PersistedModelSelectionDefaults,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
     has_chatgpt_account: bool,

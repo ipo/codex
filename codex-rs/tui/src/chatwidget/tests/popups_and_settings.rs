@@ -3083,6 +3083,42 @@ async fn memories_reset_confirmation_sends_event_on_confirm() {
     assert_matches!(rx.try_recv(), Ok(AppEvent::ResetMemories));
 }
 
+fn open_model_selection_scope_from_next_event(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) {
+    match rx.try_recv().expect("expected model selection scope event") {
+        AppEvent::OpenModelSelectionScopePrompt { model, effort } => {
+            chat.open_model_selection_scope_prompt(model, effort);
+        }
+        event => panic!("expected model selection scope event, got {event:?}"),
+    }
+}
+
+fn model_picker_preset(slug: &str, show_in_picker: bool) -> ModelPreset {
+    ModelPreset {
+        id: slug.to_string(),
+        model: slug.to_string(),
+        display_name: slug.to_string(),
+        description: format!("{slug} description"),
+        default_reasoning_effort: ReasoningEffortConfig::Medium,
+        supported_reasoning_efforts: vec![ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Medium,
+            description: "medium".to_string(),
+        }],
+        supports_personality: false,
+        additional_speed_tiers: Vec::new(),
+        service_tiers: Vec::new(),
+        default_service_tier: None,
+        is_default: false,
+        upgrade: None,
+        show_in_picker,
+        availability_nux: None,
+        supported_in_api: true,
+        input_modalities: default_input_modalities(),
+    }
+}
+
 #[tokio::test]
 async fn model_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
@@ -3091,6 +3127,63 @@ async fn model_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn changed_quick_model_opens_scope_prompt_before_updating_or_persisting() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.open_model_popup_with_presets(vec![model_picker_preset("codex-auto-fast", true)]);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_matches!(
+        events.as_slice(),
+        [AppEvent::OpenModelSelectionScopePrompt { .. }]
+    );
+}
+
+#[tokio::test]
+async fn model_selection_scope_popup_in_default_mode_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.open_model_selection_scope_prompt(
+        "gpt-5.2".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("model_selection_scope_default_mode", popup);
+    assert!(popup.contains("Apply to global default"));
+    assert!(popup.contains("Apply to global default and Plan mode override"));
+    assert!(popup.contains("Do not change defaults"));
+    assert!(chat.pending_notification.is_none());
+}
+
+#[tokio::test]
+async fn default_mode_scope_persists_only_global_defaults() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.open_model_selection_scope_prompt(
+        "gpt-5.2".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_matches!(
+        events.as_slice(),
+        [
+            AppEvent::UpdateModel(model),
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::High)),
+            AppEvent::PersistModelSelection {
+                model: persisted_model,
+                effort: Some(ReasoningEffortConfig::High),
+            },
+        ] if model == "gpt-5.2" && persisted_model == "gpt-5.2"
+    );
 }
 
 #[tokio::test]
@@ -3116,32 +3209,10 @@ async fn skills_menu_default_mentions_shortcut_snapshot() {
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
     chat.thread_id = Some(ThreadId::new());
-    let preset = |slug: &str, show_in_picker: bool| ModelPreset {
-        id: slug.to_string(),
-        model: slug.to_string(),
-        display_name: slug.to_string(),
-        description: format!("{slug} description"),
-        default_reasoning_effort: ReasoningEffortConfig::Medium,
-        supported_reasoning_efforts: vec![ReasoningEffortPreset {
-            effort: ReasoningEffortConfig::Medium,
-            description: "medium".to_string(),
-        }],
-        supports_personality: false,
-        additional_speed_tiers: Vec::new(),
-        service_tiers: Vec::new(),
-        default_service_tier: None,
-        is_default: false,
-        upgrade: None,
-        show_in_picker,
-        multi_agent_version: None,
-        availability_nux: None,
-        supported_in_api: true,
-        input_modalities: default_input_modalities(),
-    };
 
     chat.open_model_popup_with_presets(vec![
-        preset("test-visible-model", true),
-        preset("test-hidden-model", false),
+        model_picker_preset("test-visible-model", true),
+        model_picker_preset("test-hidden-model", false),
     ]);
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_picker_filters_hidden_models", popup);
@@ -3254,6 +3325,8 @@ async fn model_reasoning_selection_popup_applies_custom_effort() {
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    open_model_selection_scope_from_next_event(&mut chat, &mut rx);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let selected_effort_events = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|event| match event {
@@ -3302,15 +3375,14 @@ async fn select_ultra_with_multi_agent_thread_limit(max_threads: usize) -> (bool
     });
     chat.open_advanced_reasoning_popup(advanced_preset.expect("advanced reasoning popup"));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    open_model_selection_scope_from_next_event(&mut chat, &mut rx);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let mut selected_ultra = false;
     let mut warnings = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event {
-            AppEvent::ApplyAdvancedReasoning {
-                effort: ReasoningEffortConfig::Ultra,
-                ..
-            } => {
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Ultra)) => {
                 selected_ultra = true;
             }
             AppEvent::InsertHistoryCell(cell) => {
@@ -3603,8 +3675,13 @@ async fn reasoning_popup_shows_extra_high_with_space() {
 }
 
 #[tokio::test]
-async fn single_reasoning_option_skips_selection() {
+async fn single_reasoning_option_skips_reasoning_popup_and_opens_scope_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    let _ = drain_insert_history(&mut rx);
 
     let single_effort = vec![ReasoningEffortPreset {
         effort: ReasoningEffortConfig::High,
@@ -3637,16 +3714,12 @@ async fn single_reasoning_option_skips_selection() {
         "expected reasoning selection popup to be skipped"
     );
 
-    let mut events = Vec::new();
-    while let Ok(ev) = rx.try_recv() {
-        events.push(ev);
-    }
-
-    assert!(
-        events
-            .iter()
-            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
-        "expected reasoning effort to be applied automatically; events: {events:?}"
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenModelSelectionScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::High),
+        }) if model == "model-with-single-reasoning"
     );
 }
 
