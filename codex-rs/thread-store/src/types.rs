@@ -15,6 +15,7 @@ use codex_protocol::protocol::GitInfo;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
@@ -79,6 +80,9 @@ pub struct CreateThreadParams {
     pub parent_thread_id: Option<ThreadId>,
     /// Runtime source for the thread.
     pub source: SessionSource,
+    /// Sticky routing choice for backend inference requests made by this thread.
+    #[serde(default)]
+    pub subagent_backend_route: SubagentBackendRoute,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
     /// Effective originator used for this thread's Responses requests and analytics events.

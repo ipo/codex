@@ -212,6 +212,7 @@ impl ExternalAgentSessionImporter {
             forked_from_id: None,
             parent_thread_id: None,
             source: source.clone(),
+            subagent_backend_route: Default::default(),
             thread_source: None,
             originator: codex_login::default_client::originator().value,
             base_instructions: BaseInstructions {

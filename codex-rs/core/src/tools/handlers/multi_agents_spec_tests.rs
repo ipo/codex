@@ -86,6 +86,12 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         Some(true)
     );
     assert!(properties.contains_key("fork_turns"));
+    assert_eq!(
+        properties["fork_turns"].description.as_deref(),
+        Some(
+            "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns. `all` cannot be combined with agent_type, model, or reasoning_effort; use `none` or a positive integer to select those overrides."
+        )
+    );
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
@@ -109,8 +115,22 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         Some(&vec!["task_name".to_string(), "message".to_string()])
     );
     assert_eq!(
-        output_schema.expect("spawn_agent output schema")["required"],
-        json!(["task_name", "nickname"])
+        output_schema,
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "task_name": {
+                    "type": "string",
+                    "description": "Canonical task name for the spawned agent."
+                },
+                "nickname": {
+                    "type": ["string", "null"],
+                    "description": "User-facing nickname for the spawned agent when available."
+                }
+            },
+            "required": ["task_name", "nickname"],
+            "additionalProperties": false
+        }))
     );
 }
 
@@ -127,8 +147,11 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         panic!("spawn_agent v1 should be a namespace tool");
     };
     assert_eq!(namespace.name, MULTI_AGENT_V1_NAMESPACE);
-    let Some(ResponsesApiNamespaceTool::Function(ResponsesApiTool { parameters, .. })) =
-        namespace.tools.first()
+    let Some(ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    })) = namespace.tools.first()
     else {
         panic!("spawn_agent should be a namespace function tool");
     };
@@ -142,6 +165,12 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         .expect("spawn_agent should use object params");
 
     assert!(properties.contains_key("fork_context"));
+    assert_eq!(
+        properties["fork_context"].description.as_deref(),
+        Some(
+            "True forks the current thread history into the new agent; false or omitted starts with only the initial prompt. A full-history fork cannot be combined with agent_type, model, or reasoning_effort."
+        )
+    );
     assert!(!properties.contains_key("fork_turns"));
     assert_eq!(
         properties
@@ -160,6 +189,24 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
             .get("service_tier")
             .and_then(|schema| schema.description.as_deref()),
         Some(SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION)
+    );
+    assert_eq!(
+        output_schema,
+        &Some(json!({
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Thread identifier for the spawned agent."
+                },
+                "nickname": {
+                    "type": ["string", "null"],
+                    "description": "User-facing nickname for the spawned agent when available."
+                }
+            },
+            "required": ["agent_id", "nickname"],
+            "additionalProperties": false
+        }))
     );
 }
 
@@ -193,28 +240,68 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
 }
 
 #[test]
-fn spawn_agent_tool_caps_reasoning_effort_value_length() {
+fn spawn_agent_tool_caps_reasoning_effort_value_bytes() {
     let mut model = model_preset("visible", /*show_in_picker*/ true);
     let custom_effort = ReasoningEffort::Custom(
-        "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION + 1),
+        "é".repeat(MAX_REASONING_EFFORT_BYTES_IN_SPAWN_AGENT_DESCRIPTION + 1),
     );
     model.default_reasoning_effort = custom_effort.clone();
     model.supported_reasoning_efforts = vec![ReasoningEffortPreset {
-        effort: custom_effort,
+        effort: custom_effort.clone(),
         description: "Model-defined".to_string(),
     }];
+    let expected_effort = truncate_utf8_bytes(
+        custom_effort.as_str(),
+        MAX_REASONING_EFFORT_BYTES_IN_SPAWN_AGENT_DESCRIPTION,
+    );
 
     assert_eq!(
-        spawn_agent_models_description(&[model]),
+        spawn_agent_models_description(&[model], /*include_service_tiers*/ true),
         format!(
-            "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {} (default). Service tiers: priority.",
-            "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+            "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {expected_effort} (default). Service tiers: priority."
         )
     );
 }
 
 #[test]
-fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
+fn spawn_agent_model_catalog_has_a_hard_aggregate_bound() {
+    let models = (0..MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION)
+        .map(|index| {
+            let mut model = model_preset(&format!("model-{index}"), /*show_in_picker*/ true);
+            model.model = format!("model-{index}-{}", "界".repeat(1_000));
+            model.description = "description".repeat(1_000);
+            model.supported_reasoning_efforts = (0..100)
+                .map(|effort_index| ReasoningEffortPreset {
+                    effort: ReasoningEffort::Custom(format!(
+                        "effort-{effort_index}-{}",
+                        "界".repeat(1_000)
+                    )),
+                    description: "model-defined".to_string(),
+                })
+                .collect();
+            model.default_reasoning_effort = model.supported_reasoning_efforts[0].effort.clone();
+            model.service_tiers = (0..100)
+                .map(|tier_index| ModelServiceTier {
+                    id: format!("tier-{tier_index}-{}", "界".repeat(1_000)),
+                    name: "tier".to_string(),
+                    description: "tier description".to_string(),
+                })
+                .collect();
+            model
+        })
+        .collect::<Vec<_>>();
+
+    let description = spawn_agent_models_description(&models, /*include_service_tiers*/ true);
+
+    assert!(description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert!(description.contains(TRUNCATION_SUFFIX));
+    for index in 0..MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION {
+        assert!(description.contains(&format!("`model-{index}-")));
+    }
+}
+
+#[test]
+fn spawn_agent_tool_keeps_model_controls_when_spawn_metadata_is_hidden() {
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
         available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
         agent_type_description: "role help".to_string(),
@@ -225,6 +312,7 @@ fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
     let ToolSpec::Function(ResponsesApiTool {
         description,
         parameters,
+        output_schema,
         ..
     }) = tool
     else {
@@ -235,12 +323,97 @@ fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
         .as_ref()
         .expect("spawn_agent should use object params");
 
-    assert!(!properties.contains_key("agent_type"));
-    assert!(!properties.contains_key("model"));
-    assert!(!properties.contains_key("reasoning_effort"));
-    assert!(!properties.contains_key("service_tier"));
-    assert!(!description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
-    assert!(!description.contains("Available model overrides"));
+    assert_eq!(
+        properties.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "fork_turns",
+            "message",
+            "model",
+            "reasoning_effort",
+            "task_name",
+        ]
+    );
+    assert_eq!(
+        parameters.required.as_deref(),
+        Some(["task_name".to_string(), "message".to_string()].as_slice())
+    );
+    assert_eq!(
+        output_schema,
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "task_name": {
+                    "type": "string",
+                    "description": "Canonical task name for the spawned agent."
+                }
+            },
+            "required": ["task_name"],
+            "additionalProperties": false
+        }))
+    );
+    assert!(description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
+    assert!(description.contains("Available model overrides"));
+    assert!(description.contains("Reasoning efforts: medium (default)."));
+    assert!(!description.contains("Service tiers: priority."));
+}
+
+#[test]
+fn spawn_agent_tool_v1_keeps_model_controls_when_spawn_metadata_is_hidden() {
+    let ToolSpec::Namespace(namespace) = create_spawn_agent_tool_v1(SpawnAgentToolOptions {
+        available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
+        agent_type_description: "role help".to_string(),
+        hide_agent_type_model_reasoning: true,
+        usage_hint_text: None,
+    }) else {
+        panic!("spawn_agent v1 should be a namespace tool");
+    };
+    let Some(ResponsesApiNamespaceTool::Function(tool)) = namespace.tools.first() else {
+        panic!("spawn_agent should be a namespace function tool");
+    };
+    let properties = tool
+        .parameters
+        .properties
+        .as_ref()
+        .expect("spawn_agent should use object params");
+
+    assert_eq!(
+        properties.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "fork_context",
+            "items",
+            "message",
+            "model",
+            "reasoning_effort",
+        ]
+    );
+    assert_eq!(tool.parameters.required, None);
+    assert_eq!(
+        tool.output_schema,
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Thread identifier for the spawned agent."
+                },
+                "nickname": {
+                    "type": ["string", "null"],
+                    "description": "User-facing nickname for the spawned agent when available."
+                }
+            },
+            "required": ["agent_id", "nickname"],
+            "additionalProperties": false
+        }))
+    );
+    assert!(
+        tool.description
+            .contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE)
+    );
+    assert!(
+        tool.description
+            .contains("Reasoning efforts: medium (default).")
+    );
+    assert!(!tool.description.contains("Service tiers: priority."));
 }
 
 #[test]

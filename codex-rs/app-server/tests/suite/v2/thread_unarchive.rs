@@ -217,6 +217,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
             forked_from_id: Some(parent_thread_id),
             parent_thread_id: None,
             source: SessionSource::Cli,
+            subagent_backend_route: Default::default(),
             thread_source: None,
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),

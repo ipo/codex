@@ -110,6 +110,7 @@ pub(crate) async fn run_codex_thread_interactive(
         conversation_history,
         requested_history_mode: None,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
+        subagent_backend_route: Default::default(),
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.thread_id),
         thread_source: Some(ThreadSource::Subagent),

@@ -31,6 +31,8 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_rollout_trace::ConversationPart;
@@ -109,6 +111,8 @@ struct WebsocketTestHarness {
     model_info: ModelInfo,
     effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummary,
+    session_source: SessionSource,
+    parent_thread_id: Option<ThreadId>,
     session_telemetry: SessionTelemetry,
 }
 
@@ -123,8 +127,8 @@ fn responses_metadata(
         &harness.thread_id.to_string(),
         turn_id,
         TEST_WINDOW_ID.to_string(),
-        &SessionSource::Exec,
-        /*parent_thread_id*/ None,
+        &harness.session_source,
+        harness.parent_thread_id,
         request_kind,
     )
 }
@@ -488,6 +492,98 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
     );
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn thread_spawn_backend_route_applies_to_websocket_prewarm_and_turn() {
+    skip_if_no_network!();
+
+    for route in [
+        SubagentBackendRoute::ProperSubagent,
+        SubagentBackendRoute::MainSession,
+    ] {
+        let server = start_websocket_server(vec![vec![
+            vec![ev_response_created("warm-1"), ev_completed("warm-1")],
+            vec![ev_response_created("resp-1"), ev_completed("resp-1")],
+        ]])
+        .await;
+        let parent_thread_id = ThreadId::new();
+        let parent_thread_id_string = parent_thread_id.to_string();
+        let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: Some("Ada".to_string()),
+            agent_role: Some("worker".to_string()),
+        });
+        let mut provider = websocket_provider(&server);
+        provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
+        let harness = websocket_harness_with_provider_options_and_route(
+            provider,
+            /*runtime_metrics_enabled*/ false,
+            /*concurrent_reasoning_summaries_enabled*/ false,
+            /*enabled_features*/ &[],
+            session_source,
+            route,
+            Some(parent_thread_id),
+        )
+        .await;
+        let mut client_session = harness.client.new_session();
+        let prompt = prompt_with_input(vec![message_item("hello")]);
+        let metadata = prewarm_metadata(&harness, /*turn_id*/ None);
+
+        client_session
+            .prewarm_websocket(
+                &prompt,
+                &harness.model_info,
+                &harness.session_telemetry,
+                harness.effort.clone(),
+                harness.summary,
+                /*service_tier*/ None,
+                &metadata,
+            )
+            .await
+            .expect("websocket prewarm failed");
+        stream_until_complete(&mut client_session, &harness, &prompt).await;
+
+        let expected_subagent = route.is_proper_subagent().then_some("collab_spawn");
+        let handshake = server.single_handshake();
+        assert_eq!(
+            (
+                handshake.header("x-openai-subagent").as_deref(),
+                handshake.header("x-codex-parent-thread-id").as_deref(),
+            ),
+            (expected_subagent, Some(parent_thread_id_string.as_str()))
+        );
+        let connection = server.single_connection();
+        assert_eq!(connection.len(), 2);
+        for (request, request_kind) in connection.iter().zip(["prewarm", "turn"]) {
+            let body = request.body_json();
+            let turn_metadata: serde_json::Value = serde_json::from_str(
+                body["client_metadata"]["x-codex-turn-metadata"]
+                    .as_str()
+                    .expect("turn metadata"),
+            )
+            .expect("valid turn metadata");
+            assert_eq!(
+                (
+                    body["client_metadata"]["x-openai-subagent"].as_str(),
+                    turn_metadata["request_kind"].as_str(),
+                    turn_metadata["subagent_kind"].as_str(),
+                    turn_metadata["parent_thread_id"].as_str(),
+                ),
+                (
+                    expected_subagent,
+                    Some(request_kind),
+                    Some("thread_spawn"),
+                    Some(parent_thread_id_string.as_str()),
+                )
+            );
+        }
+        assert_eq!(connection[0].body_json()["generate"].as_bool(), Some(false));
+
+        server.shutdown().await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2265,6 +2361,28 @@ async fn websocket_harness_with_provider_options(
     concurrent_reasoning_summaries_enabled: bool,
     enabled_features: &[Feature],
 ) -> WebsocketTestHarness {
+    websocket_harness_with_provider_options_and_route(
+        provider,
+        runtime_metrics_enabled,
+        concurrent_reasoning_summaries_enabled,
+        enabled_features,
+        SessionSource::Exec,
+        SubagentBackendRoute::ProperSubagent,
+        /*parent_thread_id*/ None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn websocket_harness_with_provider_options_and_route(
+    provider: ModelProviderInfo,
+    runtime_metrics_enabled: bool,
+    concurrent_reasoning_summaries_enabled: bool,
+    enabled_features: &[Feature],
+    session_source: SessionSource,
+    subagent_backend_route: SubagentBackendRoute,
+    parent_thread_id: Option<ThreadId>,
+) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
@@ -2311,17 +2429,18 @@ async fn websocket_harness_with_provider_options(
         "test_originator".to_string(),
         /*log_user_prompts*/ false,
         "test".to_string(),
-        SessionSource::Exec,
+        session_source.clone(),
     )
     .with_metrics(metrics);
     let effort = None;
     let summary = ReasoningSummary::Auto;
-    let client = ModelClient::new(
+    let client = ModelClient::new_with_subagent_backend_route(
         /*auth_manager*/ None,
         AgentIdentityAuthPolicy::JwtOnly,
         thread_id,
         provider.clone(),
-        SessionSource::Exec,
+        session_source.clone(),
+        subagent_backend_route,
         "test_originator".to_string(),
         config.model_verbosity,
         /*enable_request_compression*/ false,
@@ -2345,6 +2464,8 @@ async fn websocket_harness_with_provider_options(
         model_info,
         effort,
         summary,
+        session_source,
+        parent_thread_id,
         session_telemetry,
     }
 }

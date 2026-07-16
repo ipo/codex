@@ -16,6 +16,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelections;
@@ -96,6 +97,8 @@ pub(crate) struct SessionConfiguration {
     pub(super) app_server_client_version: Option<String>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
+    /// Sticky routing choice for backend inference requests made by this thread.
+    pub(super) subagent_backend_route: SubagentBackendRoute,
     /// Persisted thread history contract selected when this thread was created.
     pub(super) history_mode: ThreadHistoryMode,
     /// Immediate history source copied into this thread, when this thread was forked.
@@ -594,6 +597,7 @@ impl Session {
                             forked_from_id,
                             parent_thread_id,
                             source: session_source,
+                            subagent_backend_route: session_configuration.subagent_backend_route,
                             thread_source: session_configuration.thread_source.clone(),
                             originator: session_configuration.originator.clone(),
                             base_instructions: BaseInstructions {
@@ -1100,7 +1104,7 @@ impl Session {
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
                 time_provider,
-                model_client: ModelClient::new(
+                model_client: ModelClient::new_with_subagent_backend_route(
                     Some(Arc::clone(&auth_manager)),
                     if config.features.enabled(Feature::UseAgentIdentity) {
                         AgentIdentityAuthPolicy::ChatGptAuth
@@ -1110,6 +1114,7 @@ impl Session {
                     thread_id,
                     session_configuration.provider.clone(),
                     session_configuration.session_source.clone(),
+                    session_configuration.subagent_backend_route,
                     session_configuration.originator.clone(),
                     config.model_verbosity,
                     config.features.enabled(Feature::EnableRequestCompression),

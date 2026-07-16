@@ -34,6 +34,7 @@ use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
@@ -55,6 +56,7 @@ const ROOT_LAST_TASK_MESSAGE: &str = "Main thread";
 mod execution;
 mod legacy;
 mod residency;
+mod resume_settings;
 mod spawn;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +71,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
+    pub(crate) subagent_backend_route: SubagentBackendRoute,
 }
 
 #[derive(Clone, Debug)]

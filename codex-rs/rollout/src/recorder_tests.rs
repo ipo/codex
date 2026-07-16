@@ -15,6 +15,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
@@ -95,6 +96,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
             originator: "test".to_string(),
             cli_version: "test".to_string(),
             source: SessionSource::Cli,
+            subagent_backend_route: Default::default(),
             thread_source: None,
             agent_path: None,
             agent_nickname: None,
@@ -430,6 +432,7 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
             Vec::new(),
         )
         .with_session_id(session_id)
+        .with_subagent_backend_route(SubagentBackendRoute::MainSession)
         .with_history_mode(ThreadHistoryMode::Paginated)
         .with_initial_window_id(initial_window_id.clone()),
     )
@@ -483,6 +486,10 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
     };
     assert_eq!(session_meta.meta.session_id, session_id);
     assert_eq!(session_meta.meta.history_mode, ThreadHistoryMode::Paginated);
+    assert_eq!(
+        session_meta.meta.subagent_backend_route,
+        SubagentBackendRoute::MainSession
+    );
     assert_eq!(
         session_meta
             .meta

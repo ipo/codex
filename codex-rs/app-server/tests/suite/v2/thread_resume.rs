@@ -2423,6 +2423,7 @@ stream_max_retries = 0
         originator: "codex".to_string(),
         cli_version: "0.0.0".to_string(),
         source: RolloutSessionSource::Cli,
+        subagent_backend_route: Default::default(),
         thread_source: None,
         agent_path: None,
         agent_nickname: None,

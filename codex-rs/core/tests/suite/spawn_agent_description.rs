@@ -113,6 +113,7 @@ async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() -> Result<()> {
     let server = start_mock_server().await;
+    let long_model_description = format!("Fast and capable {}", "x".repeat(10_000));
     mount_models_once(
         &server,
         ModelsResponse {
@@ -120,7 +121,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
                 test_model_info(
                     "visible-model",
                     "Visible Model",
-                    "Fast and capable",
+                    &long_model_description,
                     ModelVisibility::List,
                     ReasoningEffort::Medium,
                     vec![
@@ -187,6 +188,10 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     assert!(
         description.contains("- `visible-model`: Fast and capable"),
         "expected visible model summary in spawn_agent description: {description:?}"
+    );
+    assert!(
+        !description.contains(&"x".repeat(500)),
+        "serialized spawn_agent catalog must truncate remote model metadata"
     );
     assert!(
         description

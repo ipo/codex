@@ -61,6 +61,7 @@ use codex_protocol::protocol::SessionContextWindow;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_state::StateRuntime;
@@ -89,6 +90,7 @@ pub enum RolloutRecorderParams {
         forked_from_id: Option<ThreadId>,
         parent_thread_id: Option<ThreadId>,
         source: Box<SessionSource>,
+        subagent_backend_route: SubagentBackendRoute,
         thread_source: Option<ThreadSource>,
         originator: String,
         base_instructions: BaseInstructions,
@@ -182,6 +184,7 @@ impl RolloutRecorderParams {
             forked_from_id,
             parent_thread_id,
             source: Box::new(source),
+            subagent_backend_route: SubagentBackendRoute::default(),
             thread_source,
             originator,
             base_instructions,
@@ -196,6 +199,20 @@ impl RolloutRecorderParams {
     pub fn with_session_id(mut self, session_id: SessionId) -> Self {
         if let Self::Create { session_id: id, .. } = &mut self {
             *id = session_id;
+        }
+        self
+    }
+
+    pub fn with_subagent_backend_route(
+        mut self,
+        subagent_backend_route: SubagentBackendRoute,
+    ) -> Self {
+        if let Self::Create {
+            subagent_backend_route: route,
+            ..
+        } = &mut self
+        {
+            *route = subagent_backend_route;
         }
         self
     }
@@ -758,6 +775,7 @@ impl RolloutRecorder {
                 forked_from_id,
                 parent_thread_id,
                 source,
+                subagent_backend_route,
                 thread_source,
                 originator,
                 base_instructions,
@@ -793,6 +811,7 @@ impl RolloutRecorder {
                     agent_role: source.get_agent_role(),
                     agent_path: source.get_agent_path().map(Into::into),
                     source: *source,
+                    subagent_backend_route,
                     thread_source,
                     model_provider: Some(config.model_provider_id().to_string()),
                     base_instructions: Some(base_instructions),

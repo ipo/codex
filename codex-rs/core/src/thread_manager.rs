@@ -56,6 +56,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnAbortReason;
@@ -716,6 +717,7 @@ impl ThreadManager {
             options.thread_extension_init,
             options.supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            /*subagent_backend_route*/ SubagentBackendRoute::default(),
         ))
         .await
     }
@@ -813,6 +815,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ None,
+            /*subagent_backend_route*/ SubagentBackendRoute::default(),
         ))
         .await
     }
@@ -884,6 +887,7 @@ impl ThreadManager {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             supports_openai_form_elicitation,
             /*user_shell_override*/ Some(user_shell_override),
+            /*subagent_backend_route*/ SubagentBackendRoute::default(),
         ))
         .await
     }
@@ -1345,6 +1349,7 @@ impl ThreadManagerState {
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
+            /*subagent_backend_route*/ SubagentBackendRoute::default(),
         ))
         .await
     }
@@ -1362,6 +1367,7 @@ impl ThreadManagerState {
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
+        subagent_backend_route: SubagentBackendRoute,
     ) -> CodexResult<NewThread> {
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
@@ -1386,6 +1392,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            subagent_backend_route,
         ))
         .await
     }
@@ -1426,6 +1433,7 @@ impl ThreadManagerState {
             /*thread_extension_init*/ ExtensionDataInit::default(),
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            /*subagent_backend_route*/ SubagentBackendRoute::default(),
         ))
         .await
     }
@@ -1444,6 +1452,7 @@ impl ThreadManagerState {
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
         thread_extension_init: ExtensionDataInit,
+        subagent_backend_route: SubagentBackendRoute,
     ) -> CodexResult<NewThread> {
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
@@ -1468,6 +1477,7 @@ impl ThreadManagerState {
             thread_extension_init,
             /*supports_openai_form_elicitation*/ false,
             /*user_shell_override*/ None,
+            subagent_backend_route,
         ))
         .await
     }
@@ -1511,6 +1521,7 @@ impl ThreadManagerState {
             thread_extension_init,
             supports_openai_form_elicitation,
             user_shell_override,
+            /*subagent_backend_route*/ SubagentBackendRoute::default(),
         ))
         .await
     }
@@ -1537,7 +1548,11 @@ impl ThreadManagerState {
         thread_extension_init: ExtensionDataInit,
         supports_openai_form_elicitation: bool,
         user_shell_override: Option<crate::shell::Shell>,
+        subagent_backend_route: SubagentBackendRoute,
     ) -> CodexResult<NewThread> {
+        let subagent_backend_route = initial_history
+            .get_resumed_subagent_backend_route()
+            .unwrap_or(subagent_backend_route);
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if let InitialHistory::Resumed(resumed) = &initial_history {
             let mut threads = self.threads.write().await;
@@ -1602,6 +1617,7 @@ impl ThreadManagerState {
             conversation_history: initial_history,
             requested_history_mode: history_mode,
             session_source,
+            subagent_backend_route,
             forked_from_thread_id,
             parent_thread_id,
             thread_source,

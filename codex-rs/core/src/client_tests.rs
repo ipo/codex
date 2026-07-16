@@ -17,6 +17,8 @@ use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
+use codex_api::RawMemory;
+use codex_api::RawMemoryMetadata;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
 use codex_http_client::HttpClientFactory;
@@ -44,6 +46,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::SubagentBackendRoute;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::ExecutionStatus;
 use codex_rollout_trace::InferenceTraceAttempt;
@@ -85,20 +88,21 @@ const TEST_CHATGPT_ID_TOKEN: &str = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWF
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
 fn test_model_client(session_source: SessionSource) -> ModelClient {
-    test_model_client_with_thread_id(ThreadId::new(), session_source)
+    test_model_client_with_route(session_source, SubagentBackendRoute::ProperSubagent)
 }
 
-fn test_model_client_with_thread_id(
-    thread_id: ThreadId,
+fn test_model_client_with_route(
     session_source: SessionSource,
+    subagent_backend_route: SubagentBackendRoute,
 ) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
-    ModelClient::new(
+    ModelClient::new_with_subagent_backend_route(
         /*auth_manager*/ None,
         AgentIdentityAuthPolicy::JwtOnly,
-        thread_id,
+        ThreadId::new(),
         provider,
         session_source,
+        subagent_backend_route,
         "test_originator".to_string(),
         /*model_verbosity*/ None,
         /*enable_request_compression*/ false,
@@ -515,12 +519,9 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
     let client_metadata =
         client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
     let parent_thread_id = parent_thread_id.to_string();
-    let turn_metadata: serde_json::Value = serde_json::from_str(
-        client_metadata
-            .get(X_CODEX_TURN_METADATA_HEADER)
-            .expect("turn metadata"),
-    )
-    .expect("valid turn metadata");
+    let turn_metadata: serde_json::Value =
+        serde_json::from_str(&client_metadata[X_CODEX_TURN_METADATA_HEADER])
+            .expect("valid turn metadata");
     for (client_key, metadata_key, expected) in [
         (
             X_CODEX_INSTALLATION_ID_HEADER,
@@ -556,6 +557,53 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
 }
 
 #[tokio::test]
+async fn main_session_route_omits_backend_projection_but_keeps_logical_subagent_metadata() {
+    let client = test_model_client_with_route(
+        SessionSource::SubAgent(SubAgentSource::Other("collab_spawn".to_string())),
+        SubagentBackendRoute::MainSession,
+    );
+    let responses_metadata = test_responses_metadata_for_client(
+        &client,
+        Some("turn-123"),
+        "window-123".to_string(),
+        None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+
+    let client_metadata =
+        client.build_ws_client_metadata(&responses_metadata, /*use_responses_lite*/ false);
+    let turn_metadata: serde_json::Value = serde_json::from_str(
+        client_metadata
+            .get(X_CODEX_TURN_METADATA_HEADER)
+            .expect("turn metadata"),
+    )
+    .expect("valid turn metadata");
+    let options = client
+        .new_session()
+        .build_responses_options(
+            &responses_metadata,
+            codex_api::Compression::None,
+            /*use_responses_lite*/ false,
+        )
+        .await;
+
+    assert_eq!(
+        (
+            client
+                .build_subagent_headers()
+                .contains_key(X_OPENAI_SUBAGENT_HEADER),
+            client_metadata.contains_key(X_OPENAI_SUBAGENT_HEADER),
+            client
+                .build_responses_compatibility_headers(&responses_metadata)
+                .contains_key(X_OPENAI_SUBAGENT_HEADER),
+            options.session_source,
+            turn_metadata["subagent_kind"].as_str(),
+        ),
+        (false, false, false, None, Some("collab_spawn"))
+    );
+}
+
+#[tokio::test]
 async fn summarize_memories_returns_empty_for_empty_input() {
     let client = test_model_client(SessionSource::Cli);
     let model_info = test_model_info();
@@ -571,6 +619,80 @@ async fn summarize_memories_returns_empty_for_empty_input() {
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
+}
+
+#[tokio::test]
+async fn memory_summarize_request_uses_the_selected_thread_spawn_backend_route() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/memories/trace_summarize"))
+        .respond_with(ResponseTemplate::new(/*status*/ 200).set_body_json(json!({"output": []})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let parent_thread_id = ThreadId::new();
+    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+
+    for route in [
+        SubagentBackendRoute::ProperSubagent,
+        SubagentBackendRoute::MainSession,
+    ] {
+        let provider =
+            create_oss_provider_with_base_url(&format!("{}/v1", server.uri()), WireApi::Responses);
+        let client = ModelClient::new_with_subagent_backend_route(
+            /*auth_manager*/ None,
+            AgentIdentityAuthPolicy::JwtOnly,
+            ThreadId::new(),
+            provider,
+            session_source.clone(),
+            route,
+            "test_originator".to_string(),
+            /*model_verbosity*/ None,
+            /*enable_request_compression*/ false,
+            /*include_timing_metrics*/ false,
+            /*beta_features_header*/ None,
+            /*item_ids_enabled*/ false,
+            /*concurrent_reasoning_summaries_enabled*/ false,
+            /*attestation_provider*/ None,
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+        );
+        client
+            .summarize_memories(
+                vec![RawMemory {
+                    id: route.as_str().to_string(),
+                    metadata: RawMemoryMetadata {
+                        source_path: "/tmp/trace.json".to_string(),
+                    },
+                    items: vec![json!({"type": "message"})],
+                }],
+                &test_model_info(),
+                /*effort*/ None,
+                &test_session_telemetry(),
+            )
+            .await
+            .expect("memory summarize request should succeed");
+    }
+
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| {
+                request
+                    .headers
+                    .get(X_OPENAI_SUBAGENT_HEADER)
+                    .and_then(|value| value.to_str().ok())
+            })
+            .collect::<Vec<_>>(),
+        [Some("collab_spawn"), None]
+    );
 }
 
 #[tokio::test]

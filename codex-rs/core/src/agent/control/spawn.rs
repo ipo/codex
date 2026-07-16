@@ -1,4 +1,6 @@
 use super::residency::is_v2_resident_session_source;
+use super::resume_settings::apply_stored_thread_runtime_settings;
+use super::resume_settings::stored_thread_uses_main_session_route;
 use super::*;
 use codex_extension_api::ExtensionDataInit;
 
@@ -149,7 +151,7 @@ impl AgentControl {
 
     pub(crate) async fn ensure_v2_agent_loaded(
         &self,
-        config: Config,
+        mut config: Config,
         thread_id: ThreadId,
     ) -> CodexResult<()> {
         let state = self.upgrade()?;
@@ -170,6 +172,9 @@ impl AgentControl {
             .await?;
         let stored_source = stored_thread.source.clone();
         let stored_parent_thread_id = stored_thread.parent_thread_id;
+        if stored_thread_uses_main_session_route(&stored_thread) {
+            apply_stored_thread_runtime_settings(&mut config, &stored_thread);
+        }
         let history = stored_thread
             .history
             .ok_or(CodexErr::ThreadNotFound(thread_id))?
@@ -322,6 +327,7 @@ impl AgentControl {
                     inheritance.environments,
                     inheritance.exec_policy,
                     options.environments.clone(),
+                    options.subagent_backend_route,
                 ))
                 .await?
             }
@@ -577,6 +583,7 @@ impl AgentControl {
                 inherited_exec_policy,
                 options.environments.clone(),
                 thread_extension_init,
+                options.subagent_backend_route,
             )
             .await
     }
@@ -659,7 +666,7 @@ impl AgentControl {
 
     async fn resume_single_agent_from_rollout(
         &self,
-        config: Config,
+        mut config: Config,
         thread_id: ThreadId,
         session_source: SessionSource,
     ) -> CodexResult<(ThreadId, MultiAgentVersion)> {
@@ -671,6 +678,13 @@ impl AgentControl {
                 include_history: true,
             })
             .await?;
+        if matches!(
+            &session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) && stored_thread_uses_main_session_route(&stored_thread)
+        {
+            apply_stored_thread_runtime_settings(&mut config, &stored_thread);
+        }
         let resumed_agent_path = stored_thread
             .agent_path
             .as_deref()

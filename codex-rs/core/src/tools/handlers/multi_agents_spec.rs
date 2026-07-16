@@ -8,6 +8,18 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::BTreeMap;
 
+#[cfg(test)]
+use super::multi_agents_spec_model_catalog::MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION;
+#[cfg(test)]
+use super::multi_agents_spec_model_catalog::MAX_REASONING_EFFORT_BYTES_IN_SPAWN_AGENT_DESCRIPTION;
+#[cfg(test)]
+use super::multi_agents_spec_model_catalog::MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES;
+#[cfg(test)]
+use super::multi_agents_spec_model_catalog::TRUNCATION_SUFFIX;
+use super::multi_agents_spec_model_catalog::spawn_agent_models_description;
+#[cfg(test)]
+use super::multi_agents_spec_model_catalog::truncate_utf8_bytes;
+
 pub const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
 const MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and managing sub-agents.";
 
@@ -16,8 +28,6 @@ const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
     "Model override for the new agent. Omit unless an explicit override is needed.";
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
     "Service tier override for the new agent. Omit unless explicitly requested.";
-const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
-const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 
 #[derive(Debug, Clone, Default)]
 pub struct SpawnAgentToolOptions {
@@ -45,10 +55,10 @@ impl Default for WaitAgentTimeoutOptions {
 }
 
 pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
-    let available_models_description = (!options.hide_agent_type_model_reasoning)
-        .then(|| spawn_agent_models_description(&options.available_models));
-    let inherited_model_guidance =
-        (!options.hide_agent_type_model_reasoning).then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
+    let available_models_description = spawn_agent_models_description(
+        &options.available_models,
+        /*include_service_tiers*/ !options.hide_agent_type_model_reasoning,
+    );
     let return_value_description =
         "Returns the spawned agent id plus the user-facing nickname when available.";
     let mut properties = spawn_agent_common_properties_v1(&options.agent_type_description);
@@ -62,8 +72,8 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: "spawn_agent".to_string(),
             description: spawn_agent_tool_description(
-                available_models_description.as_deref(),
-                inherited_model_guidance,
+                Some(available_models_description.as_str()),
+                Some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE),
                 return_value_description,
                 options.usage_hint_text,
             ),
@@ -76,10 +86,10 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
 }
 
 pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
-    let available_models_description = (!options.hide_agent_type_model_reasoning)
-        .then(|| spawn_agent_models_description(&options.available_models));
-    let inherited_model_guidance =
-        (!options.hide_agent_type_model_reasoning).then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
+    let available_models_description = spawn_agent_models_description(
+        &options.available_models,
+        /*include_service_tiers*/ !options.hide_agent_type_model_reasoning,
+    );
     let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
     if options.hide_agent_type_model_reasoning {
         hide_spawn_agent_metadata_options(&mut properties);
@@ -95,8 +105,8 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "spawn_agent".to_string(),
         description: spawn_agent_tool_description_v2(
-            available_models_description.as_deref(),
-            inherited_model_guidance,
+            Some(available_models_description.as_str()),
+            Some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE),
             options.usage_hint_text,
         ),
         strict: false,
@@ -566,7 +576,7 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
         (
             "fork_context".to_string(),
             JsonSchema::boolean(Some(
-                "True forks the current thread history into the new agent; false or omitted starts with only the initial prompt."
+                "True forks the current thread history into the new agent; false or omitted starts with only the initial prompt. A full-history fork cannot be combined with agent_type, model, or reasoning_effort."
                     .to_string(),
             )),
         ),
@@ -608,7 +618,7 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         (
             "fork_turns".to_string(),
             JsonSchema::string(Some(
-                "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns."
+                "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns. `all` cannot be combined with agent_type, model, or reasoning_effort; use `none` or a positive integer to select those overrides."
                     .to_string(),
             )),
         ),
@@ -636,8 +646,6 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
 
 fn hide_spawn_agent_metadata_options(properties: &mut BTreeMap<String, JsonSchema>) {
     properties.remove("agent_type");
-    properties.remove("model");
-    properties.remove("reasoning_effort");
     properties.remove("service_tier");
 }
 
@@ -738,69 +746,6 @@ Note that passing `fork_turns="none"` will not pass any surrounding context to t
         );
     }
     tool_description
-}
-
-fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
-    let visible_models: Vec<&ModelPreset> = models
-        .iter()
-        .filter(|model| model.show_in_picker)
-        .take(MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION)
-        .collect();
-    if visible_models.is_empty() {
-        return "No picker-visible model overrides are currently loaded.".to_string();
-    }
-
-    let model_descriptions = visible_models
-        .into_iter()
-        .map(|model| {
-            let default_reasoning_effort = &model.default_reasoning_effort;
-            let efforts = model
-                .supported_reasoning_efforts
-                .iter()
-                .map(|preset| {
-                    let effort = preset.effort.as_str();
-                    let effort = match effort
-                        .char_indices()
-                        .nth(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
-                    {
-                        Some((index, _)) => &effort[..index],
-                        None => effort,
-                    };
-                    if &preset.effort == default_reasoning_effort {
-                        format!("{effort} (default)")
-                    } else {
-                        effort.to_string()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let reasoning_efforts_suffix = if efforts.is_empty() {
-                String::new()
-            } else {
-                format!(" Reasoning efforts: {efforts}.")
-            };
-            let service_tiers = model
-                .service_tiers
-                .iter()
-                .map(|tier| tier.id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let service_tiers_suffix = if service_tiers.is_empty() {
-                String::new()
-            } else {
-                format!(" Service tiers: {service_tiers}.")
-            };
-            let model_slug = &model.model;
-            let description = &model.description;
-            format!(
-                "- `{model_slug}`: {description}{reasoning_efforts_suffix}{service_tiers_suffix}"
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "Available model overrides (optional; inherited parent model is preferred):\n{model_descriptions}"
-    )
 }
 
 fn wait_agent_tool_parameters_v1(options: WaitAgentTimeoutOptions) -> JsonSchema {

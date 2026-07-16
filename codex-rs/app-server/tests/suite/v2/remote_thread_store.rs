@@ -154,6 +154,7 @@ async fn thread_delete_with_non_local_thread_store_does_not_create_local_persist
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Cli,
+            subagent_backend_route: Default::default(),
             thread_source: None,
             originator: "test_originator".to_string(),
             base_instructions: BaseInstructions::default(),
