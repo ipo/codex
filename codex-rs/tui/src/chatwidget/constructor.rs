@@ -33,6 +33,11 @@ impl ChatWidget {
             session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
+        let persisted_model = config
+            .model
+            .clone()
+            .or_else(|| model.clone())
+            .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
         let mut config = config;
         config.model = model.clone();
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
@@ -60,6 +65,11 @@ impl ChatWidget {
         let current_collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
             settings: fallback_default,
+        };
+        let persisted_model_selection_defaults = PersistedModelSelectionDefaults {
+            model: persisted_model,
+            reasoning_effort: config.model_reasoning_effort.clone(),
+            plan_mode_reasoning_effort: config.plan_mode_reasoning_effort.clone(),
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
@@ -112,6 +122,7 @@ impl ChatWidget {
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,
+            persisted_model_selection_defaults,
             active_collaboration_mask,
             has_chatgpt_account,
             has_codex_backend_auth,
