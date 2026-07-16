@@ -196,6 +196,7 @@ use ratatui::widgets::WidgetRef;
 
 use codex_protocol::openai_models::ReasoningEffort;
 
+use super::GoalStatusIndicator;
 use super::chat_composer_history::ChatComposerHistory;
 use super::chat_composer_history::HistoryEntry;
 use super::chat_composer_history::HistoryEntryResponse;
@@ -212,7 +213,6 @@ use super::footer::CollaborationModeIndicator;
 use super::footer::FooterKeyHints;
 use super::footer::FooterMode;
 use super::footer::FooterProps;
-use super::footer::GoalStatusIndicator;
 use super::footer::SummaryLeft;
 use super::footer::can_show_left_with_context;
 use super::footer::context_window_line;
@@ -231,6 +231,7 @@ use super::footer::reset_mode_after_activity;
 use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
 use super::footer::status_line_right_indicator_line;
+use super::footer::status_line_right_indicator_line_fitting_width;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
 use super::mentions_v2::MentionV2Popup;
@@ -1299,16 +1300,52 @@ impl ChatComposer {
     }
 
     fn mode_indicator_line(&self, show_cycle_hint: bool) -> Option<Line<'static>> {
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        if let Some(vim_mode) = self.vim_mode_indicator_span() {
-            spans.push(vim_mode);
-        }
-        if let Some(indicators) = status_line_right_indicator_line(
+        let indicators = status_line_right_indicator_line(
             self.footer.collaboration_mode_indicator,
             self.footer.goal_status_indicator.as_ref(),
             self.footer.ide_context_active,
             show_cycle_hint,
-        ) {
+        );
+        Self::combine_mode_indicator_lines(self.vim_mode_indicator_span(), indicators)
+    }
+
+    fn mode_indicator_line_fitting_width(&self, max_width: usize) -> Option<Line<'static>> {
+        let vim_mode = self.vim_mode_indicator_span();
+        let vim_width = vim_mode
+            .as_ref()
+            .map(|span| Line::from(vec![span.clone()]).width() + " | ".len())
+            .unwrap_or(0);
+        let indicators = status_line_right_indicator_line_fitting_width(
+            self.footer.collaboration_mode_indicator,
+            self.footer.goal_status_indicator.as_ref(),
+            self.footer.ide_context_active,
+            /*show_cycle_hint*/ false,
+            max_width.saturating_sub(vim_width),
+        );
+        let combined = Self::combine_mode_indicator_lines(vim_mode, indicators);
+        if combined
+            .as_ref()
+            .is_some_and(|line| line.width() <= max_width)
+        {
+            return combined;
+        }
+
+        let indicators = status_line_right_indicator_line_fitting_width(
+            self.footer.collaboration_mode_indicator,
+            self.footer.goal_status_indicator.as_ref(),
+            self.footer.ide_context_active,
+            /*show_cycle_hint*/ false,
+            max_width,
+        );
+        Self::combine_mode_indicator_lines(/*vim_mode*/ None, indicators)
+    }
+
+    fn combine_mode_indicator_lines(
+        vim_mode: Option<Span<'static>>,
+        indicators: Option<Line<'static>>,
+    ) -> Option<Line<'static>> {
+        let mut spans: Vec<Span<'static>> = vim_mode.into_iter().collect();
+        if let Some(indicators) = indicators {
             if !spans.is_empty() {
                 spans.push(" | ".dim());
             }
@@ -4555,25 +4592,27 @@ impl ChatComposer {
                             show_queue_hint,
                         )
                     };
-                    let right_line =
-                        if let Some(label) = self.footer.side_conversation_context_label.as_ref() {
-                            Some(side_conversation_context_line(label))
-                        } else if let Some(line) = self.shell_mode_footer_line() {
-                            Some(line)
-                        } else if transition_active {
-                            None
-                        } else if status_line_active {
-                            let full = self.mode_indicator_line(show_cycle_hint);
-                            let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
-                            let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
-                            if can_show_left_with_context(hint_rect, left_width, full_width) {
-                                full
-                            } else {
-                                compact
-                            }
+                    let right_line = if let Some(label) =
+                        self.footer.side_conversation_context_label.as_ref()
+                    {
+                        Some(side_conversation_context_line(label))
+                    } else if let Some(line) = self.shell_mode_footer_line() {
+                        Some(line)
+                    } else if transition_active {
+                        None
+                    } else if status_line_active {
+                        let full = self.mode_indicator_line(show_cycle_hint);
+                        let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
+                        if can_show_left_with_context(hint_rect, left_width, full_width) {
+                            full
                         } else {
-                            Some(self.right_footer_line_with_context())
-                        };
+                            let max_width =
+                                hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                            self.mode_indicator_line_fitting_width(max_width)
+                        }
+                    } else {
+                        Some(self.right_footer_line_with_context())
+                    };
                     let right_width = right_line.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                     if status_line_active
                         && let Some(max_left) = max_left_width_for_right(hint_rect, right_width)
@@ -5577,7 +5616,7 @@ mod tests {
         );
         snapshot_composer_state_with_width(
             "footer_collapse_plan_empty_mode_cycle_with_context",
-            /*width*/ 60,
+            /*width*/ 81,
             /*enhanced_keys_supported*/ true,
             |composer| {
                 setup_collab_footer(
@@ -5589,7 +5628,31 @@ mod tests {
         );
         snapshot_composer_state_with_width(
             "footer_collapse_plan_empty_mode_cycle_without_context",
-            /*width*/ 44,
+            /*width*/ 64,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer,
+                    /*context_percent*/ 100,
+                    Some(CollaborationModeIndicator::Plan),
+                );
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_plan_empty_build_truncated",
+            /*width*/ 34,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer,
+                    /*context_percent*/ 100,
+                    Some(CollaborationModeIndicator::Plan),
+                );
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_collapse_plan_empty_version_only",
+            /*width*/ 21,
             /*enhanced_keys_supported*/ true,
             |composer| {
                 setup_collab_footer(
@@ -5601,7 +5664,7 @@ mod tests {
         );
         snapshot_composer_state_with_width(
             "footer_collapse_plan_empty_mode_only",
-            /*width*/ 26,
+            /*width*/ 11,
             /*enhanced_keys_supported*/ true,
             |composer| {
                 setup_collab_footer(
@@ -5691,7 +5754,7 @@ mod tests {
         );
         snapshot_composer_state_with_width(
             "footer_collapse_plan_queue_short_with_context",
-            /*width*/ 50,
+            /*width*/ 75,
             /*enhanced_keys_supported*/ true,
             |composer| {
                 setup_collab_footer(
@@ -5705,7 +5768,7 @@ mod tests {
         );
         snapshot_composer_state_with_width(
             "footer_collapse_plan_queue_message_without_context",
-            /*width*/ 40,
+            /*width*/ 63,
             /*enhanced_keys_supported*/ true,
             |composer| {
                 setup_collab_footer(
@@ -5719,7 +5782,7 @@ mod tests {
         );
         snapshot_composer_state_with_width(
             "footer_collapse_plan_queue_short_without_context",
-            /*width*/ 30,
+            /*width*/ 55,
             /*enhanced_keys_supported*/ true,
             |composer| {
                 setup_collab_footer(

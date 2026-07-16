@@ -98,6 +98,7 @@ pub(crate) struct MentionBinding {
     /// Canonical mention target (for example `app://...` or absolute SKILL.md path).
     pub(crate) path: String,
 }
+mod build_provenance;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
@@ -106,6 +107,7 @@ mod effort_status_line;
 mod experimental_features_view;
 mod file_search_popup;
 mod footer;
+mod goal_status_indicator;
 mod list_selection_view;
 mod memories_settings_view;
 mod mentions_v2;
@@ -114,9 +116,9 @@ mod skill_popup;
 mod skills_toggle_view;
 pub(crate) mod slash_commands;
 pub(crate) use footer::CollaborationModeIndicator;
-pub(crate) use footer::GoalStatusIndicator;
+pub(crate) use goal_status_indicator::GoalStatusIndicator;
 #[cfg(test)]
-pub(crate) use footer::goal_status_indicator_line;
+pub(crate) use goal_status_indicator::line as goal_status_indicator_line;
 pub(crate) use list_selection_view::ColumnWidthMode;
 pub(crate) use list_selection_view::ListSelectionView;
 pub(crate) use list_selection_view::OnSelectionChangedCallback;
@@ -150,6 +152,7 @@ pub(crate) use title_setup::preview_line_for_title_items;
 mod paste_burst;
 mod pending_input_preview;
 mod pending_thread_approvals;
+mod plan_mode_indicator;
 pub(crate) mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;

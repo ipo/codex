@@ -6,4 +6,4 @@ expression: normalized_backend_snapshot(terminal.backend())
 "                                                                                "
 "› Ask Codex to do anything                                                      "
 "                                                                                "
-"  gpt-5.2 medium                                Plan mode (shift+tab to cycle)  "
+"  gpt-5.2… Plan mode · feature/robustness@0.144.1 · built 2026-07-12T13:31:30Z  "
