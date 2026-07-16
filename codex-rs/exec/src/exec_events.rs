@@ -1,3 +1,5 @@
+use codex_app_server_protocol::ThreadGoal as AppServerThreadGoal;
+use codex_app_server_protocol::ThreadGoalStatus as AppServerThreadGoalStatus;
 use codex_protocol::models::WebSearchAction;
 use serde::Deserialize;
 use serde::Serialize;
@@ -22,6 +24,9 @@ pub enum ThreadEvent {
     /// Indicates that a turn failed with an error.
     #[serde(rename = "turn.failed")]
     TurnFailed(TurnFailedEvent),
+    /// Emitted after exec creates a goal and after each goal turn completes.
+    #[serde(rename = "goal.updated")]
+    GoalUpdated(GoalUpdatedEvent),
     /// Emitted when a new item is added to the thread. Typically the item will be in an "in progress" state.
     #[serde(rename = "item.started")]
     ItemStarted(ItemStartedEvent),
@@ -54,6 +59,68 @@ pub struct TurnCompletedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TurnFailedEvent {
     pub error: ThreadErrorEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct GoalUpdatedEvent {
+    pub goal: Goal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct Goal {
+    pub thread_id: String,
+    pub objective: String,
+    pub status: GoalStatus,
+    #[ts(type = "number | null")]
+    pub token_budget: Option<i64>,
+    #[ts(type = "number")]
+    pub tokens_used: i64,
+    #[ts(type = "number")]
+    pub time_used_seconds: i64,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+}
+
+impl From<&AppServerThreadGoal> for Goal {
+    fn from(goal: &AppServerThreadGoal) -> Self {
+        Self {
+            thread_id: goal.thread_id.clone(),
+            objective: goal.objective.clone(),
+            status: goal.status.into(),
+            token_budget: goal.token_budget,
+            tokens_used: goal.tokens_used,
+            time_used_seconds: goal.time_used_seconds,
+            created_at: goal.created_at,
+            updated_at: goal.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum GoalStatus {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    Complete,
+}
+
+impl From<AppServerThreadGoalStatus> for GoalStatus {
+    fn from(status: AppServerThreadGoalStatus) -> Self {
+        match status {
+            AppServerThreadGoalStatus::Active => Self::Active,
+            AppServerThreadGoalStatus::Paused => Self::Paused,
+            AppServerThreadGoalStatus::Blocked => Self::Blocked,
+            AppServerThreadGoalStatus::UsageLimited => Self::UsageLimited,
+            AppServerThreadGoalStatus::BudgetLimited => Self::BudgetLimited,
+            AppServerThreadGoalStatus::Complete => Self::Complete,
+        }
+    }
 }
 
 /// Describes the usage of tokens during a turn.

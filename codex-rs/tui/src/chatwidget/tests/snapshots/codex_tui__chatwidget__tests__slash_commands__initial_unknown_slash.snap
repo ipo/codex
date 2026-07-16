@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: rendered
+---
+• Unrecognized command '/does-not-exist'. Type "/" for a list of supported commands.
