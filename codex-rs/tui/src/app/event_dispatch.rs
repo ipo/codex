@@ -1581,7 +1581,11 @@ impl App {
                                     ),
                                 ));
                                 if self.apply_permission_profile_selection(selection).await {
-                                    self.chat_widget.submit_initial_user_message_if_pending();
+                                    if self.chat_widget.submit_initial_user_message_if_pending()
+                                        == crate::chatwidget::InitialUserMessageSubmission::Continue
+                                    {
+                                        self.chat_widget.maybe_send_next_queued_input();
+                                    }
                                 }
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
@@ -1813,7 +1817,11 @@ impl App {
                     Some(RuntimePermissionProfileOverride::from_config(&self.config));
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
-                self.chat_widget.submit_initial_user_message_if_pending();
+                if self.chat_widget.submit_initial_user_message_if_pending()
+                    == crate::chatwidget::InitialUserMessageSubmission::Continue
+                {
+                    self.chat_widget.maybe_send_next_queued_input();
+                }
 
                 // If a managed filesystem sandbox is active, run the Windows
                 // world-writable scan.
@@ -1850,8 +1858,11 @@ impl App {
                 }
             }
             AppEvent::SelectPermissionProfile(selection) => {
-                if self.apply_permission_profile_selection(selection).await {
-                    self.chat_widget.submit_initial_user_message_if_pending();
+                if self.apply_permission_profile_selection(selection).await
+                    && self.chat_widget.submit_initial_user_message_if_pending()
+                        == crate::chatwidget::InitialUserMessageSubmission::Continue
+                {
+                    self.chat_widget.maybe_send_next_queued_input();
                 }
             }
             AppEvent::UpdateApprovalsReviewer(policy) => {

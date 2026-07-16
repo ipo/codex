@@ -585,9 +585,13 @@ impl App {
                 if started.blocks_direct_input {
                     self.mark_primary_thread_parent_owned(started.session.thread_id);
                 }
-                self.enqueue_primary_thread_session(started.session, started.turns)
+                let initial_submission = self
+                    .enqueue_primary_thread_session(started.session, started.turns)
                     .await?;
-                self.chat_widget.maybe_send_next_queued_input();
+                if initial_submission == crate::chatwidget::InitialUserMessageSubmission::NoMessage
+                {
+                    self.chat_widget.maybe_send_next_queued_input();
+                }
             }
             Err(err) => {
                 return Err(color_eyre::eyre::eyre!(
