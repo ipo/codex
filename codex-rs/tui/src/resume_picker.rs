@@ -63,10 +63,21 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::warn;
 use unicode_width::UnicodeWidthStr;
 
+mod indexed_first_page;
+
+use self::indexed_first_page::InitialPageLoadMode;
+use self::indexed_first_page::InitialPageLoadState;
+use self::indexed_first_page::ProvisionalSelectionPolicy;
+use self::indexed_first_page::ProvisionalSelectionRequest;
+use self::indexed_first_page::ThreadListLookupMode;
+use self::indexed_first_page::format_estimated_runtime;
+use self::indexed_first_page::validate_provisional_selection;
+
 const PAGE_SIZE: usize = 25;
 const LOAD_NEAR_THRESHOLD: usize = 5;
 const SESSION_META_INDENT_WIDTH: usize = 2;
 const SESSION_META_DATE_WIDTH: usize = 12;
+const SESSION_META_RUNTIME_WIDTH: usize = 16;
 const SESSION_META_FIELD_GAP_WIDTH: usize = 2;
 const SESSION_META_MIN_CWD_WIDTH: usize = 30;
 const SESSION_META_MAX_CWD_WIDTH: usize = 72;
@@ -78,7 +89,7 @@ const FOOTER_HINT_GAP: usize = 3;
 const PICKER_CHROME_HEIGHT: u16 = 8;
 const PICKER_LIST_HORIZONTAL_INSET: u16 = 4;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SessionTarget {
     pub path: Option<PathBuf>,
     pub thread_id: ThreadId,
@@ -93,7 +104,7 @@ impl SessionTarget {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum SessionSelection {
     StartFresh,
     Resume(SessionTarget),
@@ -145,6 +156,7 @@ struct PageLoadRequest {
     cwd_filter: Option<PathBuf>,
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
+    initial_page_mode: InitialPageLoadMode,
 }
 
 enum PickerLoadRequest {
@@ -240,6 +252,10 @@ impl From<SessionListDensity> for SessionPickerViewMode {
 
 type PickerLoader = Arc<dyn Fn(PickerLoadRequest) + Send + Sync>;
 enum BackgroundEvent {
+    IndexedPage {
+        request_token: usize,
+        page: PickerPage,
+    },
     Page {
         request_token: usize,
         search_token: Option<usize>,
@@ -283,6 +299,8 @@ struct SessionPickerRunOptions {
     view_persistence: Option<SessionPickerViewPersistence>,
     pager_keymap: PagerKeymap,
     list_keymap: ListKeymap,
+    initial_page_mode: InitialPageLoadMode,
+    provisional_selection_policy: Option<ProvisionalSelectionPolicy>,
 }
 
 /// Interactive session picker that lists app-server threads with simple search,
@@ -369,6 +387,16 @@ async fn run_resume_picker_with_launch_context(
         }),
         pager_keymap: runtime_keymap.pager,
         list_keymap: runtime_keymap.list,
+        initial_page_mode: initial_page_load_mode(
+            SessionPickerAction::Resume,
+            uses_remote_workspace,
+        ),
+        provisional_selection_policy: (!uses_remote_workspace).then(|| {
+            ProvisionalSelectionPolicy {
+                codex_home: config.codex_home.to_path_buf(),
+                include_non_interactive,
+            }
+        }),
     };
     run_session_picker_with_loader(
         tui,
@@ -414,6 +442,8 @@ pub async fn run_fork_picker_with_app_server(
         }),
         pager_keymap: runtime_keymap.pager,
         list_keymap: runtime_keymap.list,
+        initial_page_mode: initial_page_load_mode(SessionPickerAction::Fork, uses_remote_workspace),
+        provisional_selection_policy: None,
     };
     run_session_picker_with_loader(
         tui,
@@ -450,6 +480,8 @@ async fn run_session_picker_with_loader(
     state.pager_keymap = options.pager_keymap;
     state.list_keymap = options.list_keymap;
     state.launch_context = options.launch_context;
+    state.initial_page_mode = options.initial_page_mode;
+    state.provisional_selection_policy = options.provisional_selection_policy;
     state.start_initial_load();
     state.request_frame();
 
@@ -527,6 +559,18 @@ fn picker_provider_filter(config: &Config, uses_remote_workspace: bool) -> Provi
     }
 }
 
+fn initial_page_load_mode(
+    action: SessionPickerAction,
+    uses_remote_workspace: bool,
+) -> InitialPageLoadMode {
+    match (action, uses_remote_workspace) {
+        (SessionPickerAction::Resume, false) => InitialPageLoadMode::IndexedThenReconcile,
+        (SessionPickerAction::Resume, true) | (SessionPickerAction::Fork, _) => {
+            InitialPageLoadMode::AuthoritativeOnly
+        }
+    }
+}
+
 fn picker_runtime_keymap(config: &Config) -> Result<RuntimeKeymap> {
     RuntimeKeymap::from_config(&config.tui_keymap)
         .map_err(|err| color_eyre::eyre::eyre!("invalid keymap configuration: {err}"))
@@ -561,6 +605,23 @@ fn spawn_app_server_page_loader(
             match request {
                 PickerLoadRequest::Page(request) => {
                     let cursor = request.cursor.map(|PageCursor::AppServer(cursor)| cursor);
+                    if request.initial_page_mode == InitialPageLoadMode::IndexedThenReconcile
+                        && let Ok(page) = load_app_server_page(
+                            &mut app_server,
+                            cursor.clone(),
+                            request.cwd_filter.as_deref(),
+                            request.provider_filter.clone(),
+                            request.sort_key,
+                            include_non_interactive,
+                            ThreadListLookupMode::StateDbOnly,
+                        )
+                        .await
+                    {
+                        let _ = bg_tx.send(BackgroundEvent::IndexedPage {
+                            request_token: request.request_token,
+                            page,
+                        });
+                    }
                     let page = load_app_server_page(
                         &mut app_server,
                         cursor,
@@ -568,6 +629,7 @@ fn spawn_app_server_page_loader(
                         request.provider_filter,
                         request.sort_key,
                         include_non_interactive,
+                        ThreadListLookupMode::ScanAndRepair,
                     )
                     .await;
                     let _ = bg_tx.send(BackgroundEvent::Page {
@@ -667,6 +729,9 @@ struct PickerState {
     overlay: Option<Overlay>,
     pager_keymap: PagerKeymap,
     list_keymap: ListKeymap,
+    initial_page_mode: InitialPageLoadMode,
+    initial_page_state: InitialPageLoadState,
+    provisional_selection_policy: Option<ProvisionalSelectionPolicy>,
 }
 
 struct PaginationState {
@@ -737,6 +802,7 @@ async fn load_app_server_page(
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
+    lookup_mode: ThreadListLookupMode,
 ) -> std::io::Result<PickerPage> {
     let response = app_server
         .thread_list(thread_list_params(
@@ -745,6 +811,7 @@ async fn load_app_server_page(
             provider_filter,
             sort_key,
             include_non_interactive,
+            lookup_mode,
         ))
         .await
         .map_err(std::io::Error::other)?;
@@ -827,7 +894,7 @@ impl SearchState {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Row {
     path: Option<PathBuf>,
     preview: String,
@@ -941,6 +1008,9 @@ impl PickerState {
             overlay: None,
             pager_keymap: RuntimeKeymap::defaults().pager,
             list_keymap: RuntimeKeymap::defaults().list,
+            initial_page_mode: InitialPageLoadMode::AuthoritativeOnly,
+            initial_page_state: InitialPageLoadState::Authoritative,
+            provisional_selection_policy: None,
         }
     }
 
@@ -1106,6 +1176,34 @@ impl PickerState {
             }
             _ if self.list_keymap.accept.is_pressed(key) => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
+                    if self.initial_page_state.is_provisional()
+                        && let Some(policy) = self.provisional_selection_policy.as_ref()
+                    {
+                        let cwd_filter = self.active_cwd_filter();
+                        match validate_provisional_selection(ProvisionalSelectionRequest {
+                            row,
+                            policy,
+                            provider_filter: &self.provider_filter,
+                            cwd_filter: cwd_filter.as_deref(),
+                            query: &self.query,
+                        })
+                        .await
+                        {
+                            Ok(target) => {
+                                return Ok(Some(self.action.selection(
+                                    target.path,
+                                    target.thread_id,
+                                )));
+                            }
+                            Err(_) => {
+                                self.inline_error = Some(
+                                    "Selected session is no longer available".to_string(),
+                                );
+                                self.request_frame();
+                                return Ok(None);
+                            }
+                        }
+                    }
                     let path = row.path.clone();
                     let thread_id = match row.thread_id {
                         Some(thread_id) => Some(thread_id),
@@ -1267,6 +1365,8 @@ impl PickerState {
             request_token,
             search_token,
         });
+        self.initial_page_state =
+            InitialPageLoadState::begin(self.initial_page_mode, request_token);
         self.request_frame();
 
         (self.picker_loader)(PickerLoadRequest::Page(PageLoadRequest {
@@ -1276,11 +1376,29 @@ impl PickerState {
             cwd_filter: self.active_cwd_filter(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
+            initial_page_mode: self.initial_page_mode,
         }));
     }
 
     async fn handle_background_event(&mut self, event: BackgroundEvent) -> Result<()> {
         match event {
+            BackgroundEvent::IndexedPage {
+                request_token,
+                mut page,
+            } => {
+                let pending = match self.pagination.loading {
+                    LoadingState::Pending(pending) => pending,
+                    LoadingState::Idle => return Ok(()),
+                };
+                if pending.request_token != request_token
+                    || !self.initial_page_state.accept_indexed(request_token)
+                {
+                    return Ok(());
+                }
+                page.next_cursor = None;
+                page.reached_scan_cap = false;
+                self.replace_loaded_rows(page, /*preserve_selection*/ false);
+            }
             BackgroundEvent::Page {
                 request_token,
                 search_token,
@@ -1293,12 +1411,32 @@ impl PickerState {
                 if pending.request_token != request_token {
                     return Ok(());
                 }
+                let had_provisional_rows =
+                    self.initial_page_state.is_provisional_for(request_token);
                 self.pagination.loading = LoadingState::Idle;
-                let page = page.map_err(color_eyre::Report::from)?;
-                self.ingest_page(page);
+                let page = match page {
+                    Ok(page) => page,
+                    Err(_) if had_provisional_rows => {
+                        self.initial_page_state = InitialPageLoadState::Authoritative;
+                        self.pagination.next_cursor = None;
+                        self.search_state = SearchState::Idle;
+                        self.inline_error =
+                            Some("Could not refresh sessions; showing indexed results".to_string());
+                        self.request_frame();
+                        return Ok(());
+                    }
+                    Err(err) => return Err(color_eyre::Report::from(err)),
+                };
+                self.initial_page_state = InitialPageLoadState::Authoritative;
+                if had_provisional_rows {
+                    self.replace_loaded_rows(page, /*preserve_selection*/ true);
+                } else {
+                    self.ingest_page(page);
+                }
                 self.complete_pending_page_down();
                 let completed_token = pending.search_token.or(search_token);
                 self.continue_search_if_token_matches(completed_token);
+                self.start_search_after_reconcile_if_needed();
             }
             BackgroundEvent::Preview { thread_id, preview } => {
                 self.transcript_previews.insert(
@@ -1371,6 +1509,65 @@ impl PickerState {
         }
 
         self.apply_filter();
+    }
+
+    fn replace_loaded_rows(&mut self, page: PickerPage, preserve_selection: bool) {
+        let selected_thread_id = preserve_selection
+            .then(|| {
+                self.filtered_rows
+                    .get(self.selected)
+                    .and_then(|row| row.thread_id)
+            })
+            .flatten();
+        let selected_key = preserve_selection
+            .then(|| {
+                self.filtered_rows
+                    .get(self.selected)
+                    .and_then(Row::seen_key)
+            })
+            .flatten();
+        let selected_index = self.selected;
+
+        self.pagination.next_cursor = None;
+        self.pagination.num_scanned_files = 0;
+        self.pagination.reached_scan_cap = false;
+        self.all_rows.clear();
+        self.filtered_rows.clear();
+        self.seen_rows.clear();
+        self.selected = 0;
+        self.ingest_page(page);
+
+        let replacement_index = selected_thread_id
+            .and_then(|thread_id| {
+                self.filtered_rows
+                    .iter()
+                    .position(|row| row.thread_id == Some(thread_id))
+            })
+            .or_else(|| {
+                selected_key.as_ref().and_then(|selected_key| {
+                    self.filtered_rows
+                        .iter()
+                        .position(|row| row.seen_key().as_ref() == Some(selected_key))
+                })
+            });
+        self.selected = replacement_index
+            .unwrap_or(selected_index)
+            .min(self.filtered_rows.len().saturating_sub(1));
+        self.ensure_selected_visible();
+        self.request_frame();
+    }
+
+    fn start_search_after_reconcile_if_needed(&mut self) {
+        if self.query.is_empty()
+            || !self.filtered_rows.is_empty()
+            || self.pagination.next_cursor.is_none()
+            || self.search_state.is_active()
+        {
+            return;
+        }
+        let token = self.allocate_search_token();
+        self.search_state = SearchState::Active { token };
+        self.load_more_if_needed(LoadTrigger::Search { token });
     }
 
     fn complete_pending_page_down(&mut self) {
@@ -1586,6 +1783,7 @@ impl PickerState {
             cwd_filter: self.active_cwd_filter(),
             provider_filter: self.provider_filter.clone(),
             sort_key: self.sort_key,
+            initial_page_mode: InitialPageLoadMode::AuthoritativeOnly,
         }));
     }
 
@@ -1809,6 +2007,7 @@ fn thread_list_params(
     provider_filter: ProviderFilter,
     sort_key: ThreadSortKey,
     include_non_interactive: bool,
+    lookup_mode: ThreadListLookupMode,
 ) -> ThreadListParams {
     ThreadListParams {
         cursor,
@@ -1824,7 +2023,10 @@ fn thread_list_params(
         parent_thread_id: None,
         ancestor_thread_id: None,
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().into_owned())),
-        use_state_db_only: false,
+        use_state_db_only: match lookup_mode {
+            ThreadListLookupMode::StateDbOnly => true,
+            ThreadListLookupMode::ScanAndRepair => false,
+        },
         search_term: None,
     }
 }
@@ -2555,20 +2757,22 @@ fn render_comfortable_session_lines(
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
     let created = format_relative_time(reference, row.created_at);
     let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
+    let runtime = format_estimated_runtime(row.created_at, row.updated_at);
     let branch = row.git_branch.as_deref();
     let cwd = row
         .cwd
         .as_ref()
         .map(|path| format_directory_display(path, /*max_width*/ None));
-    let footer_lines = render_footer_lines(
-        state.sort_key,
-        &created,
-        &updated,
+    let footer_lines = render_footer_lines(FooterInput {
+        sort_key: state.sort_key,
+        created: &created,
+        updated: &updated,
+        runtime: &runtime,
         branch,
-        cwd.as_deref(),
-        state.filter_mode == SessionFilterMode::All,
+        cwd: cwd.as_deref(),
+        show_cwd: state.filter_mode == SessionFilterMode::All,
         width,
-    );
+    });
     if let Some(style) = row_style {
         lines.extend(apply_session_row_background(footer_lines, style, width));
     } else {
@@ -2612,6 +2816,7 @@ fn render_dense_session_lines(
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
     let created = format_relative_time(reference, row.created_at);
     let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
+    let runtime = format_estimated_runtime(row.created_at, row.updated_at);
     let date = match state.sort_key {
         ThreadSortKey::CreatedAt => created,
         ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => updated,
@@ -2619,6 +2824,7 @@ fn render_dense_session_lines(
     let mut lines = vec![dense_summary_line(DenseSummaryInput {
         marker,
         date: &date,
+        runtime: (width >= 40).then_some(runtime.as_str()),
         title: row.display_preview(),
         is_selected,
         is_zebra,
@@ -2633,6 +2839,7 @@ fn render_dense_session_lines(
 struct DenseSummaryInput<'a> {
     marker: Span<'static>,
     date: &'a str,
+    runtime: Option<&'a str>,
     title: &'a str,
     is_selected: bool,
     is_zebra: bool,
@@ -2642,18 +2849,21 @@ struct DenseSummaryInput<'a> {
 fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
     let marker_width = input.marker.width();
     let available = (input.width as usize).saturating_sub(marker_width);
-    let columns = dense_columns(available);
+    let columns = dense_columns(available, input.runtime.is_some());
     let title = if input.is_selected {
         selected_session_title_span(dense_column_text(input.title, columns.title_width))
     } else {
         dense_column_text(input.title, columns.title_width).into()
     };
 
-    let spans = vec![
+    let mut spans = vec![
         input.marker,
         dense_column_text(input.date, columns.date_width).dim(),
-        title,
     ];
+    if let Some(runtime) = input.runtime {
+        spans.push(dense_column_text(&format!("runtime {runtime}"), columns.runtime_width).dim());
+    }
+    spans.push(title);
     let mut line = Line::from(spans);
     if input.is_selected {
         let padding = (input.width as usize).saturating_sub(line.width());
@@ -2675,14 +2885,21 @@ fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
 
 struct DenseColumns {
     date_width: usize,
+    runtime_width: usize,
     title_width: usize,
 }
 
-fn dense_columns(width: usize) -> DenseColumns {
+fn dense_columns(width: usize, show_runtime: bool) -> DenseColumns {
     let date_width = SESSION_META_DATE_WIDTH;
+    let runtime_width = if show_runtime {
+        SESSION_META_RUNTIME_WIDTH
+    } else {
+        0
+    };
     DenseColumns {
         date_width,
-        title_width: width.saturating_sub(date_width),
+        runtime_width,
+        title_width: width.saturating_sub(date_width + runtime_width),
     }
 }
 
@@ -2732,20 +2949,36 @@ fn selected_session_title_span(title: String) -> Span<'static> {
     title.set_style(selected_session_style())
 }
 
-fn render_footer_lines(
+struct FooterInput<'a> {
     sort_key: ThreadSortKey,
-    created: &str,
-    updated: &str,
-    branch: Option<&str>,
-    cwd: Option<&str>,
+    created: &'a str,
+    updated: &'a str,
+    runtime: &'a str,
+    branch: Option<&'a str>,
+    cwd: Option<&'a str>,
     show_cwd: bool,
     width: u16,
-) -> Vec<Line<'static>> {
+}
+
+fn render_footer_lines(input: FooterInput<'_>) -> Vec<Line<'static>> {
+    let FooterInput {
+        sort_key,
+        created,
+        updated,
+        runtime,
+        branch,
+        cwd,
+        show_cwd,
+        width,
+    } = input;
     let date = match sort_key {
         ThreadSortKey::CreatedAt => created,
         ThreadSortKey::UpdatedAt | ThreadSortKey::RecencyAt => updated,
     };
-    let mut parts = vec![FooterPart::Date(date.to_string())];
+    let mut parts = vec![
+        FooterPart::Date(date.to_string()),
+        FooterPart::Runtime(format!("runtime {runtime}")),
+    ];
     if show_cwd {
         parts.push(FooterPart::Cwd(cwd.map(str::to_string)));
     }
@@ -2755,6 +2988,7 @@ fn render_footer_lines(
 
 enum FooterPart {
     Date(String),
+    Runtime(String),
     Branch(Option<String>),
     Cwd(Option<String>),
 }
@@ -2763,6 +2997,7 @@ impl FooterPart {
     fn text(&self) -> &str {
         match self {
             FooterPart::Date(text) => text,
+            FooterPart::Runtime(text) => text,
             FooterPart::Branch(Some(text)) | FooterPart::Cwd(Some(text)) => text,
             FooterPart::Branch(None) => "no branch",
             FooterPart::Cwd(None) => "no cwd",
@@ -2771,7 +3006,7 @@ impl FooterPart {
 
     fn prefix(&self) -> Option<&'static str> {
         match self {
-            FooterPart::Date(_) => None,
+            FooterPart::Date(_) | FooterPart::Runtime(_) => None,
             FooterPart::Branch(_) => Some(SESSION_META_BRANCH_ICON),
             FooterPart::Cwd(_) => Some(SESSION_META_CWD_ICON),
         }
@@ -2812,7 +3047,10 @@ fn pack_footer_parts(parts: Vec<FooterPart>, width: u16) -> Vec<Line<'static>> {
 
 fn cwd_column_width(width: usize) -> usize {
     let available = width.saturating_sub(
-        SESSION_META_INDENT_WIDTH + SESSION_META_DATE_WIDTH + 2 * SESSION_META_FIELD_GAP_WIDTH,
+        SESSION_META_INDENT_WIDTH
+            + SESSION_META_DATE_WIDTH
+            + SESSION_META_RUNTIME_WIDTH
+            + 3 * SESSION_META_FIELD_GAP_WIDTH,
     );
     (available / 2).clamp(SESSION_META_MIN_CWD_WIDTH, SESSION_META_MAX_CWD_WIDTH)
 }
@@ -2833,6 +3071,7 @@ fn footer_part_width(part: &FooterPart, padded: bool, cwd_width: usize) -> usize
     let actual_width = prefix_width + prefix_gap_width + text_width;
     match part {
         FooterPart::Date(_) if padded => SESSION_META_DATE_WIDTH.max(actual_width),
+        FooterPart::Runtime(_) if padded => SESSION_META_RUNTIME_WIDTH.max(actual_width),
         FooterPart::Cwd(_) if padded => cwd_width,
         _ => actual_width,
     }
@@ -2853,8 +3092,12 @@ fn footer_line(parts: Vec<FooterPart>, width: usize, cwd_width: usize) -> Line<'
         let padded = idx + 1 < part_count;
         let target_width = match part {
             FooterPart::Date(_) if padded => Some(SESSION_META_DATE_WIDTH),
+            FooterPart::Runtime(_) if padded => Some(SESSION_META_RUNTIME_WIDTH),
             FooterPart::Cwd(_) if padded => Some(cwd_width),
-            FooterPart::Date(_) | FooterPart::Branch(_) | FooterPart::Cwd(_) => None,
+            FooterPart::Date(_)
+            | FooterPart::Runtime(_)
+            | FooterPart::Branch(_)
+            | FooterPart::Cwd(_) => None,
         };
         let used_width = push_footer_part(&mut spans, part, target_width, remaining_width);
         remaining_width = remaining_width.saturating_sub(used_width);
@@ -2969,6 +3212,11 @@ fn render_expanded_session_details(
             "Updated:",
             reference,
             row.updated_at.or(row.created_at),
+            width,
+        ),
+        expanded_detail_line(
+            "Runtime:",
+            &format_estimated_runtime(row.created_at, row.updated_at),
             width,
         ),
         expanded_detail_line("Directory:", &directory, width),
@@ -3168,6 +3416,14 @@ fn format_timestamp(ts: DateTime<Utc>) -> String {
 }
 
 fn render_empty_state_line(state: &PickerState) -> Line<'static> {
+    if state.initial_page_state.is_provisional() {
+        let message = if state.query.is_empty() {
+            "No indexed sessions yet · refreshing…"
+        } else {
+            "No indexed results · refreshing…"
+        };
+        return vec![message.italic().dim()].into();
+    }
     if !state.query.is_empty() {
         if state.search_state.is_active()
             || (state.pagination.loading.is_pending() && state.pagination.next_cursor.is_some())
@@ -3313,12 +3569,14 @@ mod tests {
             ProviderFilter::MatchDefault(String::from("openai")),
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ false,
+            ThreadListLookupMode::StateDbOnly,
         );
 
         assert_eq!(
             params.cwd,
             Some(ThreadListCwdFilter::One(String::from("/tmp/project")))
         );
+        assert!(params.use_state_db_only);
     }
 
     #[test]
@@ -3409,6 +3667,7 @@ mod tests {
         ));
         assert!(rendered.contains("Created:    17 minutes ago · 2026-05-02 14:31:08"));
         assert!(rendered.contains("Updated:    now · 2026-05-02 14:48:19"));
+        assert!(rendered.contains("Runtime:    17m"));
         assert!(rendered.contains(&format!("Directory:  {expected_directory}")));
         assert!(rendered.contains("Branch:      codex/raw-scrollback-mode"));
         assert!(rendered.contains("Conversation:"));
@@ -3416,24 +3675,26 @@ mod tests {
 
     #[test]
     fn footer_prioritizes_active_sort_timestamp() {
-        let updated = render_footer_lines(
-            ThreadSortKey::UpdatedAt,
-            "5h ago",
-            "3h ago",
-            Some("main"),
-            Some("tmp/codex"),
-            /*show_cwd*/ true,
-            /*width*/ 80,
-        );
-        let created = render_footer_lines(
-            ThreadSortKey::CreatedAt,
-            "5h ago",
-            "3h ago",
-            Some("main"),
-            Some("tmp/codex"),
-            /*show_cwd*/ true,
-            /*width*/ 80,
-        );
+        let updated = render_footer_lines(FooterInput {
+            sort_key: ThreadSortKey::UpdatedAt,
+            created: "5h ago",
+            updated: "3h ago",
+            runtime: "2h 0m",
+            branch: Some("main"),
+            cwd: Some("tmp/codex"),
+            show_cwd: true,
+            width: 80,
+        });
+        let created = render_footer_lines(FooterInput {
+            sort_key: ThreadSortKey::CreatedAt,
+            created: "5h ago",
+            updated: "3h ago",
+            runtime: "2h 0m",
+            branch: Some("main"),
+            cwd: Some("tmp/codex"),
+            show_cwd: true,
+            width: 80,
+        });
 
         assert_eq!(updated.len(), 1);
         assert_eq!(created.len(), 1);
@@ -3447,15 +3708,16 @@ mod tests {
 
     #[test]
     fn footer_marks_missing_branch() {
-        let footer = render_footer_lines(
-            ThreadSortKey::UpdatedAt,
-            "5h ago",
-            "3h ago",
-            /*branch*/ None,
-            Some("/tmp/codex"),
-            /*show_cwd*/ true,
-            /*width*/ 80,
-        );
+        let footer = render_footer_lines(FooterInput {
+            sort_key: ThreadSortKey::UpdatedAt,
+            created: "5h ago",
+            updated: "3h ago",
+            runtime: "2h 0m",
+            branch: None,
+            cwd: Some("/tmp/codex"),
+            show_cwd: true,
+            width: 80,
+        });
 
         assert_eq!(footer.len(), 1);
         let rendered = footer[0].to_string();
@@ -3467,15 +3729,16 @@ mod tests {
     #[test]
     fn footer_branch_expands_when_line_has_room() {
         let branch = "etraut/animations-false-improvements";
-        let footer = render_footer_lines(
-            ThreadSortKey::UpdatedAt,
-            "5h ago",
-            "4h ago",
-            Some(branch),
-            Some("~/code/codex.etraut-animations-false-improvements/codex-rs"),
-            /*show_cwd*/ true,
-            /*width*/ 140,
-        );
+        let footer = render_footer_lines(FooterInput {
+            sort_key: ThreadSortKey::UpdatedAt,
+            created: "5h ago",
+            updated: "4h ago",
+            runtime: "1h 0m",
+            branch: Some(branch),
+            cwd: Some("~/code/codex.etraut-animations-false-improvements/codex-rs"),
+            show_cwd: true,
+            width: 140,
+        });
 
         assert_eq!(footer.len(), 1);
         assert!(footer[0].to_string().contains(branch));
@@ -3485,15 +3748,16 @@ mod tests {
     fn footer_cwd_truncates_to_responsive_column() {
         let cwd = "~/code/codex.owner-extremely-long-worktree-name-that-needs-truncating/codex-rs";
         let branch = "owner/branch";
-        let footer = render_footer_lines(
-            ThreadSortKey::UpdatedAt,
-            "5h ago",
-            "4h ago",
-            Some(branch),
-            Some(cwd),
-            /*show_cwd*/ true,
-            /*width*/ 80,
-        );
+        let footer = render_footer_lines(FooterInput {
+            sort_key: ThreadSortKey::UpdatedAt,
+            created: "5h ago",
+            updated: "4h ago",
+            runtime: "1h 0m",
+            branch: Some(branch),
+            cwd: Some(cwd),
+            show_cwd: true,
+            width: 80,
+        });
 
         assert_eq!(footer.len(), 1);
         let footer = footer[0].to_string();
@@ -3505,15 +3769,16 @@ mod tests {
 
     #[test]
     fn footer_omits_cwd_when_hidden() {
-        let footer = render_footer_lines(
-            ThreadSortKey::UpdatedAt,
-            "5h ago",
-            "4h ago",
-            Some("owner/branch"),
-            Some("~/code/codex.owner-worktree/codex-rs"),
-            /*show_cwd*/ false,
-            /*width*/ 80,
-        );
+        let footer = render_footer_lines(FooterInput {
+            sort_key: ThreadSortKey::UpdatedAt,
+            created: "5h ago",
+            updated: "4h ago",
+            runtime: "1h 0m",
+            branch: Some("owner/branch"),
+            cwd: Some("~/code/codex.owner-worktree/codex-rs"),
+            show_cwd: false,
+            width: 80,
+        });
 
         assert_eq!(footer.len(), 1);
         let footer = footer[0].to_string();
@@ -3538,6 +3803,7 @@ mod tests {
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ false,
+            ThreadListLookupMode::ScanAndRepair,
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
@@ -3550,6 +3816,7 @@ mod tests {
             params.cwd,
             Some(ThreadListCwdFilter::One(String::from("repo/on/server")))
         );
+        assert!(!params.use_state_db_only);
     }
 
     #[test]
@@ -3560,6 +3827,7 @@ mod tests {
             ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ true,
+            ThreadListLookupMode::ScanAndRepair,
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
@@ -3593,6 +3861,10 @@ mod tests {
             let guard = recorded_requests.lock().unwrap();
             assert_eq!(guard.len(), 1);
             assert_eq!(guard[0].cwd_filter, remote_cwd);
+            assert_eq!(
+                guard[0].initial_page_mode,
+                InitialPageLoadMode::AuthoritativeOnly
+            );
         }
 
         let row = Row {
@@ -3739,6 +4011,29 @@ mod tests {
 
         let snapshot = terminal.backend().to_string();
         assert_snapshot!("resume_picker_search_error", snapshot);
+    }
+
+    #[test]
+    fn indexed_picker_status_messages_snapshot() {
+        let loader = page_only_loader(|_| {});
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.initial_page_state = InitialPageLoadState::Provisional { request_token: 1 };
+        let empty = render_empty_state_line(&state).to_string();
+        state.initial_page_state = InitialPageLoadState::Authoritative;
+        state.inline_error =
+            Some("Could not refresh sessions; showing indexed results".to_string());
+
+        assert_snapshot!(
+            "resume_picker_indexed_status_messages",
+            format!("{empty}\n{}", search_line(&state, /*width*/ 80))
+        );
     }
 
     #[test]
@@ -4767,7 +5062,7 @@ session_picker_view = "dense"
         assert_snapshot!(
             "resume_picker_dense_narrow",
             render_dense_row_snapshot(
-                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 48,
+                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 39,
             )
         );
     }
@@ -4808,6 +5103,7 @@ session_picker_view = "dense"
         let line = dense_summary_line(DenseSummaryInput {
             marker: selection_marker(/*is_selected*/ true, /*is_expanded*/ false),
             date: "15m ago",
+            runtime: Some("1h 5m"),
             title: "Selected dense row",
             is_selected: true,
             is_zebra: false,
@@ -4824,6 +5120,7 @@ session_picker_view = "dense"
         let line = dense_summary_line(DenseSummaryInput {
             marker: selection_marker(/*is_selected*/ false, /*is_expanded*/ false),
             date: "15m ago",
+            runtime: Some("1h 5m"),
             title: "Zebra dense row",
             is_selected: false,
             is_zebra: true,
