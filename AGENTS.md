@@ -69,6 +69,16 @@ In the codex-rs folder where the rust code lives:
   - At the end of the task, remove remaining temporary build artifacts. Never remove user-owned or
     broadly shared caches unless the user has explicitly authorized it.
 
+## Locally installed Codex builds
+
+- Build Codex binaries intended for local installation or daily use with the `release` profile.
+  `scripts/build_codex_package.py` defaults to `dev-small`, so always pass
+  `--cargo-profile release`; never install a `dev` or `dev-small` build.
+- Keep debug symbols in locally installed `codex` and `codex-code-mode-host` binaries; do not strip
+  them.
+- On Linux, finalize `bwrap` first, hash the exact bytes that will be packaged, and build Codex with
+  that digest in `CODEX_BWRAP_SHA256`.
+
 Run `just fmt` (in the `codex-rs` directory) automatically after you have finished making code changes anywhere in this repository; do not ask for approval to run it. Additionally, run the tests:
 
 1. Do not run `cargo test` directly. Use `just test` so test execution follows the repo defaults.
