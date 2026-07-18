@@ -970,6 +970,122 @@ async fn list_threads_default_filter_returns_filesystem_scan_results() -> std::i
 }
 
 #[tokio::test]
+async fn list_threads_metadata_filter_keeps_valid_rows_beyond_head_scan() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let uuid = Uuid::from_u128(9014);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let ts = "2025-01-03T15-00-00";
+    let day_dir = home.path().join("sessions/2025/01/03");
+    fs::create_dir_all(&day_dir)?;
+    let rollout_path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let mut file = File::create(&rollout_path)?;
+    let meta = serde_json::json!({
+        "timestamp": ts,
+        "type": "session_meta",
+        "payload": {
+            "session_id": uuid,
+            "id": uuid,
+            "timestamp": ts,
+            "cwd": home.path().display().to_string(),
+            "originator": "test_originator",
+            "cli_version": "test_version",
+            "source": "cli",
+            "model_provider": "test-provider",
+        },
+    });
+    writeln!(file, "{meta}")?;
+    let filler = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+            message: "still working".to_string(),
+            phase: None,
+            memory_citation: None,
+        })),
+    };
+    let filler = serde_json::to_string(&filler).expect("filler should serialize");
+    for _ in 0..220 {
+        writeln!(file, "{filler}")?;
+    }
+    let user_event = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
+            message: "Hello beyond the bounded head scan".to_string(),
+            images: None,
+            local_images: Vec::new(),
+            text_elements: Vec::new(),
+            ..Default::default()
+        })),
+    };
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&user_event).expect("user event should serialize")
+    )?;
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+    let created_at = chrono::Utc
+        .with_ymd_and_hms(2025, 1, 3, 15, 0, 0)
+        .single()
+        .expect("valid datetime");
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        rollout_path.clone(),
+        created_at,
+        SessionSource::Cli,
+    );
+    builder.model_provider = Some(config.model_provider_id.clone());
+    builder.cwd = home.path().to_path_buf();
+    let mut metadata = builder.build(config.model_provider_id.as_str());
+    metadata.first_user_message = Some("Hello beyond the bounded head scan".to_string());
+    metadata.preview = metadata.first_user_message.clone();
+    runtime
+        .upsert_thread(&metadata)
+        .await
+        .expect("state db upsert should succeed");
+
+    let cwd_filters = [home.path().to_path_buf()];
+    let page = RolloutRecorder::list_threads(
+        Some(runtime),
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::UpdatedAt,
+        SortDirection::Desc,
+        &[SessionSource::Cli],
+        /*model_providers*/ None,
+        /*cwd_filters*/ Some(cwd_filters.as_slice()),
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+
+    assert_eq!(
+        page.items
+            .into_iter()
+            .map(|item| (item.thread_id, item.path, item.preview))
+            .collect::<Vec<_>>(),
+        vec![(
+            Some(thread_id),
+            rollout_path,
+            Some("Hello beyond the bounded head scan".to_string()),
+        )]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn list_threads_metadata_filter_overlays_state_db_list_metadata() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = test_config(home.path());
