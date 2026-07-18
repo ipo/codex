@@ -470,8 +470,8 @@ impl RolloutRecorder {
             || cwd_filters.is_some()
             || search_term.is_some();
         // Filesystem-first listing intentionally overfetches so we can repair stale/missing
-        // SQLite rows before returning the scan page for filtered listings or the DB page for
-        // unfiltered listings.
+        // SQLite rows before returning a reconciled DB page. The filesystem page remains the
+        // fallback when SQLite is unavailable.
         let fs_page = match sort_direction {
             SortDirection::Asc => {
                 list_threads_from_files_asc(
@@ -521,8 +521,8 @@ impl RolloutRecorder {
             ));
         }
 
-        // For metadata-filtered listings the filesystem page is the page we return. Track those
-        // IDs so the later DB page only triggers full reconciliation for DB-only hits.
+        // Track filesystem IDs so the later DB page only triggers full reconciliation for
+        // DB-only hits.
         let fs_page_thread_ids = fs_page
             .items
             .iter()
@@ -607,8 +607,9 @@ impl RolloutRecorder {
             if listing_has_metadata_filters {
                 for item in &db_page.items {
                     // Rows that also appeared in the filesystem page were just validated from the
-                    // rollout head. Rows only found by SQLite may be stale filter matches, so fully
-                    // reconcile those before returning the filesystem-backed page.
+                    // rollout head. Rows only found by SQLite may be stale filter matches or valid
+                    // rollouts whose preview is beyond the bounded head scan, so fully reconcile
+                    // those before re-querying SQLite.
                     if fs_page_thread_ids.contains(&item.id) {
                         continue;
                     }
@@ -623,38 +624,25 @@ impl RolloutRecorder {
                     )
                     .await;
                 }
-                if sort_key == ThreadSortKey::RecencyAt {
-                    if let Some(repaired_db_page) = state_db::list_threads_db(
-                        state_db_ctx.as_deref(),
-                        codex_home,
-                        page_size,
-                        cursor,
-                        sort_key,
-                        sort_direction,
-                        allowed_sources,
-                        model_providers,
-                        cwd_filters,
-                        /*relation_filter*/ None,
-                        archived,
-                        search_term,
-                    )
-                    .await
-                    {
-                        return Ok(repaired_db_page.into());
-                    }
-                    return Ok(db_page.into());
-                }
-                codex_state::record_fallback(
-                    "list_threads",
-                    "metadata_filter",
-                    /*telemetry_override*/ None,
-                );
-                let page = page_from_filesystem_scan(fs_page, sort_direction, page_size, sort_key);
-                return Ok(fill_missing_thread_item_metadata_from_state_db(
+                if let Some(repaired_db_page) = state_db::list_threads_db(
                     state_db_ctx.as_deref(),
-                    page,
+                    codex_home,
+                    page_size,
+                    cursor,
+                    sort_key,
+                    sort_direction,
+                    allowed_sources,
+                    model_providers,
+                    cwd_filters,
+                    /*relation_filter*/ None,
+                    archived,
+                    search_term,
                 )
-                .await);
+                .await
+                {
+                    return Ok(repaired_db_page.into());
+                }
+                return Ok(db_page.into());
             }
             return Ok(db_page.into());
         }
