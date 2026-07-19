@@ -206,6 +206,7 @@ use codex_protocol::exec_output::StreamOutput;
 mod code_mode_warning;
 mod config_lock;
 pub(crate) mod context_window;
+mod file_system_sandbox;
 mod handlers;
 mod inject;
 mod input_queue;
@@ -3022,7 +3023,12 @@ impl Session {
         let environments = turn_context.environments.refresh_readiness();
         self.services
             .agents_md_manager
-            .refresh(&turn_context.config, &environments)
+            .refresh(&turn_context.config, &environments, |environment| {
+                turn_context.file_system_sandbox_context(
+                    /*additional_permissions*/ None,
+                    environment,
+                )
+            })
             .await;
         let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;
         let selected_capability_roots = self

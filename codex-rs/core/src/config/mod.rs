@@ -249,17 +249,22 @@ Payload:
 You may also see them addressed as to=/root/..., which indicates your identity is /root/...
 "#;
 const DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT: &str = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string.";
-const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
-const DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT: &str = r#"Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.collaboration.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
+const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "agents";
+fn default_multi_agent_v2_usage_hint_text(
+    usage_hint_text: &str,
+    max_concurrency: usize,
+    tool_namespace: &str,
+) -> String {
+    format!(
+        r#"{usage_hint_text}
+Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.{tool_namespace}.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
 
 All agents share the same directory. In detail:
 - All agents have access to the same container and filesystem as you.
 - All agents use the same current working directory.
 - As a result, edits made by one agent are immediately visible to all other agents.
-"#;
-fn default_multi_agent_v2_usage_hint_text(usage_hint_text: &str, max_concurrency: usize) -> String {
-    format!(
-        "{usage_hint_text}\n{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\nThere are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."
+
+There are {max_concurrency} available concurrency slots, meaning that up to {max_concurrency} agents can be active at once, including you."#
     )
 }
 
@@ -1187,7 +1192,10 @@ pub struct MultiAgentV2Config {
 }
 
 impl MultiAgentV2Config {
-    fn defaults_for_max_concurrency(max_concurrent_threads_per_session: usize) -> Self {
+    fn defaults_for_max_concurrency(
+        max_concurrent_threads_per_session: usize,
+        tool_namespace: &str,
+    ) -> Self {
         Self {
             max_concurrent_threads_per_session,
             min_wait_timeout_ms: DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS,
@@ -1197,13 +1205,15 @@ impl MultiAgentV2Config {
             root_agent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
                 DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
+                tool_namespace,
             )),
             subagent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
                 DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
+                tool_namespace,
             )),
             multi_agent_mode_hint_text: None,
-            tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
+            tool_namespace: Some(tool_namespace.to_string()),
             hide_spawn_agent_metadata: true,
             expose_spawn_agent_model_overrides: true,
             wait_agent_enabled: true,
@@ -1216,6 +1226,7 @@ impl Default for MultiAgentV2Config {
     fn default() -> Self {
         Self::defaults_for_max_concurrency(
             DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION,
+            DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE,
         )
     }
 }
@@ -2600,8 +2611,13 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
                 .map(|max_threads| max_threads.saturating_add(1))
         })
         .unwrap_or(DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION);
-    let default =
-        MultiAgentV2Config::defaults_for_max_concurrency(max_concurrent_threads_per_session);
+    let tool_namespace = base
+        .and_then(|config| config.tool_namespace.as_deref())
+        .unwrap_or(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE);
+    let default = MultiAgentV2Config::defaults_for_max_concurrency(
+        max_concurrent_threads_per_session,
+        tool_namespace,
+    );
     let min_wait_timeout_ms = base
         .and_then(|config| config.min_wait_timeout_ms)
         .unwrap_or(default.min_wait_timeout_ms);
@@ -2648,10 +2664,6 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         .and_then(|config| config.multi_agent_mode_hint_text.as_ref())
         .cloned()
         .or(default.multi_agent_mode_hint_text);
-    let tool_namespace = base
-        .and_then(|config| config.tool_namespace.as_ref())
-        .cloned()
-        .or(default.tool_namespace);
     let non_code_mode_only = base
         .and_then(|config| config.non_code_mode_only)
         .unwrap_or(default.non_code_mode_only);
@@ -2665,7 +2677,7 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
         root_agent_usage_hint_text,
         subagent_usage_hint_text,
         multi_agent_mode_hint_text,
-        tool_namespace,
+        tool_namespace: Some(tool_namespace.to_string()),
         hide_spawn_agent_metadata,
         expose_spawn_agent_model_overrides,
         wait_agent_enabled,
@@ -3035,6 +3047,7 @@ fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::R
         "api_tool",
         "browser",
         "computer",
+        "collaboration",
         "container",
         "file_search",
         "functions",
@@ -3084,7 +3097,9 @@ fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::R
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("{LABEL} uses a reserved namespace: {namespace}"),
+            format!(
+                "{LABEL} uses a reserved namespace: {namespace}; choose a non-reserved namespace such as agents"
+            ),
         ));
     }
 

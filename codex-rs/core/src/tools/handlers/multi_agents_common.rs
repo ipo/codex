@@ -21,7 +21,9 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
+use codex_utils_path_uri::PathConvention;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
@@ -244,6 +246,92 @@ pub(crate) fn apply_spawn_agent_runtime_overrides(
     Ok(())
 }
 
+/// Resolves and validates an optional child cwd in the inherited primary environment.
+///
+/// Only the primary selection is changed. In particular, the selected cwd is not copied into the
+/// config's workspace roots, so choosing a cwd cannot widen the child's filesystem authority.
+pub(crate) async fn resolve_spawn_agent_environments(
+    turn: &TurnContext,
+    requested_cwd: Option<&str>,
+) -> Result<Vec<TurnEnvironmentSelection>, FunctionCallError> {
+    let mut selections = turn.environments.to_selections();
+    let Some(requested_cwd) = requested_cwd else {
+        return Ok(selections);
+    };
+    if requested_cwd.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agent cwd must not be empty".to_string(),
+        ));
+    }
+
+    let primary = turn.environments.primary().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent cannot select a cwd because the primary environment is unavailable"
+                .to_string(),
+        )
+    })?;
+    let base_convention = primary.cwd().infer_path_convention();
+    let bytes = requested_cwd.as_bytes();
+    let requests_windows_absolute_path = requested_cwd.starts_with(r"\\")
+        || matches!(
+            bytes,
+            [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic()
+        );
+    if requests_windows_absolute_path && base_convention == Some(PathConvention::Posix) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd `{requested_cwd}` uses the Windows path convention, but primary environment `{}` uses POSIX paths",
+            primary.environment_id
+        )));
+    }
+
+    let cwd = primary.cwd().join(requested_cwd).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd `{requested_cwd}` is invalid for primary environment `{}`: {err}",
+            primary.environment_id
+        ))
+    })?;
+    let mut sandbox =
+        turn.file_system_sandbox_context(/*additional_permissions*/ None, primary);
+    sandbox.cwd = Some(cwd.clone());
+    let filesystem = primary.environment.get_filesystem();
+    let metadata = filesystem
+        .get_metadata(&cwd, Some(&sandbox))
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "spawn_agent cannot access cwd `{}` in primary environment `{}`: {err}",
+                cwd.inferred_native_path_string(),
+                primary.environment_id
+            ))
+        })?;
+    if !metadata.is_directory {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd `{}` is not a directory in primary environment `{}`",
+            cwd.inferred_native_path_string(),
+            primary.environment_id
+        )));
+    }
+    filesystem
+        .read_directory(&cwd, Some(&sandbox))
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "spawn_agent cwd `{}` is not readable in primary environment `{}`: {err}",
+                cwd.inferred_native_path_string(),
+                primary.environment_id
+            ))
+        })?;
+
+    let Some(primary_selection) = selections.first_mut() else {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agent cannot select a cwd because the primary environment is unavailable"
+                .to_string(),
+        ));
+    };
+    primary_selection.cwd = cwd;
+    Ok(selections)
+}
+
 pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     session: &Session,
     turn: &TurnContext,
@@ -445,3 +533,7 @@ fn validate_spawn_agent_reasoning_effort(
         "Reasoning effort `{requested_reasoning_effort}` is not supported for model `{model}`. Supported reasoning efforts: {supported}"
     )))
 }
+
+#[cfg(test)]
+#[path = "multi_agents_common_tests.rs"]
+mod tests;
