@@ -17,7 +17,6 @@ use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
-use crate::migrations::repair_legacy_recency_migration_version;
 use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_memories_migrator;
@@ -44,17 +43,13 @@ use sqlx::Sqlite;
 use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
-use sqlx::sqlite::SqliteAutoVacuum;
 use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::sqlite::SqliteSynchronous;
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
-use std::time::Duration;
 use std::time::Instant;
 use tracing::warn;
 
@@ -66,6 +61,7 @@ mod logs;
 mod memories;
 mod recovery;
 mod remote_control;
+mod sqlite_init;
 #[cfg(test)]
 mod test_support;
 mod threads;
@@ -88,6 +84,9 @@ pub use recovery::sqlite_error_detail_is_lock;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
 
+#[cfg(test)]
+use sqlite_init::base_sqlite_options;
+
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
 // - one bucket per threadless (thread_id IS NULL) non-null process_uuid
@@ -102,8 +101,12 @@ struct RuntimeDbSpec {
     label: &'static str,
     filename: &'static str,
     kind: DbKind,
+    check_phase: &'static str,
+    lock_phase: &'static str,
+    bootstrap_phase: &'static str,
     open_phase: &'static str,
     migrate_phase: &'static str,
+    retry_phase: &'static str,
 }
 
 impl RuntimeDbSpec {
@@ -116,32 +119,48 @@ const STATE_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "state DB",
     filename: STATE_DB_FILENAME,
     kind: DbKind::State,
+    check_phase: "check_state",
+    lock_phase: "wait_init_lock_state",
+    bootstrap_phase: "bootstrap_state",
     open_phase: "open_state",
     migrate_phase: "migrate_state",
+    retry_phase: "retry_state",
 };
 
 const LOGS_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "log DB",
     filename: LOGS_DB_FILENAME,
     kind: DbKind::Logs,
+    check_phase: "check_logs",
+    lock_phase: "wait_init_lock_logs",
+    bootstrap_phase: "bootstrap_logs",
     open_phase: "open_logs",
     migrate_phase: "migrate_logs",
+    retry_phase: "retry_logs",
 };
 
 const GOALS_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "goals DB",
     filename: GOALS_DB_FILENAME,
     kind: DbKind::Goals,
+    check_phase: "check_goals",
+    lock_phase: "wait_init_lock_goals",
+    bootstrap_phase: "bootstrap_goals",
     open_phase: "open_goals",
     migrate_phase: "migrate_goals",
+    retry_phase: "retry_goals",
 };
 
 const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "memories DB",
     filename: MEMORIES_DB_FILENAME,
     kind: DbKind::Memories,
+    check_phase: "check_memories",
+    lock_phase: "wait_init_lock_memories",
+    bootstrap_phase: "bootstrap_memories",
     open_phase: "open_memories",
     migrate_phase: "migrate_memories",
+    retry_phase: "retry_memories",
 };
 
 const RUNTIME_DBS: [RuntimeDbSpec; 4] = [STATE_DB, LOGS_DB, GOALS_DB, MEMORIES_DB];
@@ -359,16 +378,6 @@ async fn close_sqlite_pools(pools: &[&SqlitePool]) {
     }
 }
 
-fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
-    SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(Duration::from_secs(5))
-        .log_statements(LevelFilter::Off)
-}
-
 async fn open_state_sqlite(
     path: &Path,
     migrator: &Migrator,
@@ -410,42 +419,7 @@ async fn open_sqlite(
     spec: RuntimeDbSpec,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
-    let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
-    let started = Instant::now();
-    let pool_result = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect_with(options)
-        .await
-        .map_err(anyhow::Error::from);
-    crate::telemetry::record_init_result(
-        telemetry_override,
-        spec.kind,
-        spec.open_phase,
-        started.elapsed(),
-        &pool_result,
-    );
-    let pool = pool_result
-        .map_err(|source| recovery::RuntimeDbInitError::new(spec.label, "open", path, source))?;
-    let started = Instant::now();
-    let migrate_result = async {
-        if matches!(spec.kind, DbKind::State) {
-            repair_legacy_recency_migration_version(&pool, migrator).await?;
-        }
-        migrator.run(&pool).await.map_err(anyhow::Error::from)
-    }
-    .await;
-    crate::telemetry::record_init_result(
-        telemetry_override,
-        spec.kind,
-        spec.migrate_phase,
-        started.elapsed(),
-        &migrate_result,
-    );
-    if let Err(source) = migrate_result {
-        pool.close().await;
-        return Err(recovery::RuntimeDbInitError::new(spec.label, "migrate", path, source).into());
-    }
-    Ok(pool)
+    sqlite_init::open_sqlite(path, migrator, spec, telemetry_override).await
 }
 
 pub(super) async fn ensure_backfill_state_row_in_pool(
@@ -551,6 +525,7 @@ mod tests {
     use sqlx::SqlitePool;
     use sqlx::migrate::MigrateError;
     use sqlx::sqlite::SqliteConnectOptions;
+    use sqlx::sqlite::SqliteSynchronous;
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
     use std::path::Path;
@@ -655,7 +630,8 @@ mod tests {
         let pool = SqlitePool::connect_with(
             SqliteConnectOptions::new()
                 .filename(&state_path)
-                .create_if_missing(true),
+                .create_if_missing(true)
+                .synchronous(SqliteSynchronous::Off),
         )
         .await
         .expect("open state db");
@@ -718,12 +694,24 @@ mod tests {
             .filter_map(|event| event.tags.get("phase").cloned())
             .collect::<BTreeSet<_>>();
         let expected = [
+            "check_state",
+            "wait_init_lock_state",
+            "bootstrap_state",
             "open_state",
             "migrate_state",
+            "check_logs",
+            "wait_init_lock_logs",
+            "bootstrap_logs",
             "open_logs",
             "migrate_logs",
+            "check_goals",
+            "wait_init_lock_goals",
+            "bootstrap_goals",
             "open_goals",
             "migrate_goals",
+            "check_memories",
+            "wait_init_lock_memories",
+            "bootstrap_memories",
             "open_memories",
             "migrate_memories",
             "ensure_backfill_state",

@@ -162,6 +162,7 @@ mod tests {
     use sqlx::SqlitePool;
     use sqlx::migrate::Migrator;
     use sqlx::sqlite::SqliteConnectOptions;
+    use sqlx::sqlite::SqliteSynchronous;
     use std::borrow::Cow;
 
     #[tokio::test]
@@ -341,7 +342,8 @@ mod tests {
         let pool = SqlitePool::connect_with(
             SqliteConnectOptions::new()
                 .filename(state_db_path(codex_home.as_path()))
-                .create_if_missing(true),
+                .create_if_missing(true)
+                .synchronous(SqliteSynchronous::Off),
         )
         .await
         .expect("open old state db");

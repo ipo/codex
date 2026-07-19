@@ -4018,6 +4018,7 @@ dependencies = [
  "codex-git-utils",
  "codex-protocol",
  "dirs",
+ "fs2",
  "libsqlite3-sys",
  "log",
  "owo-colors",
