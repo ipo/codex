@@ -120,6 +120,7 @@ impl ChatWidget {
             .map(|(_, turn)| turn.clone());
         let thread_id = self.thread_id;
         let can_offer_retry = faster_model.is_some() && retry_turn.is_some() && thread_id.is_some();
+        let hide_prompt = self.config.notices.hide_safety_buffering_prompt == Some(true);
         let previous_active = self
             .safety_buffering
             .active
@@ -135,7 +136,7 @@ impl ChatWidget {
             agent_message_started,
         });
 
-        let message = if can_offer_retry {
+        let message = if can_offer_retry && !hide_prompt {
             SAFETY_BUFFERING_MESSAGE_WITH_RETRY
         } else {
             SAFETY_BUFFERING_MESSAGE_WITHOUT_RETRY
@@ -148,6 +149,11 @@ impl ChatWidget {
             /*details_max_lines*/ 6,
         );
 
+        if hide_prompt {
+            self.bottom_pane
+                .dismiss_view_by_id(SAFETY_BUFFERING_PROMPT_VIEW_ID);
+            return;
+        }
         if !should_show_prompt {
             return;
         }

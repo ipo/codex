@@ -810,6 +810,8 @@ pub struct Notice {
     pub fast_default_opt_out: Option<bool>,
     /// Tracks whether the user opted out of the rate limit model switch reminder.
     pub hide_rate_limit_model_nudge: Option<bool>,
+    /// Tracks whether the interactive safety-buffering prompt should be hidden.
+    pub hide_safety_buffering_prompt: Option<bool>,
     /// Tracks whether the user has seen the model migration prompt
     pub hide_gpt5_1_migration_prompt: Option<bool>,
     /// Tracks whether the user has seen the gpt-5.1-codex-max migration prompt

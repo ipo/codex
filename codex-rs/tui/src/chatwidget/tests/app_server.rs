@@ -110,6 +110,7 @@ fn safety_buffering_notification(
 #[tokio::test]
 async fn safety_buffering_offers_one_retry_with_app_wording() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.notices.hide_safety_buffering_prompt = Some(false);
     let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
 
     let notification = safety_buffering_notification(thread_id, turn_id, Some("faster-model"));
@@ -158,6 +159,59 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
     assert_eq!(model, "faster-model");
     assert_matches!(turn, Op::UserTurn { .. });
     assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+}
+
+#[tokio::test]
+async fn safety_buffering_prompt_can_be_suppressed_while_turn_completes() {
+    for faster_model in [None, Some("faster-model")] {
+        let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.config.notices.hide_safety_buffering_prompt = Some(true);
+        let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+
+        chat.handle_server_notification(
+            ServerNotification::ModelSafetyBufferingUpdated(safety_buffering_notification(
+                thread_id,
+                turn_id,
+                faster_model,
+            )),
+            /*replay_kind*/ None,
+        );
+
+        let rendered = render_bottom_popup(&chat, /*width*/ 80);
+        assert!(!rendered.contains("Additional safety checks"));
+        assert!(!rendered.contains("Retry with a faster model"));
+        assert!(!rendered.contains("Keep waiting"));
+        assert!(!rendered.contains("Learn more"));
+        assert_eq!(
+            chat.bottom_pane
+                .status_widget()
+                .expect("status indicator should be visible")
+                .details(),
+            Some("This request requires additional safety checks, which can take extra time.")
+        );
+        if faster_model.is_some() {
+            assert_chatwidget_snapshot!("safety_buffering_status_only", rendered);
+        }
+
+        while rx.try_recv().is_ok() {}
+        handle_agent_message_delta(&mut chat, "Visible response");
+        assert!(!chat.can_retry_safety_buffered_turn(turn_id));
+        assert!(chat.turn_lifecycle.agent_turn_running);
+        assert!(chat.stream_controller.is_some());
+        assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Keep waiting"));
+
+        handle_turn_completed(&mut chat, turn_id, /*duration_ms*/ None);
+        let response = loop {
+            match rx.try_recv() {
+                Ok(AppEvent::ConsolidateAgentMessage { source, .. }) => break source,
+                Ok(_) => continue,
+                Err(err) => panic!("expected consolidated assistant response: {err}"),
+            }
+        };
+        assert_eq!(response, "Visible response");
+        assert!(!chat.turn_lifecycle.agent_turn_running);
+        assert!(!render_bottom_popup(&chat, /*width*/ 80).contains("Additional safety checks"));
+    }
 }
 
 #[tokio::test]
