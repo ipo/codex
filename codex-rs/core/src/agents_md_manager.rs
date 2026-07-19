@@ -2,6 +2,8 @@ use crate::agents_md::LoadedAgentsMd;
 use crate::agents_md::load_project_instructions;
 use crate::config::Config;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::session::turn_context::TurnEnvironment;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::UserInstructions;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use std::sync::Arc;
@@ -16,6 +18,7 @@ pub(crate) struct AgentsMdManager {
 #[derive(Default)]
 struct AgentsMdCache {
     selections: Option<Vec<TurnEnvironmentSelection>>,
+    sandbox_contexts: Option<Vec<FileSystemSandboxContext>>,
     loaded: Option<Arc<LoadedAgentsMd>>,
 }
 
@@ -28,18 +31,38 @@ impl AgentsMdManager {
         }
     }
 
-    pub(crate) async fn refresh(&self, config: &Config, environments: &TurnEnvironmentSnapshot) {
+    pub(crate) async fn refresh(
+        &self,
+        config: &Config,
+        environments: &TurnEnvironmentSnapshot,
+        sandbox_context_for: impl Fn(&TurnEnvironment) -> FileSystemSandboxContext,
+    ) {
         let selections = environments.to_selections();
-        if self.cache.lock().await.selections.as_ref() == Some(&selections) {
-            return;
+        let sandbox_contexts = environments
+            .turn_environments
+            .iter()
+            .map(&sandbox_context_for)
+            .collect::<Vec<_>>();
+        {
+            let cache = self.cache.lock().await;
+            if cache.selections.as_ref() == Some(&selections)
+                && cache.sandbox_contexts.as_ref() == Some(&sandbox_contexts)
+            {
+                return;
+            }
         }
 
-        let loaded =
-            load_project_instructions(config, self.user_instructions.clone(), environments)
-                .await
-                .map(Arc::new);
+        let loaded = load_project_instructions(
+            config,
+            self.user_instructions.clone(),
+            environments,
+            sandbox_context_for,
+        )
+        .await
+        .map(Arc::new);
         let mut cache = self.cache.lock().await;
         cache.selections = Some(selections);
+        cache.sandbox_contexts = Some(sandbox_contexts);
         cache.loaded = loaded;
     }
 

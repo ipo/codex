@@ -599,6 +599,13 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
                 SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION.to_string(),
             )),
         ),
+        (
+            "cwd".to_string(),
+            JsonSchema::string(Some(
+                "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
+                    .to_string(),
+            )),
+        ),
     ])
 }
 
@@ -639,6 +646,13 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             "service_tier".to_string(),
             JsonSchema::string(Some(
                 SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION.to_string(),
+            )),
+        ),
+        (
+            "cwd".to_string(),
+            JsonSchema::string(Some(
+                "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
+                    .to_string(),
             )),
         ),
     ])

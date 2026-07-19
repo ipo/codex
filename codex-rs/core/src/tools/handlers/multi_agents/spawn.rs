@@ -63,6 +63,7 @@ async fn handle_spawn_agent(
         .filter(|role| !role.is_empty());
     let input_items = parse_collab_input(args.message, args.items)?;
     let prompt = render_input_preview(&input_items);
+    let environments = resolve_spawn_agent_environments(turn.as_ref(), args.cwd.as_deref()).await?;
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
     let max_depth = turn.config.agent_max_depth;
@@ -143,7 +144,7 @@ async fn handle_spawn_agent(
             fork_parent_spawn_call_id: args.fork_context.then(|| call_id.clone()),
             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
             parent_thread_id: Some(session.thread_id),
-            environments: Some(turn.environments.to_selections()),
+            environments: Some(environments),
             subagent_backend_route: routing_decision.backend_route,
         },
     ))
@@ -243,6 +244,7 @@ struct SpawnAgentArgs {
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     service_tier: Option<String>,
+    cwd: Option<String>,
     #[serde(default)]
     fork_context: bool,
 }

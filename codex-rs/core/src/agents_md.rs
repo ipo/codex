@@ -18,12 +18,14 @@
 use crate::config::Config;
 use crate::context::UserInstructions as ContextUserInstructions;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::session::turn_context::TurnEnvironment;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_extension_api::UserInstructions;
 use codex_file_system::FindUpErrorPolicy;
 use codex_file_system::find_nearest_ancestor_with_markers;
@@ -48,15 +50,18 @@ pub(crate) async fn load_project_instructions(
     config: &Config,
     user_instructions: Option<UserInstructions>,
     environments: &TurnEnvironmentSnapshot,
+    sandbox_context_for: impl Fn(&TurnEnvironment) -> FileSystemSandboxContext,
 ) -> Option<LoadedAgentsMd> {
     let mut loaded = LoadedAgentsMd::from_user_instructions(user_instructions);
     for turn_environment in &environments.turn_environments {
         let filesystem = turn_environment.environment.get_filesystem();
+        let sandbox = sandbox_context_for(turn_environment);
         match read_agents_md(
             config,
             filesystem.as_ref(),
             &turn_environment.environment_id,
             turn_environment.cwd(),
+            &sandbox,
         )
         .await
         {
@@ -85,6 +90,7 @@ async fn read_agents_md(
     fs: &dyn ExecutorFileSystem,
     environment_id: &str,
     cwd: &PathUri,
+    sandbox: &FileSystemSandboxContext,
 ) -> io::Result<Option<LoadedAgentsMd>> {
     let max_total = config.project_doc_max_bytes;
 
@@ -92,7 +98,7 @@ async fn read_agents_md(
         return Ok(None);
     }
 
-    let paths = agents_md_paths(config, cwd, fs).await?;
+    let paths = agents_md_paths(config, cwd, fs, sandbox).await?;
     if paths.is_empty() {
         return Ok(None);
     }
@@ -105,7 +111,7 @@ async fn read_agents_md(
             break;
         }
 
-        let mut data = match fs.read_file(&p, /*sandbox*/ None).await {
+        let mut data = match fs.read_file(&p, Some(sandbox)).await {
             Ok(data) => data,
             Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
             Err(err) => return Err(err),
@@ -150,6 +156,7 @@ async fn agents_md_paths(
     config: &Config,
     cwd: &PathUri,
     fs: &dyn ExecutorFileSystem,
+    sandbox: &FileSystemSandboxContext,
 ) -> io::Result<Vec<PathUri>> {
     let dir = cwd.clone();
 
@@ -176,7 +183,7 @@ async fn agents_md_paths(
         &dir,
         project_root_markers,
         FindUpErrorPolicy::Propagate,
-        /*sandbox*/ None,
+        Some(sandbox),
     )
     .await?;
     let search_dirs = if let Some(root) = project_root {
@@ -205,7 +212,7 @@ async fn agents_md_paths(
             let candidate = directory
                 .join(name)
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
-            match fs.get_metadata(&candidate, /*sandbox*/ None).await {
+            match fs.get_metadata(&candidate, Some(sandbox)).await {
                 Ok(metadata) if metadata.is_file => {
                     found.push(candidate);
                     break;

@@ -59,6 +59,7 @@ async fn handle_spawn_agent(
         .filter(|role| !role.is_empty());
 
     let message = message_content(args.message)?;
+    let environments = resolve_spawn_agent_environments(turn.as_ref(), args.cwd.as_deref()).await?;
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
     let mut config =
@@ -133,7 +134,7 @@ async fn handle_spawn_agent(
                     fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                     fork_mode,
                     parent_thread_id: Some(session.thread_id),
-                    environments: Some(turn.environments.to_selections()),
+                    environments: Some(environments),
                     subagent_backend_route: routing_decision.backend_route,
                 },
             ),
@@ -191,6 +192,7 @@ struct SpawnAgentArgs {
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
     service_tier: Option<String>,
+    cwd: Option<String>,
     fork_turns: Option<String>,
     fork_context: Option<bool>,
 }

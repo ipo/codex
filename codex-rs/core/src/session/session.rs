@@ -910,7 +910,9 @@ impl Session {
             let resolved_environments = turn_environments.snapshot().await;
             let agents_md_manager = Arc::new(AgentsMdManager::new(user_instructions));
             agents_md_manager
-                .refresh(config.as_ref(), &resolved_environments)
+                .refresh(config.as_ref(), &resolved_environments, |environment| {
+                    session_configuration.file_system_sandbox_context(environment.cwd())
+                })
                 .await;
             let plugin_skill_errors = warm_plugins_and_skills_for_session_init(
                 Arc::clone(&config),
