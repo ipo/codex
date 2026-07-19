@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use sqlx::SqlitePool;
+use sqlx::SqliteConnection;
 use sqlx::migrate::Migrator;
 
 pub(crate) static STATE_MIGRATOR: Migrator = sqlx::migrate!("./migrations");
@@ -49,7 +49,7 @@ pub(crate) fn runtime_thread_history_migrator() -> Migrator {
 }
 
 pub(crate) async fn repair_legacy_recency_migration_version(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     migrator: &Migrator,
 ) -> anyhow::Result<()> {
     let Some(recency_migration) = migrator
@@ -62,7 +62,7 @@ pub(crate) async fn repair_legacy_recency_migration_version(
     let migrations_table_exists = sqlx::query_scalar::<_, i64>(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?
     .is_some();
     if !migrations_table_exists {
@@ -83,7 +83,7 @@ WHERE version = ?
     .bind(38_i64)
     .bind(recency_migration.checksum.as_ref())
     .bind(recency_migration.version)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?
     .is_some();
     if !legacy_recency_needs_repair {
@@ -106,7 +106,7 @@ WHERE version = ?
     .bind(38_i64)
     .bind(recency_migration.checksum.as_ref())
     .bind(recency_migration.version)
-    .execute(pool)
+    .execute(connection)
     .await?;
     Ok(())
 }

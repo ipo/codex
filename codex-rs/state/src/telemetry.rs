@@ -79,6 +79,24 @@ pub(crate) fn record_init_result<T>(
     record_duration(telemetry, DB_INIT_DURATION_METRIC, duration, &tags);
 }
 
+pub(crate) fn record_init_retry(
+    telemetry: Option<&dyn DbTelemetry>,
+    db: DbKind,
+    phase: &'static str,
+    duration: Duration,
+    error: &anyhow::Error,
+) {
+    let outcome = DbOutcomeTags::from_error(error);
+    let tags = [
+        ("status", "retrying"),
+        ("phase", phase),
+        ("db", db.as_str()),
+        ("error", outcome.error),
+    ];
+    record_counter(telemetry, DB_INIT_METRIC, &tags);
+    record_duration(telemetry, DB_INIT_DURATION_METRIC, duration, &tags);
+}
+
 pub(crate) fn record_maintenance_result(
     telemetry: Option<&dyn DbTelemetry>,
     status: &'static str,

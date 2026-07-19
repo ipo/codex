@@ -1,9 +1,6 @@
 //! Shared SQLite connection configuration.
 
 use crate::DbTelemetry;
-use crate::migrations::repair_legacy_recency_migration_version;
-use crate::runtime::RuntimeDbInitError;
-use crate::telemetry;
 use crate::telemetry::DbKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use log::LevelFilter;
@@ -17,11 +14,11 @@ use sqlx::sqlite::SqliteAutoVacuum;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::sqlite::SqliteSynchronous;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::time::Instant;
+
+mod init;
 
 const LOGS_DB_FILENAME: &str = "logs_2.sqlite";
 const GOALS_DB_FILENAME: &str = "goals_1.sqlite";
@@ -34,8 +31,12 @@ struct RuntimeDbSpec {
     label: &'static str,
     filename: &'static str,
     kind: DbKind,
+    check_phase: &'static str,
+    lock_phase: &'static str,
+    bootstrap_phase: &'static str,
     open_phase: &'static str,
     migrate_phase: &'static str,
+    retry_phase: &'static str,
 }
 
 impl RuntimeDbSpec {
@@ -48,40 +49,60 @@ const STATE_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "state DB",
     filename: STATE_DB_FILENAME,
     kind: DbKind::State,
+    check_phase: "check_state",
+    lock_phase: "wait_init_lock_state",
+    bootstrap_phase: "bootstrap_state",
     open_phase: "open_state",
     migrate_phase: "migrate_state",
+    retry_phase: "retry_state",
 };
 
 const LOGS_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "log DB",
     filename: LOGS_DB_FILENAME,
     kind: DbKind::Logs,
+    check_phase: "check_logs",
+    lock_phase: "wait_init_lock_logs",
+    bootstrap_phase: "bootstrap_logs",
     open_phase: "open_logs",
     migrate_phase: "migrate_logs",
+    retry_phase: "retry_logs",
 };
 
 const GOALS_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "goals DB",
     filename: GOALS_DB_FILENAME,
     kind: DbKind::Goals,
+    check_phase: "check_goals",
+    lock_phase: "wait_init_lock_goals",
+    bootstrap_phase: "bootstrap_goals",
     open_phase: "open_goals",
     migrate_phase: "migrate_goals",
+    retry_phase: "retry_goals",
 };
 
 const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "memories DB",
     filename: MEMORIES_DB_FILENAME,
     kind: DbKind::Memories,
+    check_phase: "check_memories",
+    lock_phase: "wait_init_lock_memories",
+    bootstrap_phase: "bootstrap_memories",
     open_phase: "open_memories",
     migrate_phase: "migrate_memories",
+    retry_phase: "retry_memories",
 };
 
 const THREAD_HISTORY_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "thread history DB",
     filename: THREAD_HISTORY_DB_FILENAME,
     kind: DbKind::ThreadHistory,
+    check_phase: "check_thread_history",
+    lock_phase: "wait_init_lock_thread_history",
+    bootstrap_phase: "bootstrap_thread_history",
     open_phase: "open_thread_history",
     migrate_phase: "migrate_thread_history",
+    retry_phase: "retry_thread_history",
 };
 
 const RUNTIME_DBS: [RuntimeDbSpec; 5] =
@@ -203,55 +224,15 @@ impl SqliteConfig {
         telemetry_override: Option<&dyn DbTelemetry>,
     ) -> anyhow::Result<SqlitePool> {
         let path = spec.path(self.home());
-        let started = Instant::now();
-        let pool_result = self
-            .open_read_write_pool(&path)
-            .await
-            .map_err(anyhow::Error::from);
-        telemetry::record_init_result(
-            telemetry_override,
-            spec.kind,
-            spec.open_phase,
-            started.elapsed(),
-            &pool_result,
-        );
-        let pool = pool_result.map_err(|source| {
-            RuntimeDbInitError::new(spec.label, "open", path.as_path(), source)
-        })?;
-        let started = Instant::now();
-        let migrate_result = async {
-            if matches!(spec.kind, DbKind::State) {
-                repair_legacy_recency_migration_version(&pool, migrator).await?;
-            }
-            migrator.run(&pool).await.map_err(anyhow::Error::from)
-        }
-        .await;
-        telemetry::record_init_result(
-            telemetry_override,
-            spec.kind,
-            spec.migrate_phase,
-            started.elapsed(),
-            &migrate_result,
-        );
-        if let Err(source) = migrate_result {
-            pool.close().await;
-            return Err(
-                RuntimeDbInitError::new(spec.label, "migrate", path.as_path(), source).into(),
-            );
-        }
-        Ok(pool)
+        init::open_sqlite(path.as_path(), migrator, spec, telemetry_override).await
     }
 
     /// Open a writable Codex SQLite database, creating it if necessary.
     pub async fn open_read_write_pool(&self, path: &Path) -> Result<SqlitePool, Error> {
-        let options = SqliteConnectOptions::new()
-            .filename(path)
-            .create_if_missing(true)
+        let options = init::base_sqlite_options(path)
             .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
             .auto_vacuum(SqliteAutoVacuum::Incremental)
-            .busy_timeout(Duration::from_secs(5))
-            .log_statements(LevelFilter::Off);
+            .create_if_missing(true);
         SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(options)
@@ -275,12 +256,9 @@ impl SqliteConfig {
         &self,
         busy_timeout: Duration,
     ) -> Result<SqliteConnection, Error> {
-        let options = SqliteConnectOptions::new()
-            .filename(self.logs_db_path())
+        let options = init::base_sqlite_options(&self.logs_db_path())
             .create_if_missing(false)
-            .synchronous(SqliteSynchronous::Normal)
-            .busy_timeout(busy_timeout)
-            .log_statements(LevelFilter::Off);
+            .busy_timeout(busy_timeout);
         SqliteConnection::connect_with(&options).await
     }
 }
