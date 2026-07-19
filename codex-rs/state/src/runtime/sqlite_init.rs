@@ -466,3 +466,7 @@ fn is_transient_lock_error(error: &anyhow::Error) -> bool {
             || matches!(code.as_str(), "sqlite_busy" | "sqlite_locked")
     })
 }
+
+#[cfg(test)]
+#[path = "sqlite_init_tests.rs"]
+mod tests;
