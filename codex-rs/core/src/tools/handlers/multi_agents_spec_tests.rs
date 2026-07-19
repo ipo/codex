@@ -94,6 +94,20 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         Some(true)
     );
     assert!(properties.contains_key("fork_turns"));
+    assert_eq!(
+        properties
+            .get("cwd")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(
+            "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
+        )
+    );
+    assert_eq!(
+        properties["fork_turns"].description.as_deref(),
+        Some(
+            "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3` to fork only the most recent turns. `all` cannot be combined with agent_type, model, or reasoning_effort; use `none` or a positive integer to select those overrides."
+        )
+    );
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
@@ -155,6 +169,20 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         .expect("spawn_agent should use object params");
 
     assert!(properties.contains_key("fork_context"));
+    assert_eq!(
+        properties
+            .get("cwd")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(
+            "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
+        )
+    );
+    assert_eq!(
+        properties["fork_context"].description.as_deref(),
+        Some(
+            "True forks the current thread history into the new agent; false or omitted starts with only the initial prompt. A full-history fork cannot be combined with agent_type, model, or reasoning_effort."
+        )
+    );
     assert!(!properties.contains_key("fork_turns"));
     assert_eq!(
         properties.get("agent_type"),

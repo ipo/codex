@@ -20,6 +20,7 @@ use codex_exec_server::ReadDirectoryEntry;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::UserInstructions;
 use codex_features::Feature;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use core_test_support::PathBufExt;
@@ -308,17 +309,26 @@ async fn load_agents_md(config: &TestConfig) -> Option<LoadedAgentsMd> {
         &config.config,
         config.user_instructions.clone(),
         &environments,
+        test_sandbox_for_environment,
     )
     .await
 }
 
 async fn agents_md_paths(config: &TestConfig) -> std::io::Result<Vec<PathUri>> {
-    super::agents_md_paths(
-        &config.config,
-        &PathUri::from_abs_path(&config.cwd),
-        LOCAL_FS.as_ref(),
+    let cwd = PathUri::from_abs_path(&config.cwd);
+    let sandbox = test_sandbox(&cwd);
+    super::agents_md_paths(&config.config, &cwd, LOCAL_FS.as_ref(), &sandbox).await
+}
+
+fn test_sandbox_for_environment(environment: &TurnEnvironment) -> FileSystemSandboxContext {
+    test_sandbox(environment.cwd())
+}
+
+fn test_sandbox(cwd: &PathUri) -> FileSystemSandboxContext {
+    FileSystemSandboxContext::from_permission_profile_with_cwd(
+        PermissionProfile::Disabled,
+        cwd.clone(),
     )
-    .await
 }
 
 fn resolved_local_environments<const N: usize>(
@@ -665,8 +675,9 @@ async fn read_agents_md_propagates_metadata_errors() {
         metadata_calls: Arc::default(),
     };
 
-    let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
+    let cwd = PathUri::from_abs_path(&config.cwd);
+    let sandbox = test_sandbox(&cwd);
+    let err = read_agents_md(&config.config, &fs, "local", &cwd, &sandbox)
         .await
         .expect_err("metadata error");
 
@@ -684,8 +695,9 @@ async fn read_agents_md_propagates_read_errors() {
         metadata_calls: Arc::default(),
     };
 
-    let cwd = config.cwd.clone();
-    let err = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
+    let cwd = PathUri::from_abs_path(&config.cwd);
+    let sandbox = test_sandbox(&cwd);
+    let err = read_agents_md(&config.config, &fs, "local", &cwd, &sandbox)
         .await
         .expect_err("read error");
 
@@ -703,8 +715,9 @@ async fn read_agents_md_ignores_files_removed_after_discovery() {
         metadata_calls: Arc::default(),
     };
 
-    let cwd = config.cwd.clone();
-    let loaded = read_agents_md(&config.config, &fs, "local", &PathUri::from_abs_path(&cwd))
+    let cwd = PathUri::from_abs_path(&config.cwd);
+    let sandbox = test_sandbox(&cwd);
+    let loaded = read_agents_md(&config.config, &fs, "local", &cwd, &sandbox)
         .await
         .expect("removed file is recoverable");
 
@@ -733,10 +746,11 @@ async fn marker_search_does_not_wait_for_a_higher_ancestor() {
         metadata_calls: Arc::default(),
     };
     let cwd = PathUri::from_abs_path(&config.cwd);
+    let sandbox = test_sandbox(&cwd);
 
     let paths = tokio::time::timeout(
         std::time::Duration::from_secs(1),
-        super::agents_md_paths(&config.config, &cwd, &fs),
+        super::agents_md_paths(&config.config, &cwd, &fs, &sandbox),
     )
     .await
     .expect("nearest marker should complete")
@@ -887,9 +901,12 @@ async fn agents_md_search_starts_all_directory_probes() {
         failure: InjectedFailure::MetadataBlocked,
         metadata_calls: Arc::clone(&metadata_calls),
     };
+    let sandbox = test_sandbox(&cwd);
 
     let search =
-        tokio::spawn(async move { super::agents_md_paths(&config.config, &cwd, &fs).await });
+        tokio::spawn(
+            async move { super::agents_md_paths(&config.config, &cwd, &fs, &sandbox).await },
+        );
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let started = metadata_calls.started.notified();
@@ -962,8 +979,9 @@ async fn empty_project_root_markers_only_probe_cwd_candidates() {
         metadata_calls: Arc::clone(&metadata_calls),
     };
     let cwd = PathUri::from_abs_path(&config.cwd);
+    let sandbox = test_sandbox(&cwd);
 
-    let paths = super::agents_md_paths(&config.config, &cwd, &fs)
+    let paths = super::agents_md_paths(&config.config, &cwd, &fs, &sandbox)
         .await
         .expect("AGENTS.md discovery");
 
@@ -1058,9 +1076,14 @@ async fn multiple_environment_docs_use_labeled_layout_and_preserve_source_order(
     ]);
     let user_instructions = config.user_instructions.clone();
 
-    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
-        .await
-        .expect("instructions expected");
+    let loaded = load_project_instructions(
+        &config.config,
+        user_instructions,
+        &environments,
+        test_sandbox_for_environment,
+    )
+    .await
+    .expect("instructions expected");
     let inner = format!(
         r#"global instructions
 
@@ -1119,9 +1142,14 @@ async fn secondary_only_project_doc_uses_single_contributor_layout() {
     ]);
     let user_instructions = config.user_instructions.clone();
 
-    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
-        .await
-        .expect("instructions expected");
+    let loaded = load_project_instructions(
+        &config.config,
+        user_instructions,
+        &environments,
+        test_sandbox_for_environment,
+    )
+    .await
+    .expect("instructions expected");
     let inner = format!("global instructions{AGENTS_MD_SEPARATOR}secondary doc");
 
     assert_eq!(loaded.legacy_text(), inner);
@@ -1148,9 +1176,14 @@ async fn primary_only_project_doc_preserves_legacy_layout_with_multiple_bound_en
     ]);
     let user_instructions = config.user_instructions.clone();
 
-    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
-        .await
-        .expect("instructions expected");
+    let loaded = load_project_instructions(
+        &config.config,
+        user_instructions,
+        &environments,
+        test_sandbox_for_environment,
+    )
+    .await
+    .expect("instructions expected");
     let inner = format!("global instructions{AGENTS_MD_SEPARATOR}primary doc");
 
     assert_eq!(loaded.legacy_text(), inner);
@@ -1178,9 +1211,14 @@ async fn project_doc_byte_limit_is_applied_independently_per_environment() {
     ]);
     let user_instructions = config.user_instructions.clone();
 
-    let loaded = load_project_instructions(&config.config, user_instructions, &environments)
-        .await
-        .expect("instructions expected");
+    let loaded = load_project_instructions(
+        &config.config,
+        user_instructions,
+        &environments,
+        test_sandbox_for_environment,
+    )
+    .await
+    .expect("instructions expected");
 
     assert_eq!(
         loaded.text(),
@@ -1213,6 +1251,7 @@ async fn multiple_environments_can_exceed_single_environment_project_doc_limit()
         &config.config,
         /*user_instructions*/ None,
         &environments,
+        test_sandbox_for_environment,
     )
     .await
     .expect("instructions expected");
@@ -1245,6 +1284,7 @@ async fn secondary_environment_invalid_utf8_does_not_suppress_other_docs() {
         &config.config,
         /*user_instructions*/ None,
         &environments,
+        test_sandbox_for_environment,
     )
     .await
     .expect("instructions expected");

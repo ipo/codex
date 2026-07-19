@@ -124,6 +124,7 @@ mod shell_serialization;
 mod shell_snapshot;
 mod skill_approval;
 mod skills;
+mod spawn_agent_cwd;
 mod spawn_agent_description;
 mod sqlite_state;
 mod stream_error_allows_next_turn;

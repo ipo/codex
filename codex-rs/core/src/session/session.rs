@@ -931,7 +931,13 @@ impl Session {
                 otel.name = "session_init.plugin_skill_warmup",
             ));
             let ((), plugin_skill_errors) = tokio::join!(
-                agents_md_manager.refresh(config.as_ref(), &resolved_environments),
+                agents_md_manager.refresh(
+                    config.as_ref(),
+                    &resolved_environments,
+                    |environment| {
+                        session_configuration.file_system_sandbox_context(environment.cwd())
+                    }
+                ),
                 plugin_skill_warmup,
             );
             for err in &plugin_skill_errors {
