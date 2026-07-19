@@ -449,3 +449,7 @@ fn sqlite_error_is_lock(error: &sqlx::Error) -> bool {
         .is_ok_and(|code| matches!(code & 0xff, 5 | 6))
         || matches!(code.as_str(), "sqlite_busy" | "sqlite_locked")
 }
+
+#[cfg(test)]
+#[path = "log_maintenance_tests.rs"]
+mod tests;
