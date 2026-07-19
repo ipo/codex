@@ -12,7 +12,6 @@ use crate::ThreadMetadata;
 use crate::ThreadMetadataBuilder;
 use crate::ThreadsPage;
 use crate::apply_rollout_item;
-use crate::migrations::repair_legacy_recency_migration_version;
 use crate::migrations::runtime_goals_migrator;
 use crate::migrations::runtime_logs_migrator;
 use crate::migrations::runtime_memories_migrator;
@@ -53,6 +52,7 @@ mod logs;
 mod memories;
 mod recovery;
 mod remote_control;
+mod sqlite_init;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod threads;
@@ -75,6 +75,9 @@ pub use recovery::sqlite_error_detail_is_lock;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
 
+#[cfg(test)]
+use sqlite_init::base_sqlite_options;
+
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
 // - one bucket per threadless (thread_id IS NULL) non-null process_uuid
@@ -89,8 +92,12 @@ struct RuntimeDbSpec {
     label: &'static str,
     filename: &'static str,
     kind: DbKind,
+    check_phase: &'static str,
+    lock_phase: &'static str,
+    bootstrap_phase: &'static str,
     open_phase: &'static str,
     migrate_phase: &'static str,
+    retry_phase: &'static str,
 }
 
 impl RuntimeDbSpec {
@@ -103,40 +110,60 @@ const STATE_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "state DB",
     filename: STATE_DB_FILENAME,
     kind: DbKind::State,
+    check_phase: "check_state",
+    lock_phase: "wait_init_lock_state",
+    bootstrap_phase: "bootstrap_state",
     open_phase: "open_state",
     migrate_phase: "migrate_state",
+    retry_phase: "retry_state",
 };
 
 const LOGS_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "log DB",
     filename: LOGS_DB_FILENAME,
     kind: DbKind::Logs,
+    check_phase: "check_logs",
+    lock_phase: "wait_init_lock_logs",
+    bootstrap_phase: "bootstrap_logs",
     open_phase: "open_logs",
     migrate_phase: "migrate_logs",
+    retry_phase: "retry_logs",
 };
 
 const GOALS_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "goals DB",
     filename: GOALS_DB_FILENAME,
     kind: DbKind::Goals,
+    check_phase: "check_goals",
+    lock_phase: "wait_init_lock_goals",
+    bootstrap_phase: "bootstrap_goals",
     open_phase: "open_goals",
     migrate_phase: "migrate_goals",
+    retry_phase: "retry_goals",
 };
 
 const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "memories DB",
     filename: MEMORIES_DB_FILENAME,
     kind: DbKind::Memories,
+    check_phase: "check_memories",
+    lock_phase: "wait_init_lock_memories",
+    bootstrap_phase: "bootstrap_memories",
     open_phase: "open_memories",
     migrate_phase: "migrate_memories",
+    retry_phase: "retry_memories",
 };
 
 const THREAD_HISTORY_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "thread history DB",
     filename: THREAD_HISTORY_DB_FILENAME,
     kind: DbKind::ThreadHistory,
+    check_phase: "check_thread_history",
+    lock_phase: "wait_init_lock_thread_history",
+    bootstrap_phase: "bootstrap_thread_history",
     open_phase: "open_thread_history",
     migrate_phase: "migrate_thread_history",
+    retry_phase: "retry_thread_history",
 };
 
 const RUNTIME_DBS: [RuntimeDbSpec; 5] =
@@ -189,7 +216,6 @@ impl StateRuntime {
         default_provider: String,
         telemetry_override: Option<&dyn DbTelemetry>,
     ) -> anyhow::Result<Arc<Self>> {
-        let sqlite = SqliteConfig::from_sqlite_home(AbsolutePathBuf::try_from(codex_home.clone())?);
         tokio::fs::create_dir_all(&codex_home).await?;
         let state_migrator = runtime_state_migrator();
         let logs_migrator = runtime_logs_migrator();
@@ -200,7 +226,6 @@ impl StateRuntime {
         let goals_path = GOALS_DB.path(codex_home.as_path());
         let memories_path = MEMORIES_DB.path(codex_home.as_path());
         let pool = match open_state_sqlite(
-            &sqlite,
             &state_path,
             &state_migrator,
             telemetry_override,
@@ -214,7 +239,7 @@ impl StateRuntime {
             }
         };
         let logs_pool =
-            match open_logs_sqlite(&sqlite, &logs_path, &logs_migrator, telemetry_override).await {
+            match open_logs_sqlite(&logs_path, &logs_migrator, telemetry_override).await {
                 Ok(db) => Arc::new(db),
                 Err(err) => {
                     warn!("failed to open logs db at {}: {err}", logs_path.display());
@@ -223,7 +248,6 @@ impl StateRuntime {
                 }
             };
         let goals_pool = match open_goals_sqlite(
-            &sqlite,
             &goals_path,
             &goals_migrator,
             telemetry_override,
@@ -238,7 +262,6 @@ impl StateRuntime {
             }
         };
         let memories_pool = match open_memories_sqlite(
-            &sqlite,
             &memories_path,
             &memories_migrator,
             telemetry_override,
@@ -346,7 +369,6 @@ impl StateRuntime {
     }
 
     pub async fn clear_memory_data_in_sqlite_home(sqlite_home: &Path) -> anyhow::Result<bool> {
-        let sqlite = SqliteConfig::from_sqlite_home(AbsolutePathBuf::try_from(sqlite_home)?);
         let memories_path = MEMORIES_DB.path(sqlite_home);
         if !tokio::fs::try_exists(&memories_path).await? {
             return Ok(false);
@@ -354,7 +376,6 @@ impl StateRuntime {
 
         let memories_migrator = runtime_memories_migrator();
         let pool = open_memories_sqlite(
-            &sqlite,
             &memories_path,
             &memories_migrator,
             /*telemetry_override*/ None,
@@ -373,7 +394,6 @@ async fn close_sqlite_pools(pools: &[&SqlitePool]) {
 }
 
 async fn open_state_sqlite(
-    sqlite: &SqliteConfig,
     path: &Path,
     migrator: &Migrator,
     telemetry_override: Option<&dyn DbTelemetry>,
@@ -381,42 +401,37 @@ async fn open_state_sqlite(
     // New state DBs should use incremental auto-vacuum, but retrofitting an
     // existing DB requires a full VACUUM. Do not attempt that during process
     // startup: it is maintenance work that can contend with foreground writers.
-    open_sqlite(sqlite, path, migrator, STATE_DB, telemetry_override).await
+    open_sqlite(path, migrator, STATE_DB, telemetry_override).await
 }
 
 async fn open_logs_sqlite(
-    sqlite: &SqliteConfig,
     path: &Path,
     migrator: &Migrator,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
-    open_sqlite(sqlite, path, migrator, LOGS_DB, telemetry_override).await
+    open_sqlite(path, migrator, LOGS_DB, telemetry_override).await
 }
 
 async fn open_goals_sqlite(
-    sqlite: &SqliteConfig,
     path: &Path,
     migrator: &Migrator,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
-    open_sqlite(sqlite, path, migrator, GOALS_DB, telemetry_override).await
+    open_sqlite(path, migrator, GOALS_DB, telemetry_override).await
 }
 
 async fn open_memories_sqlite(
-    sqlite: &SqliteConfig,
     path: &Path,
     migrator: &Migrator,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
-    open_sqlite(sqlite, path, migrator, MEMORIES_DB, telemetry_override).await
+    open_sqlite(path, migrator, MEMORIES_DB, telemetry_override).await
 }
 
 /// Open and migrate the rebuildable paginated thread-history database.
 pub async fn open_thread_history_db(sqlite_home: &Path) -> anyhow::Result<SqlitePool> {
-    let sqlite = SqliteConfig::from_sqlite_home(AbsolutePathBuf::try_from(sqlite_home)?);
     let migrator = runtime_thread_history_migrator();
     open_sqlite(
-        &sqlite,
         thread_history_db_path(sqlite_home).as_path(),
         &migrator,
         THREAD_HISTORY_DB,
@@ -426,46 +441,12 @@ pub async fn open_thread_history_db(sqlite_home: &Path) -> anyhow::Result<Sqlite
 }
 
 async fn open_sqlite(
-    sqlite: &SqliteConfig,
     path: &Path,
     migrator: &Migrator,
     spec: RuntimeDbSpec,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
-    let started = Instant::now();
-    let pool_result = sqlite
-        .open_read_write_pool(path)
-        .await
-        .map_err(anyhow::Error::from);
-    crate::telemetry::record_init_result(
-        telemetry_override,
-        spec.kind,
-        spec.open_phase,
-        started.elapsed(),
-        &pool_result,
-    );
-    let pool = pool_result
-        .map_err(|source| recovery::RuntimeDbInitError::new(spec.label, "open", path, source))?;
-    let started = Instant::now();
-    let migrate_result = async {
-        if matches!(spec.kind, DbKind::State) {
-            repair_legacy_recency_migration_version(&pool, migrator).await?;
-        }
-        migrator.run(&pool).await.map_err(anyhow::Error::from)
-    }
-    .await;
-    crate::telemetry::record_init_result(
-        telemetry_override,
-        spec.kind,
-        spec.migrate_phase,
-        started.elapsed(),
-        &migrate_result,
-    );
-    if let Err(source) = migrate_result {
-        pool.close().await;
-        return Err(recovery::RuntimeDbInitError::new(spec.label, "migrate", path, source).into());
-    }
-    Ok(pool)
+    sqlite_init::open_sqlite(path, migrator, spec, telemetry_override).await
 }
 
 pub(super) async fn ensure_backfill_state_row_in_pool(
@@ -573,6 +554,8 @@ mod tests {
     use pretty_assertions::assert_eq;
     use sqlx::SqlitePool;
     use sqlx::migrate::MigrateError;
+    use sqlx::sqlite::SqliteConnectOptions;
+    use sqlx::sqlite::SqliteSynchronous;
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
     use std::path::Path;
@@ -668,10 +651,14 @@ mod tests {
             .await
             .expect("create codex home");
         let state_path = state_db_path(codex_home.as_path());
-        let pool = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs())
-            .open_read_write_pool(&state_path)
-            .await
-            .expect("open state db");
+        let pool = SqlitePool::connect_with(
+            SqliteConnectOptions::new()
+                .filename(&state_path)
+                .create_if_missing(true)
+                .synchronous(SqliteSynchronous::Off),
+        )
+        .await
+        .expect("open state db");
         STATE_MIGRATOR
             .run(&pool)
             .await
@@ -699,7 +686,6 @@ mod tests {
 
         let tolerant_migrator = runtime_state_migrator();
         let tolerant_pool = open_state_sqlite(
-            &crate::SqliteConfig::new_for_testing(codex_home.as_path().abs()),
             state_path.as_path(),
             &tolerant_migrator,
             /*telemetry_override*/ None,
@@ -732,12 +718,24 @@ mod tests {
             .filter_map(|event| event.tags.get("phase").cloned())
             .collect::<BTreeSet<_>>();
         let expected = [
+            "check_state",
+            "wait_init_lock_state",
+            "bootstrap_state",
             "open_state",
             "migrate_state",
+            "check_logs",
+            "wait_init_lock_logs",
+            "bootstrap_logs",
             "open_logs",
             "migrate_logs",
+            "check_goals",
+            "wait_init_lock_goals",
+            "bootstrap_goals",
             "open_goals",
             "migrate_goals",
+            "check_memories",
+            "wait_init_lock_memories",
+            "bootstrap_memories",
             "open_memories",
             "migrate_memories",
             "ensure_backfill_state",

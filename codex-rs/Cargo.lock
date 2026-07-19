@@ -3996,6 +3996,7 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "dirs",
+ "fs2",
  "libsqlite3-sys",
  "log",
  "owo-colors",

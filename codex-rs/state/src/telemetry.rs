@@ -74,6 +74,24 @@ pub(crate) fn record_init_result<T>(
     record_duration(telemetry, DB_INIT_DURATION_METRIC, duration, &tags);
 }
 
+pub(crate) fn record_init_retry(
+    telemetry: Option<&dyn DbTelemetry>,
+    db: DbKind,
+    phase: &'static str,
+    duration: Duration,
+    error: &anyhow::Error,
+) {
+    let outcome = DbOutcomeTags::from_error(error);
+    let tags = [
+        ("status", "retrying"),
+        ("phase", phase),
+        ("db", db.as_str()),
+        ("error", outcome.error),
+    ];
+    record_counter(telemetry, DB_INIT_METRIC, &tags);
+    record_duration(telemetry, DB_INIT_DURATION_METRIC, duration, &tags);
+}
+
 pub fn record_backfill_gate(
     telemetry: Option<&dyn DbTelemetry>,
     duration: Duration,
@@ -127,10 +145,14 @@ impl DbOutcomeTags {
                 status: "success",
                 error: "none",
             },
-            Err(err) => Self {
-                status: "failed",
-                error: classify_error(err),
-            },
+            Err(err) => Self::from_error(err),
+        }
+    }
+
+    fn from_error(err: &anyhow::Error) -> Self {
+        Self {
+            status: "failed",
+            error: classify_error(err),
         }
     }
 }

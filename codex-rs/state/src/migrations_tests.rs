@@ -276,9 +276,12 @@ async fn repairs_recency_migration_that_was_applied_as_version_38() {
         .await
         .expect("legacy recency migration should apply as version 38");
 
-    repair_legacy_recency_migration_version(&pool, &STATE_MIGRATOR)
-        .await
-        .expect("legacy migration history should be repaired");
+    {
+        let mut connection = pool.acquire().await.expect("acquire SQLite connection");
+        repair_legacy_recency_migration_version(&mut connection, &STATE_MIGRATOR)
+            .await
+            .expect("legacy migration history should be repaired");
+    }
     STATE_MIGRATOR
         .run(&pool)
         .await
