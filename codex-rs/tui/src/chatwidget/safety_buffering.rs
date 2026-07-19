@@ -128,6 +128,7 @@ impl ChatWidget {
             && retry_turn.is_some()
             && retry_prompt.is_some()
             && thread_id.is_some();
+        let hide_prompt = self.config.notices.hide_safety_buffering_prompt == Some(true);
         let previous_active = self
             .safety_buffering
             .active
@@ -143,7 +144,7 @@ impl ChatWidget {
             agent_message_started,
         });
 
-        let status_details = if can_offer_retry {
+        let status_details = if can_offer_retry && !hide_prompt {
             format!("{SAFETY_BUFFERING_HEADER} {SAFETY_BUFFERING_MESSAGE_WITH_RETRY}")
         } else {
             SAFETY_BUFFERING_HEADER.to_string()
@@ -156,6 +157,11 @@ impl ChatWidget {
             /*details_max_lines*/ 6,
         );
 
+        if hide_prompt {
+            self.bottom_pane
+                .dismiss_view_by_id(SAFETY_BUFFERING_PROMPT_VIEW_ID);
+            return;
+        }
         if !should_show_prompt {
             return;
         }

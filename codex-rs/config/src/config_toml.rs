@@ -981,6 +981,29 @@ mod tests {
     const WORKSPACE_ID_B: &str = "123e4567-e89b-42d3-a456-426614174001";
 
     #[test]
+    fn safety_buffering_prompt_notice_deserializes_and_defaults_to_visible() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+                [notice]
+                hide_safety_buffering_prompt = true
+            "#,
+        )
+        .expect("safety-buffering notice should deserialize");
+
+        assert_eq!(
+            config.notice,
+            Some(Notice {
+                hide_safety_buffering_prompt: Some(true),
+                ..Default::default()
+            })
+        );
+
+        let config: ConfigToml =
+            toml::from_str("[notice]").expect("omitted safety-buffering notice should deserialize");
+        assert_eq!(config.notice, Some(Notice::default()));
+    }
+
+    #[test]
     fn forced_chatgpt_workspace_id_accepts_single_string() {
         let config: ConfigToml = toml::from_str(&format!(
             r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A}""#
