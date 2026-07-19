@@ -8,7 +8,9 @@ use crate::telemetry::DbKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use log::LevelFilter;
 use sqlx::ConnectOptions;
+use sqlx::Connection;
 use sqlx::Error;
+use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::SqliteAutoVacuum;
@@ -267,5 +269,18 @@ impl SqliteConfig {
             .max_connections(1)
             .connect_with(options)
             .await
+    }
+
+    pub(crate) async fn open_log_maintenance_connection(
+        &self,
+        busy_timeout: Duration,
+    ) -> Result<SqliteConnection, Error> {
+        let options = SqliteConnectOptions::new()
+            .filename(self.logs_db_path())
+            .create_if_missing(false)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(busy_timeout)
+            .log_statements(LevelFilter::Off);
+        SqliteConnection::connect_with(&options).await
     }
 }
