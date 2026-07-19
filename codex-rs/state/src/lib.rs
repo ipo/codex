@@ -91,5 +91,15 @@ pub const DB_METRIC_BACKFILL_DURATION_MS: &str = "codex.db.backfill.duration_ms"
 pub const DB_INIT_METRIC: &str = "codex.sqlite.init.count";
 /// SQLite initialization latency. Tags: [status, phase, db, error]
 pub const DB_INIT_DURATION_METRIC: &str = "codex.sqlite.init.duration_ms";
+/// SQLite log maintenance attempts. Tags: [status, db]
+pub const DB_MAINTENANCE_METRIC: &str = "codex.sqlite.maintenance.count";
+/// SQLite log maintenance latency. Tags: [status, db]
+pub const DB_MAINTENANCE_DURATION_METRIC: &str = "codex.sqlite.maintenance.duration_ms";
+/// Rows deleted by SQLite log maintenance. Tags: [status, db]
+pub const DB_MAINTENANCE_DELETED_ROWS_METRIC: &str = "codex.sqlite.maintenance.deleted_rows";
+/// Busy result reported by SQLite log checkpoints. Tags: [status, db]
+pub const DB_MAINTENANCE_BUSY_METRIC: &str = "codex.sqlite.maintenance.checkpoint_busy";
+/// WAL frames observed by SQLite log checkpoints. Tags: [status, db, frames]
+pub const DB_MAINTENANCE_WAL_FRAMES_METRIC: &str = "codex.sqlite.maintenance.wal_frames";
 /// Rollout fallback attempts. Tags: [caller, reason]
 pub const DB_FALLBACK_METRIC: &str = "codex.sqlite.fallback.count";
