@@ -1,0 +1,223 @@
+schema_version = 1
+expected_count = 3
+
+[repository]
+provider = "github"
+slug = "ipo/codex"
+delivery_branch = "patch-stack/rust-v0.144.1"
+remote = "origin"
+marker_namespace = "ipo.codex.subagent-cwd-sqlite-reliability-2026-07"
+publisher_host = "jaeger"
+
+[policy]
+id_pattern = "^[A-Z][A-Z0-9-]{1,31}$"
+max_active_days = 2
+managed_label_prefixes = ["local-ticket/"]
+root_ids = ["SUBAGENT-CWD", "SQLITE-INIT"]
+terminal_ids = ["SUBAGENT-CWD", "SQLITE-MAINT"]
+require_all_terminal_ancestry = true
+forbid_forward_milestone_dependencies = true
+pace_seconds = 1.05
+min_rate_reserve = 100
+max_body_bytes = 60000
+
+[body_defaults]
+required_behavior = [
+  "Follow the repository AGENTS.md instructions, preserve unrelated changes, and keep the implementation portable across Linux, macOS, and Windows unless the behavior is executor-specific.",
+  "Use the narrowest project-specific validation commands and do not run the complete workspace test suite or Bazel locally.",
+]
+non_goals = [
+  "Unrelated refactoring, dependency upgrades, or product documentation changes.",
+]
+
+[labels."local-ticket/enhancement"]
+color = "1D76DB"
+description = "Adds or improves behavior in the local Codex fork"
+
+[labels."local-ticket/multi-agent"]
+color = "5319E7"
+description = "Changes multi-agent spawning or execution behavior"
+
+[labels."local-ticket/state"]
+color = "D93F0B"
+description = "Changes local SQLite state or log persistence behavior"
+
+[[milestones]]
+key = "codex-custom-reliability"
+title = "Codex custom: subagent CWD and SQLite reliability"
+description = "Subagents can select a safe working directory and concurrent Codex startups remain fast and reliable without weakening persistence or sandbox guarantees."
+
+[[tickets]]
+id = "SUBAGENT-CWD"
+title = "Allow spawn_agent to select a child working directory without widening permissions"
+milestone = "codex-custom-reliability"
+active_days = 2
+labels = [
+  "local-ticket/enhancement",
+  "local-ticket/multi-agent",
+]
+dependencies = []
+manual_gates = []
+outcome = "A caller can optionally give spawn_agent a child working directory in the inherited primary environment, while the child keeps exactly the parent's filesystem authority and approval behavior."
+rationale = "Subagents often need to work in a sibling worktree or another already-readable directory. Today spawn_agent always inherits the parent's CWD. Treating a model-selected CWD as a new workspace root would silently grant write authority, while parsing it as a host path would break remote Windows/POSIX executors. The implementation must therefore use executor-aware PathUri resolution, preserve workspace roots, and keep AGENTS.md discovery within the inherited sandbox."
+documents = [
+  "AGENTS.md",
+]
+paths = [
+  "codex-rs/core/src/tools/handlers",
+  "codex-rs/core/src/agents_md.rs",
+  "codex-rs/core/tests/suite",
+]
+required_behavior = [
+  "Add an optional cwd string to both v1 and v2 spawn_agent schemas; relative values resolve against the inherited primary environment CWD and absolute values follow that environment's path convention.",
+  "Resolve model-provided text with PathUri operations rather than host PathBuf parsing, update only the primary environment selection, and preserve all secondary selections.",
+  "Preserve the inherited workspace roots, permission profile, approval policy, approvals reviewer, and shared exec policy. The requested CWD must never become a writable root merely because it is the child CWD.",
+  "Before creating a child, use the inherited filesystem sandbox context to verify that the target exists, is a directory, and is readable. Invalid, missing, denied, non-directory, or convention-mismatched targets must return a model-visible error and create no thread.",
+  "Use the same sandbox context for AGENTS.md discovery and reads at the child CWD, including executor-backed filesystems. Do not reload project config.toml from the selected CWD.",
+  "Fresh, truncated-history, and full-history children must advertise the selected environment CWD without retaining stale parent-CWD world state or instructions.",
+  "Implementation routing metadata: agent_level: 5.",
+]
+non_goals = [
+  "Adding an environment_id spawn argument; this version always targets the inherited primary environment.",
+  "Requesting or granting a directory-wide write permission as part of spawning.",
+  "Changing the CWD of an already-running agent or adding app-server API surface.",
+]
+
+[[tickets.acceptance]]
+outcome = "When cwd is omitted, v1 and v2 fresh and forked subagents retain the same environment, sandbox, approval, and instruction behavior as before this change."
+verification = "Run the codex-core multi-agent integration tests with cwd omitted and compare the complete child configuration/environment snapshots and outbound child request with the established fixtures."
+evidence = "Passing named tests plus captured deep-equality assertions for child configuration, environment selections, and request context at the implementation commit."
+
+[[tickets.acceptance]]
+outcome = "A relative or absolute cwd selects an existing readable directory in the inherited primary environment, and the child's first command and model-visible environment both use that directory on host and remote executor paths."
+verification = "Run end-to-end spawn tests built with TestCodexBuilder::build_with_auto_env() for relative and absolute paths, including the foreign path convention used by the remote executor configuration."
+evidence = "Passing integration test names and request/command observations showing the resolved PathUri and environment id for each tested path form."
+
+[[tickets.acceptance]]
+outcome = "Selecting a readable directory outside existing writable roots does not widen authority: default writes remain denied or require the normal approval path, and auto-review receives the exact child CWD."
+verification = "Spawn into a readable non-writable directory under an auto-review configuration, attempt a write, and inspect the resulting sandbox decision and guardian approval request; repeat at a second CWD to prove approval-cache separation."
+evidence = "Passing integration test output identifying both CWDs, the preserved workspace roots, the initial denied/escalated write, and the CWD carried by guardian review."
+
+[[tickets.acceptance]]
+outcome = "A missing, non-directory, unreadable, malformed, or mismatched-convention cwd returns a useful spawn_agent error and leaves the live thread set unchanged."
+verification = "Invoke spawn_agent for each invalid category and compare the before/after thread inventory and model-visible tool error."
+evidence = "Passing table-driven test output containing each invalid category, expected error class, and unchanged thread inventory."
+
+[[tickets]]
+id = "SQLITE-INIT"
+title = "Make SQLite state initialization contention-safe across Codex processes"
+milestone = "codex-custom-reliability"
+active_days = 2
+labels = [
+  "local-ticket/enhancement",
+  "local-ticket/state",
+]
+dependencies = []
+manual_gates = []
+outcome = "Many Codex processes can concurrently open current, new, or upgrade-needed local state databases without spurious database-is-locked startup failures or serializing the current-schema hot path."
+rationale = "StateRuntime currently opens four pools while applying persistent journal_mode and auto_vacuum PRAGMAs and running SQLx migrations on every startup. WAL mode already persists, setting it during connection open can require an exclusive SQLite lock, and SQLx's SQLite migration lock is a no-op. The fix should separate read-only current-schema opening from serialized bootstrap work without changing the database schema or weakening durability."
+documents = [
+  "AGENTS.md",
+]
+paths = [
+  "codex-rs/state/src/runtime.rs",
+  "codex-rs/state/src/runtime",
+  "codex-rs/state/src/telemetry.rs",
+]
+required_behavior = [
+  "Open established databases without reissuing persistent journal_mode or auto_vacuum PRAGMAs; retain WAL, synchronous=NORMAL, and the existing foreground busy timeout.",
+  "Use a read-only check of the existing _sqlx_migrations records to validate every known version and checksum while preserving support for newer applied versions.",
+  "Bypass cross-process initialization locking entirely when the journal mode and migration records are current.",
+  "When bootstrap, WAL conversion, repair, or migration is required, acquire an owner-only per-database sidecar advisory lock, wait with jitter for at most 60 seconds, recheck under the lock, and perform only the required work.",
+  "Configure WAL and incremental auto-vacuum before creating a new schema, but never run VACUUM during startup or retrofit auto-vacuum on an established database.",
+  "Retry only transient SQLITE_BUSY/SQLITE_LOCKED failures during mixed-version rollout; preserve immediate failure for corruption, readonly, full-disk, and migration-integrity errors.",
+  "Record low-cardinality timing and outcome telemetry for schema checks, lock waits, bootstrap, migration, and transient retries.",
+  "Implementation routing metadata: agent_level: 5.",
+]
+non_goals = [
+  "Changing application tables, columns, or migration SQL.",
+  "Increasing the global SQLite busy timeout, making the log database optional, or dropping state/log records.",
+  "Changing log retention or checkpoint scheduling; that work belongs to SQLITE-MAINT.",
+]
+
+[[tickets.acceptance]]
+outcome = "At least 16 concurrent initializations against one current WAL database all succeed while another connection performs ordinary writes, with no another-process/database-is-locked startup error."
+verification = "Run the subprocess concurrency scenario against one populated temporary Codex home while a separate writer repeatedly commits, and require every process to report successful StateRuntime initialization."
+evidence = "A passing integration report listing every child exit status, initialization result, and absence of SQLITE_BUSY/SQLITE_LOCKED startup errors."
+
+[[tickets.acceptance]]
+outcome = "Concurrent cold initialization and concurrent upgrade from an older fixture each produce one valid schema with all original fixture data preserved."
+verification = "Start multiple initializers simultaneously for an empty home and for each supported old-schema fixture, then validate migration checksums, SQLite integrity, and complete fixture objects."
+evidence = "Passing named tests with the final migration records, integrity-check result, and deep-equality comparison of preserved fixture data."
+
+[[tickets.acceptance]]
+outcome = "A current-schema process starts without waiting even when another process holds the corresponding sidecar initialization lock."
+verification = "Hold the init lock from a separate process, initialize an already-current database under a bounded test deadline, and assert no lock-wait telemetry was emitted."
+evidence = "Passing hot-path test output with the deadline, result, and telemetry event set."
+
+[[tickets.acceptance]]
+outcome = "New databases use WAL plus incremental auto-vacuum, established databases retain their data/settings, and no application schema object is added by this ticket."
+verification = "Compare PRAGMA values, sqlite_schema rows, migration records, and representative stored objects before and after initialization for new and established fixtures."
+evidence = "A passing schema/settings comparison containing both fixture classes and the implementation commit."
+
+[[tickets]]
+id = "SQLITE-MAINT"
+title = "Move log retention and WAL maintenance off startup with cross-process coordination"
+milestone = "codex-custom-reliability"
+active_days = 2
+labels = [
+  "local-ticket/enhancement",
+  "local-ticket/state",
+]
+dependencies = ["SQLITE-INIT"]
+manual_gates = []
+outcome = "Codex startup no longer waits for log retention or checkpoint work, while one bounded background worker makes observable progress on expired rows and oversized WAL files without delaying foreground log traffic."
+rationale = "Every StateRuntime startup currently deletes all logs older than ten days in one transaction and then issues a passive checkpoint. Concurrent processes repeat the same work. Passive checkpoints intentionally avoid waiting and may remain incomplete under active readers or writers, allowing the WAL to grow. Maintenance must move behind startup, coordinate across processes without a database table, and yield immediately to foreground work."
+documents = [
+  "AGENTS.md",
+]
+paths = [
+  "codex-rs/state/src/runtime.rs",
+  "codex-rs/state/src/runtime",
+  "codex-rs/state/src/telemetry.rs",
+]
+required_behavior = [
+  "Remove log retention and checkpoint work from the synchronous StateRuntime initialization path and launch a bounded background attempt only after essential initialization succeeds.",
+  "Coordinate processes with an owner-only logs_2.sqlite.maintenance sidecar lock/stamp. Lock acquisition must be nonblocking, successful completion is eligible again after one hour, and busy/partial work is eligible after five minutes.",
+  "Keep the ten-day retention policy. Delete at most 10,000 expired rows per transaction, yield between batches, and stop after two seconds or 100,000 rows per invocation.",
+  "Use a maintenance connection with at most a 100 ms busy timeout and stop rather than waiting when foreground readers or writers prevent progress.",
+  "Fetch and record the busy, log-frame, and checkpointed-frame values from PRAGMA wal_checkpoint(PASSIVE).",
+  "Only after passive checkpointing reports every frame copied, attempt a zero-wait TRUNCATE checkpoint; skip immediately when active readers or writers prevent it.",
+  "Background errors must be observable through warnings/telemetry but must not fail startup. The bounded task must be cancelled or awaited during StateRuntime.close().",
+  "Implementation routing metadata: agent_level: 5.",
+]
+non_goals = [
+  "Adding a maintenance table or changing any SQLite application schema.",
+  "Changing log partition limits, the ten-day retention policy, or foreground log insert behavior.",
+  "Running VACUUM or a waiting FULL, RESTART, or TRUNCATE checkpoint on the startup/foreground path.",
+]
+
+[[tickets.acceptance]]
+outcome = "StateRuntime initialization succeeds without waiting for a held maintenance lock, an active log writer, retention deletion, or checkpoint work."
+verification = "Hold the sidecar lock and a SQLite write transaction from separate processes while starting another runtime under a strict deadline, then release them and inspect the background outcome."
+evidence = "Passing process-level test output with startup duration/result and the later maintenance status."
+
+[[tickets.acceptance]]
+outcome = "Concurrent Codex processes produce at most one maintenance worker, which removes expired rows in bounded batches while preserving all rows at or newer than the retention cutoff."
+verification = "Start multiple runtimes against a log fixture spanning both sides of the cutoff, observe worker acquisition, and compare the complete retained-row set after bounded maintenance passes."
+evidence = "Passing test output containing worker counts, per-pass deleted rows, and deep equality of the retained rows."
+
+[[tickets.acceptance]]
+outcome = "Foreground contention makes maintenance stop promptly without losing data, and a later eligible attempt resumes from the remaining expired rows."
+verification = "Introduce a writer between deletion batches, assert the bounded worker exits with a busy/partial result, then advance the sidecar eligibility and rerun to completion."
+evidence = "Passing deterministic test output showing the partial row count, preserved rows, retry state, and final result."
+
+[[tickets.acceptance]]
+outcome = "A quiet WAL is passively checkpointed and opportunistically truncated, while active readers or writers are never made to wait for truncation."
+verification = "Create a WAL backlog, exercise maintenance first with a held reader/writer and then when quiescent, and compare checkpoint results plus logical/physical WAL state."
+evidence = "Passing test output containing all checkpoint result columns, the nonblocking busy case, and the quiescent WAL-size result."
+
+[[tickets.acceptance]]
+outcome = "The SQLite application schema is identical before and after enabling background maintenance."
+verification = "Capture and compare ordered sqlite_schema rows and migration records around maintenance execution."
+evidence = "A passing deep-equality schema comparison at the implementation commit."
