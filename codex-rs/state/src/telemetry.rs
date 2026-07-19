@@ -6,6 +6,11 @@ use std::time::Duration;
 use crate::DB_FALLBACK_METRIC;
 use crate::DB_INIT_DURATION_METRIC;
 use crate::DB_INIT_METRIC;
+use crate::DB_MAINTENANCE_BUSY_METRIC;
+use crate::DB_MAINTENANCE_DELETED_ROWS_METRIC;
+use crate::DB_MAINTENANCE_DURATION_METRIC;
+use crate::DB_MAINTENANCE_METRIC;
+use crate::DB_MAINTENANCE_WAL_FRAMES_METRIC;
 use tracing::debug;
 
 /// Low-cardinality sink for SQLite startup and fallback telemetry.
@@ -92,6 +97,49 @@ pub(crate) fn record_init_retry(
     record_duration(telemetry, DB_INIT_DURATION_METRIC, duration, &tags);
 }
 
+pub(crate) fn record_maintenance_result(
+    telemetry: Option<&dyn DbTelemetry>,
+    status: &'static str,
+    duration: Duration,
+    deleted_rows: u64,
+    checkpoint: Option<(i64, i64, i64)>,
+) {
+    let tags = [("status", status), ("db", "logs")];
+    record_counter(telemetry, DB_MAINTENANCE_METRIC, &tags);
+    record_duration(telemetry, DB_MAINTENANCE_DURATION_METRIC, duration, &tags);
+    record_counter_value(
+        telemetry,
+        DB_MAINTENANCE_DELETED_ROWS_METRIC,
+        i64::try_from(deleted_rows).unwrap_or(i64::MAX),
+        &tags,
+    );
+    if let Some((busy, log_frames, checkpointed_frames)) = checkpoint {
+        record_counter_value(telemetry, DB_MAINTENANCE_BUSY_METRIC, busy, &tags);
+        let log_tags = [("status", status), ("db", "logs"), ("frames", "log")];
+        let checkpointed_tags = [
+            ("status", status),
+            ("db", "logs"),
+            ("frames", "checkpointed"),
+        ];
+        if log_frames >= 0 {
+            record_counter_value(
+                telemetry,
+                DB_MAINTENANCE_WAL_FRAMES_METRIC,
+                log_frames,
+                &log_tags,
+            );
+        }
+        if checkpointed_frames >= 0 {
+            record_counter_value(
+                telemetry,
+                DB_MAINTENANCE_WAL_FRAMES_METRIC,
+                checkpointed_frames,
+                &checkpointed_tags,
+            );
+        }
+    }
+}
+
 pub fn record_backfill_gate(
     telemetry: Option<&dyn DbTelemetry>,
     duration: Duration,
@@ -113,8 +161,17 @@ pub fn record_fallback(
 }
 
 fn record_counter(telemetry: Option<&dyn DbTelemetry>, name: &str, tags: &[(&str, &str)]) {
+    record_counter_value(telemetry, name, 1, tags);
+}
+
+fn record_counter_value(
+    telemetry: Option<&dyn DbTelemetry>,
+    name: &str,
+    value: i64,
+    tags: &[(&str, &str)],
+) {
     if let Some(telemetry) = resolve_telemetry(telemetry) {
-        telemetry.counter(name, /*inc*/ 1, tags);
+        telemetry.counter(name, value, tags);
     }
 }
 

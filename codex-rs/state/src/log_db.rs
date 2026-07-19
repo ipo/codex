@@ -504,6 +504,8 @@ mod tests {
         std::env::temp_dir().join(format!("codex-state-log-db-{}", Uuid::new_v4()))
     }
 
+    const TEST_LOG_TS: i64 = 4_000_000_000;
+
     async fn wait_for_log_count(runtime: &StateRuntime, expected: usize) -> Vec<crate::LogRow> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
@@ -525,7 +527,7 @@ mod tests {
 
     fn test_entry(message: &str) -> LogEntry {
         LogEntry {
-            ts: 1,
+            ts: TEST_LOG_TS,
             ts_nanos: 2,
             level: "INFO".to_string(),
             target: "test".to_string(),
