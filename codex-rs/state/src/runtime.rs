@@ -57,6 +57,7 @@ mod agent_jobs;
 mod backfill;
 mod external_agent_config_imports;
 mod goals;
+mod log_maintenance;
 mod logs;
 mod memories;
 mod recovery;
@@ -181,6 +182,7 @@ pub struct StateRuntime {
     memories: MemoryStore,
     thread_updated_at_millis: Arc<AtomicI64>,
     thread_recency_at_millis: Arc<AtomicI64>,
+    log_maintenance_task: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl StateRuntime {
@@ -322,13 +324,13 @@ impl StateRuntime {
             default_provider,
             thread_updated_at_millis: Arc::new(AtomicI64::new(thread_updated_at_millis)),
             thread_recency_at_millis: Arc::new(AtomicI64::new(thread_recency_at_millis)),
+            log_maintenance_task: Arc::new(std::sync::Mutex::new(None)),
         });
-        if let Err(err) = runtime.run_logs_startup_maintenance().await {
-            warn!(
-                "failed to run startup maintenance for logs db at {}: {err}",
-                logs_path.display(),
-            );
-        }
+        let maintenance_task = log_maintenance::spawn_logs_maintenance(logs_path);
+        *runtime
+            .log_maintenance_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(maintenance_task);
         Ok(runtime)
     }
 
@@ -347,6 +349,19 @@ impl StateRuntime {
 
     /// Close all SQLite pools and wait for outstanding pool workers to exit.
     pub async fn close(&self) {
+        let maintenance_task = self
+            .log_maintenance_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(maintenance_task) = maintenance_task {
+            maintenance_task.abort();
+            if let Err(err) = maintenance_task.await
+                && !err.is_cancelled()
+            {
+                warn!("log maintenance task failed while closing state runtime: {err}");
+            }
+        }
         self.memories.close().await;
         self.thread_goals.close().await;
         self.logs_pool.close().await;
