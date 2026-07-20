@@ -46,7 +46,7 @@ async fn spawn_agent_cwd_selects_child_directory_without_widening_permissions(
         ),
         SpawnToolVersion::V2 => responses::ev_function_call_with_namespace(
             SPAWN_CALL_ID,
-            "collaboration",
+            "agents",
             "spawn_agent",
             &spawn_args,
         ),

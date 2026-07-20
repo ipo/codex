@@ -10645,15 +10645,15 @@ max_concurrent_threads_per_session = 17
 
     let config = resolve_multi_agent_v2_config(&config_toml);
     let concurrency_guidance = "There are 17 available concurrency slots, meaning that up to 17 agents can be active at once, including you.";
-    let expected_suffix =
-        format!("{DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT}\n{concurrency_guidance}");
     assert!(
         [
             config.root_agent_usage_hint_text,
             config.subagent_usage_hint_text,
         ]
         .into_iter()
-        .all(|hint| hint.is_some_and(|hint| hint.contains(expected_suffix.as_str())))
+        .all(|hint| hint.is_some_and(|hint| {
+            hint.contains("to=functions.agents.spawn_agent") && hint.ends_with(concurrency_guidance)
+        }))
     );
 }
 
@@ -10697,6 +10697,28 @@ fn multi_agent_v2_exposes_model_overrides_by_default() {
         .all(|hint| hint.is_some_and(|hint| {
             hint.ends_with(DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT)
         }))
+    );
+}
+
+#[test]
+fn multi_agent_v2_default_usage_hints_use_configured_tool_namespace() {
+    let config_toml = toml::from_str(
+        r#"[features.multi_agent_v2]
+tool_namespace = "delegates"
+"#,
+    )
+    .expect("multi-agent v2 config should parse");
+
+    let config = resolve_multi_agent_v2_config(&config_toml);
+
+    assert_eq!(config.tool_namespace.as_deref(), Some("delegates"));
+    assert!(
+        [
+            config.root_agent_usage_hint_text,
+            config.subagent_usage_hint_text,
+        ]
+        .into_iter()
+        .all(|hint| hint.is_some_and(|hint| hint.contains("to=functions.delegates.spawn_agent")))
     );
 }
 
@@ -11007,7 +11029,11 @@ async fn multi_agent_v2_rejects_invalid_tool_namespace() -> std::io::Result<()> 
         ),
         (
             "functions",
-            "features.multi_agent_v2.tool_namespace uses a reserved namespace: functions",
+            "features.multi_agent_v2.tool_namespace uses a reserved namespace: functions; choose a non-reserved namespace such as agents",
+        ),
+        (
+            "collaboration",
+            "features.multi_agent_v2.tool_namespace uses a reserved namespace: collaboration; choose a non-reserved namespace such as agents",
         ),
     ] {
         let codex_home = TempDir::new()?;

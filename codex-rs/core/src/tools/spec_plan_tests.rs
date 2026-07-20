@@ -43,7 +43,7 @@ use crate::tools::router::ToolRouterParams;
 use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
 
-const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const MULTI_AGENT_V2_NAMESPACE: &str = "agents";
 
 #[derive(Default)]
 struct ToolPlanInputs {
@@ -1272,8 +1272,11 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         .properties
         .as_ref()
         .expect("spawn_agent should use object params");
-    for property in ["model", "reasoning_effort"] {
-        assert!(spawn_agent_properties.contains_key(property));
+    for property in ["model", "reasoning_effort", "cwd"] {
+        assert!(
+            spawn_agent_properties.contains_key(property),
+            "expected V2 spawn_agent to expose `{property}`"
+        );
     }
     for property in ["agent_type", "service_tier"] {
         assert!(!spawn_agent_properties.contains_key(property));
