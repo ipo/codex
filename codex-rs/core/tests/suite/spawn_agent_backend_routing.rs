@@ -78,7 +78,7 @@ async fn run_spawn(
     let server = start_mock_server().await;
     let namespace = match version {
         ToolVersion::V1 => "multi_agent_v1",
-        ToolVersion::V2 => "collaboration",
+        ToolVersion::V2 => "agents",
     };
     let spawn_args = serde_json::to_string(&spawn_args)?;
     let parent_sse = sse(vec![
@@ -649,7 +649,7 @@ async fn v2_agent_control_reload_preserves_child_model_effort_and_route() -> Res
                     ev_response_created("resp-list-parent-1"),
                     ev_function_call_with_namespace(
                         RELOAD_LIST_CALL_ID,
-                        "collaboration",
+                        "agents",
                         "list_agents",
                         "{}",
                     ),
@@ -709,7 +709,7 @@ async fn v2_agent_control_reload_preserves_child_model_effort_and_route() -> Res
                 ev_response_created("resp-reload-parent-1"),
                 ev_function_call_with_namespace(
                     RELOAD_CALL_ID,
-                    "collaboration",
+                    "agents",
                     "followup_task",
                     &reload_args,
                 ),
@@ -798,7 +798,7 @@ async fn v2_agent_control_reload_preserves_child_model_effort_and_route() -> Res
                     ev_response_created("resp-completion-parent-1"),
                     ev_function_call_with_namespace(
                         COMPLETION_WAIT_CALL_ID,
-                        "collaboration",
+                        "agents",
                         "wait_agent",
                         "{}",
                     ),

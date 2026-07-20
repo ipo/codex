@@ -41,7 +41,7 @@ use crate::tools::router::ToolRouterParams;
 use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
 
-const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const MULTI_AGENT_V2_NAMESPACE: &str = "agents";
 
 #[derive(Default)]
 struct ToolPlanInputs {
@@ -1254,6 +1254,17 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     else {
         panic!("expected spawn_agent in {MULTI_AGENT_V2_NAMESPACE} namespace");
     };
+    let spawn_agent_properties = spawn_agent
+        .parameters
+        .properties
+        .as_ref()
+        .expect("spawn_agent should use object params");
+    for property in ["model", "reasoning_effort", "cwd"] {
+        assert!(
+            spawn_agent_properties.contains_key(property),
+            "expected V2 spawn_agent to expose `{property}`"
+        );
+    }
     let spawn_agent_description = spawn_agent.description.as_str();
     assert!(!spawn_agent_description.contains("max_concurrent_threads_per_session"));
     assert!(spawn_agent_description.contains(
