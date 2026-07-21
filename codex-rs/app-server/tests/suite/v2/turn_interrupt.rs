@@ -136,6 +136,19 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     assert_eq!(completed.thread_id, thread_id);
     assert_eq!(completed.turn.status, TurnStatus::Interrupted);
 
+    let repeated_interrupt_id = mcp
+        .send_turn_interrupt_request(TurnInterruptParams { thread_id, turn_id })
+        .await?;
+    let repeated_interrupt_err: JSONRPCError = timeout(
+        std::time::Duration::from_millis(500),
+        mcp.read_stream_until_error_message(RequestId::Integer(repeated_interrupt_id)),
+    )
+    .await??;
+    assert_eq!(
+        repeated_interrupt_err.error.code,
+        INVALID_REQUEST_ERROR_CODE
+    );
+
     Ok(())
 }
 
