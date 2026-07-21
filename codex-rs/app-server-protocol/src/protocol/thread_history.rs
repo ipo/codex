@@ -1213,6 +1213,7 @@ impl ThreadHistoryBuilder {
             if let Some(turn) = self.current_turn.as_mut().filter(|turn| turn.id == turn_id) {
                 let changed_turn = apply_abort(turn);
                 self.record_changed_turn(changed_turn);
+                self.finish_current_turn();
                 return;
             }
 
@@ -1230,6 +1231,7 @@ impl ThreadHistoryBuilder {
         if let Some(turn) = self.current_turn.as_mut() {
             let changed_turn = apply_abort(turn);
             self.record_changed_turn(changed_turn);
+            self.finish_current_turn();
         }
     }
 
@@ -2504,6 +2506,39 @@ mod tests {
                 phase: None,
                 memory_citation: None,
             }
+        );
+    }
+
+    #[test]
+    fn abort_closes_active_turn() {
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.handle_event(&EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".into(),
+            trace_id: None,
+            started_at: Some(10),
+            model_context_window: None,
+            collaboration_mode_kind: Default::default(),
+        }));
+        builder.handle_event(&EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some("turn-1".into()),
+            reason: TurnAbortReason::Interrupted,
+            completed_at: Some(11),
+            duration_ms: Some(1_000),
+        }));
+
+        assert!(!builder.has_active_turn());
+        assert_eq!(
+            builder.finish(),
+            vec![Turn {
+                id: "turn-1".into(),
+                items: Vec::new(),
+                items_view: TurnItemsView::Full,
+                status: TurnStatus::Interrupted,
+                error: None,
+                started_at: Some(10),
+                completed_at: Some(11),
+                duration_ms: Some(1_000),
+            }]
         );
     }
 
