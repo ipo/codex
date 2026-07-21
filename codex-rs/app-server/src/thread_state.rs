@@ -207,6 +207,9 @@ mod tests {
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
+    use codex_protocol::protocol::TurnAbortReason;
+    use codex_protocol::protocol::TurnAbortedEvent;
+    use codex_protocol::protocol::TurnStartedEvent;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
 
@@ -224,6 +227,36 @@ mod tests {
         ];
 
         assert_eq!(results, vec![true, false, true, false]);
+    }
+
+    #[test]
+    fn aborted_turn_becomes_terminal() {
+        let mut state = ThreadState::default();
+        state.track_current_turn_event(
+            "turn-1",
+            &EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                trace_id: None,
+                started_at: Some(10),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        );
+
+        state.track_current_turn_event(
+            "turn-1",
+            &EventMsg::TurnAborted(TurnAbortedEvent {
+                turn_id: Some("turn-1".to_string()),
+                reason: TurnAbortReason::Interrupted,
+                completed_at: Some(11),
+                duration_ms: Some(1_000),
+            }),
+        );
+
+        assert_eq!(
+            (state.active_turn_snapshot(), state.last_terminal_turn_id),
+            (None, Some("turn-1".to_string()))
+        );
     }
 
     fn thread_settings(model: &str) -> ThreadSettings {
