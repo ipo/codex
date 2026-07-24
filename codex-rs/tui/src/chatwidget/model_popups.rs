@@ -636,8 +636,7 @@ impl ChatWidget {
                 }
                 _ => unreachable!("advanced choices are limited to Max and Ultra"),
             };
-            let actions =
-                self.model_selection_actions(model_slug.clone(), Some(effort.clone()));
+            let actions = self.model_selection_actions(model_slug.clone(), Some(effort.clone()));
 
             items.push(SelectionItem {
                 name: Self::reasoning_effort_label(&effort),
@@ -711,24 +710,6 @@ impl ChatWidget {
              increase usage quickly. Consider setting \
              features.multi_agent_v2.max_concurrent_threads_per_session below 8."
         ))
-    }
-
-    pub(super) fn apply_model_and_effort_without_persist(
-        &self,
-        model: String,
-        effort: Option<ReasoningEffortConfig>,
-    ) {
-        let warning = effort
-            .as_ref()
-            .and_then(|effort| self.ultra_reasoning_concurrency_warning(effort));
-        self.app_event_tx.send(AppEvent::UpdateModel(model));
-        self.app_event_tx
-            .send(AppEvent::UpdateReasoningEffort(effort));
-        if let Some(warning) = warning {
-            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                history_cell::new_warning_event(warning),
-            )));
-        }
     }
 
     pub(crate) fn record_persisted_model_selection(

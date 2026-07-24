@@ -791,12 +791,6 @@ pub(crate) enum AppEvent {
         model: ModelPreset,
     },
 
-    /// Apply an advanced reasoning effort to the active conversation without changing defaults.
-    ApplyAdvancedReasoning {
-        model: String,
-        effort: ReasoningEffort,
-    },
-
     /// Open the scope prompt for applying the selected model and effort.
     OpenModelSelectionScopePrompt {
         model: String,

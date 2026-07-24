@@ -130,6 +130,7 @@ async fn parent_owned_thread_preserves_queued_input_before_draining() {
         user_message: UserMessage::from("keep this queued prompt"),
         action: QueuedInputAction::Plain,
         pending_pastes: vec![("[Image 1]".to_string(), "pasted contents".to_string())],
+        source: QueuedUserMessageSource::Composer,
     };
     let history_record = UserMessageHistoryRecord::UserMessageText;
     chat.input_queue

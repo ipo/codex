@@ -76,9 +76,6 @@ pub use recovery::sqlite_error_detail_is_lock;
 pub use remote_control::RemoteControlEnrollmentRecord;
 pub use threads::ThreadFilterOptions;
 
-#[cfg(test)]
-use sqlite_init::base_sqlite_options;
-
 // "Partition" is the retained-log-content bucket we cap at 10 MiB:
 // - one bucket per non-null thread_id
 // - one bucket per threadless (thread_id IS NULL) non-null process_uuid
@@ -227,42 +224,31 @@ impl StateRuntime {
         let logs_path = LOGS_DB.path(codex_home.as_path());
         let goals_path = GOALS_DB.path(codex_home.as_path());
         let memories_path = MEMORIES_DB.path(codex_home.as_path());
-        let pool = match open_state_sqlite(
-            &state_path,
-            &state_migrator,
-            telemetry_override,
-        )
-        .await
-        {
+        let pool = match open_state_sqlite(&state_path, &state_migrator, telemetry_override).await {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
                 return Err(err);
             }
         };
-        let logs_pool =
-            match open_logs_sqlite(&logs_path, &logs_migrator, telemetry_override).await {
-                Ok(db) => Arc::new(db),
-                Err(err) => {
-                    warn!("failed to open logs db at {}: {err}", logs_path.display());
-                    close_sqlite_pools(&[pool.as_ref()]).await;
-                    return Err(err);
-                }
-            };
-        let goals_pool = match open_goals_sqlite(
-            &goals_path,
-            &goals_migrator,
-            telemetry_override,
-        )
-        .await
+        let logs_pool = match open_logs_sqlite(&logs_path, &logs_migrator, telemetry_override).await
         {
             Ok(db) => Arc::new(db),
             Err(err) => {
-                warn!("failed to open goals db at {}: {err}", goals_path.display());
-                close_sqlite_pools(&[pool.as_ref(), logs_pool.as_ref()]).await;
+                warn!("failed to open logs db at {}: {err}", logs_path.display());
+                close_sqlite_pools(&[pool.as_ref()]).await;
                 return Err(err);
             }
         };
+        let goals_pool =
+            match open_goals_sqlite(&goals_path, &goals_migrator, telemetry_override).await {
+                Ok(db) => Arc::new(db),
+                Err(err) => {
+                    warn!("failed to open goals db at {}: {err}", goals_path.display());
+                    close_sqlite_pools(&[pool.as_ref(), logs_pool.as_ref()]).await;
+                    return Err(err);
+                }
+            };
         let memories_pool = match open_memories_sqlite(
             &memories_path,
             &memories_migrator,

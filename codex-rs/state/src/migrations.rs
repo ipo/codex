@@ -83,7 +83,7 @@ WHERE version = ?
     .bind(38_i64)
     .bind(recency_migration.checksum.as_ref())
     .bind(recency_migration.version)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?
     .is_some();
     if !legacy_recency_needs_repair {

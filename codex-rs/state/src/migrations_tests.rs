@@ -340,14 +340,20 @@ async fn repair_recency_migration_succeeds_while_another_connection_holds_writer
         .begin_with("BEGIN IMMEDIATE")
         .await
         .expect("write transaction should acquire the writer slot");
+    let mut read_connection = read_pool
+        .acquire()
+        .await
+        .expect("read connection should open");
 
-    let repair_result = repair_legacy_recency_migration_version(&read_pool, &STATE_MIGRATOR).await;
+    let repair_result =
+        repair_legacy_recency_migration_version(&mut read_connection, &STATE_MIGRATOR).await;
 
     write_transaction
         .rollback()
         .await
         .expect("write transaction should roll back");
     drop(write_connection);
+    drop(read_connection);
     read_pool.close().await;
     pool.close().await;
     repair_result.expect("current migration history should not need the writer slot");

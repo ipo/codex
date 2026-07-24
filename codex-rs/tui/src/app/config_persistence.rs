@@ -797,6 +797,7 @@ impl App {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn on_apply_advanced_reasoning(
         &mut self,
         model: &str,
@@ -814,6 +815,7 @@ impl App {
         default_effort
     }
 
+    #[cfg(test)]
     fn default_reasoning_effort_for_conversation_model(
         &self,
         model: &str,

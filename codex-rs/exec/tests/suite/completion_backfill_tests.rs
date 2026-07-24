@@ -31,7 +31,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
             responses::ev_response_created("resp-parent-1"),
             responses::ev_function_call_with_namespace(
                 SPAWN_CALL_ID,
-                "collaboration",
+                "agents",
                 "spawn_agent",
                 &spawn_args,
             ),
@@ -58,12 +58,7 @@ async fn ignores_unrelated_turn_completion_before_backfilling_primary_turn() -> 
         },
         responses::sse(vec![
             responses::ev_response_created("resp-parent-2"),
-            responses::ev_function_call_with_namespace(
-                WAIT_CALL_ID,
-                "collaboration",
-                "wait_agent",
-                "{}",
-            ),
+            responses::ev_function_call_with_namespace(WAIT_CALL_ID, "agents", "wait_agent", "{}"),
             responses::ev_completed("resp-parent-2"),
         ]),
     )

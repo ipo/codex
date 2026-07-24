@@ -114,7 +114,7 @@ async fn assert_ordinary_exec_prompt_is_unchanged(prompt: &str) -> anyhow::Resul
             "{\"type\":\"thread.started\",\"thread_id\":\"<thread-id>\"}\n",
             "{\"type\":\"turn.started\"}\n",
             "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"ordinary response\"}}\n",
-            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}\n",
         )
     );
 

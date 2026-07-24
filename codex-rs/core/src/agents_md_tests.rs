@@ -854,8 +854,9 @@ async fn project_root_marker_search_limits_concurrent_probes_and_preserves_order
 
         metadata_calls.release.add_permits(max_probe_count);
     };
+    let sandbox = test_sandbox(&cwd);
     let (paths, ()) = tokio::join!(
-        super::agents_md_paths(&config.config, &cwd, &fs),
+        super::agents_md_paths(&config.config, &cwd, &fs, &sandbox),
         assertions
     );
     let paths = paths.expect("AGENTS.md discovery");

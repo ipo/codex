@@ -5,7 +5,7 @@ use codex_utils_path_uri::PathUri;
 impl SessionConfiguration {
     pub(super) fn file_system_sandbox_context(&self, cwd: &PathUri) -> FileSystemSandboxContext {
         let mut workspace_roots: Vec<PathUri> = self
-            .workspace_roots
+            .primary_workspace_roots()
             .iter()
             .map(PathUri::from_abs_path)
             .collect();

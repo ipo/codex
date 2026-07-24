@@ -214,7 +214,7 @@ async fn safety_buffering_prompt_can_be_suppressed_while_turn_completes() {
                 .status_widget()
                 .expect("status indicator should be visible")
                 .details(),
-            Some("This request requires additional safety checks, which can take extra time.")
+            Some(SAFETY_BUFFERING_HEADER_TEXT)
         );
         if faster_model.is_some() {
             assert_chatwidget_snapshot!("safety_buffering_status_only", rendered);

@@ -3108,6 +3108,7 @@ fn model_picker_preset(slug: &str, show_in_picker: bool) -> ModelPreset {
         is_default: false,
         upgrade: None,
         show_in_picker,
+        multi_agent_version: None,
         availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
@@ -3411,7 +3412,7 @@ async fn ultra_reasoning_selection_skips_warning_below_threshold() {
 }
 
 #[tokio::test]
-async fn max_reasoning_selection_persists_model_selection() {
+async fn max_reasoning_selection_opens_scope_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
@@ -3426,20 +3427,15 @@ async fn max_reasoning_selection_persists_model_selection() {
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(events.iter().any(|event| matches!(
         event,
-        AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Max))
-    )));
-    assert!(events.iter().any(|event| matches!(
-        event,
-        AppEvent::PersistModelSelection {
+        AppEvent::OpenModelSelectionScopePrompt {
             model,
             effort: Some(ReasoningEffortConfig::Max),
         } if model == "gpt-5.4"
     )));
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event, AppEvent::ApplyAdvancedReasoning { .. }))
-    );
+    assert!(events.iter().all(|event| !matches!(
+        event,
+        AppEvent::UpdateReasoningEffort(_) | AppEvent::PersistModelSelection { .. }
+    )));
 }
 
 #[tokio::test]
@@ -3589,10 +3585,11 @@ async fn reasoning_up_shortcut_does_not_silently_enter_advanced_effort() {
             chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
 
             let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-            assert!(events.iter().all(|event| !matches!(
-                event,
-                AppEvent::UpdateReasoningEffort(_) | AppEvent::ApplyAdvancedReasoning { .. }
-            )));
+            assert!(
+                events
+                    .iter()
+                    .all(|event| !matches!(event, AppEvent::UpdateReasoningEffort(_)))
+            );
             let messages = events
                 .into_iter()
                 .filter_map(|event| match event {
@@ -3734,9 +3731,7 @@ async fn advanced_only_reasoning_option_requires_explicit_selection() {
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(events.iter().all(|event| !matches!(
         event,
-        AppEvent::UpdateReasoningEffort(_)
-            | AppEvent::ApplyAdvancedReasoning { .. }
-            | AppEvent::PersistModelSelection { .. }
+        AppEvent::UpdateReasoningEffort(_) | AppEvent::PersistModelSelection { .. }
     )));
 }
 
@@ -3761,9 +3756,7 @@ async fn auto_model_advertising_advanced_effort_opens_reasoning_picker() {
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(events.iter().all(|event| !matches!(
         event,
-        AppEvent::UpdateReasoningEffort(_)
-            | AppEvent::ApplyAdvancedReasoning { .. }
-            | AppEvent::PersistModelSelection { .. }
+        AppEvent::UpdateReasoningEffort(_) | AppEvent::PersistModelSelection { .. }
     )));
     assert!(
         events

@@ -2908,10 +2908,8 @@ impl Session {
         self.services
             .agents_md_manager
             .refresh(&turn_context.config, &environments, |environment| {
-                turn_context.file_system_sandbox_context(
-                    /*additional_permissions*/ None,
-                    environment,
-                )
+                turn_context
+                    .file_system_sandbox_context(/*additional_permissions*/ None, environment)
             })
             .await;
         let loaded_agents_md = self.services.agents_md_manager.get_loaded().await;

@@ -11,6 +11,10 @@ use std::sync::Arc;
 async fn spawn_agent_cwd_updates_only_the_primary_environment() {
     let (_session, mut turn) = make_session_and_context().await;
     turn.permission_profile = PermissionProfile::Disabled;
+    Arc::make_mut(&mut turn.config)
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("disable sandboxing");
     let primary = turn
         .environments
         .primary()
@@ -34,6 +38,7 @@ async fn spawn_agent_cwd_updates_only_the_primary_environment() {
             "secondary".to_string(),
             Arc::clone(&primary.environment),
             PathUri::from_host_native_path(secondary.path()).expect("secondary cwd URI"),
+            Vec::new(),
             primary.shell.clone(),
         )));
     let original = turn.environments.to_selections();
@@ -61,6 +66,10 @@ async fn spawn_agent_cwd_updates_only_the_primary_environment() {
 async fn spawn_agent_cwd_accepts_a_readable_absolute_directory_outside_workspace_roots() {
     let (_session, mut turn) = make_session_and_context().await;
     turn.permission_profile = PermissionProfile::Disabled;
+    Arc::make_mut(&mut turn.config)
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("disable sandboxing");
     let target = tempfile::tempdir().expect("target cwd");
     let target_uri = PathUri::from_host_native_path(target.path()).expect("target cwd URI");
     assert!(
@@ -86,6 +95,10 @@ async fn spawn_agent_cwd_accepts_a_readable_absolute_directory_outside_workspace
 async fn spawn_agent_cwd_rejects_invalid_targets_without_changing_the_parent() {
     let (_session, mut turn) = make_session_and_context().await;
     turn.permission_profile = PermissionProfile::Disabled;
+    Arc::make_mut(&mut turn.config)
+        .permissions
+        .set_permission_profile(PermissionProfile::Disabled)
+        .expect("disable sandboxing");
     let primary_cwd = turn
         .environments
         .primary()
