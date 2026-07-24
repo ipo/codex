@@ -1,4 +1,9 @@
 use super::*;
+use crate::tools::handlers::multi_agents_common::MAX_SPAWN_AGENT_MODEL_OVERRIDES;
+use crate::tools::handlers::multi_agents_spec_model_catalog::MAX_REASONING_EFFORT_BYTES_IN_SPAWN_AGENT_DESCRIPTION;
+use crate::tools::handlers::multi_agents_spec_model_catalog::MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES;
+use crate::tools::handlers::multi_agents_spec_model_catalog::TRUNCATION_SUFFIX;
+use crate::tools::handlers::multi_agents_spec_model_catalog::truncate_utf8_bytes;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -243,24 +248,64 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
 }
 
 #[test]
-fn spawn_agent_tool_caps_reasoning_effort_value_length() {
+fn spawn_agent_tool_caps_reasoning_effort_value_bytes() {
     let mut model = model_preset("visible", /*show_in_picker*/ true);
     let custom_effort = ReasoningEffort::Custom(
-        "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION + 1),
+        "é".repeat(MAX_REASONING_EFFORT_BYTES_IN_SPAWN_AGENT_DESCRIPTION + 1),
     );
     model.default_reasoning_effort = custom_effort.clone();
     model.supported_reasoning_efforts = vec![ReasoningEffortPreset {
-        effort: custom_effort,
+        effort: custom_effort.clone(),
         description: "Model-defined".to_string(),
     }];
+    let expected_effort = truncate_utf8_bytes(
+        custom_effort.as_str(),
+        MAX_REASONING_EFFORT_BYTES_IN_SPAWN_AGENT_DESCRIPTION,
+    );
 
     assert_eq!(
         spawn_agent_models_description(&[model], MultiAgentVersion::V2),
         format!(
-            "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {} (default). Service tiers: priority.",
-            "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+            "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {expected_effort} (default). Service tiers: priority."
         )
     );
+}
+
+#[test]
+fn spawn_agent_model_catalog_has_a_hard_aggregate_bound() {
+    let models = (0..MAX_SPAWN_AGENT_MODEL_OVERRIDES)
+        .map(|index| {
+            let mut model = model_preset(&format!("model-{index}"), /*show_in_picker*/ true);
+            model.model = format!("model-{index}-{}", "界".repeat(1_000));
+            model.description = "description".repeat(1_000);
+            model.supported_reasoning_efforts = (0..100)
+                .map(|effort_index| ReasoningEffortPreset {
+                    effort: ReasoningEffort::Custom(format!(
+                        "effort-{effort_index}-{}",
+                        "界".repeat(1_000)
+                    )),
+                    description: "model-defined".to_string(),
+                })
+                .collect();
+            model.default_reasoning_effort = model.supported_reasoning_efforts[0].effort.clone();
+            model.service_tiers = (0..100)
+                .map(|tier_index| ModelServiceTier {
+                    id: format!("tier-{tier_index}-{}", "界".repeat(1_000)),
+                    name: "tier".to_string(),
+                    description: "tier description".to_string(),
+                })
+                .collect();
+            model
+        })
+        .collect::<Vec<_>>();
+
+    let description = spawn_agent_models_description(&models, MultiAgentVersion::V2);
+
+    assert!(description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert!(description.contains(TRUNCATION_SUFFIX));
+    for index in 0..MAX_SPAWN_AGENT_MODEL_OVERRIDES {
+        assert!(description.contains(&format!("`model-{index}-")));
+    }
 }
 
 #[test]
