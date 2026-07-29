@@ -1,0 +1,6 @@
+---
+source: tui/src/resume_picker.rs
+expression: "format!(\"{empty}\\n{}\", search_line(&state, 80))"
+---
+No indexed sessions yet · refreshing…
+Could not refresh sessions; showing indexed results
