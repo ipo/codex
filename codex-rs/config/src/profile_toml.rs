@@ -38,6 +38,8 @@ pub struct ConfigProfile {
     pub model_verbosity: Option<Verbosity>,
     /// Optional path to a JSON model catalog (applied on startup only).
     pub model_catalog_json: Option<AbsolutePathBuf>,
+    /// Optional path to an additive JSON model catalog overlay (applied on startup only).
+    pub model_catalog_overlay_json: Option<AbsolutePathBuf>,
     pub personality: Option<Personality>,
     pub chatgpt_base_url: Option<String>,
     /// Optional path to a file containing model instructions.

@@ -354,6 +354,10 @@ pub struct ConfigToml {
     /// Per-thread `config` overrides are accepted but do not reapply this (no-ops).
     pub model_catalog_json: Option<AbsolutePathBuf>,
 
+    /// Optional path to an additive JSON model catalog overlay (applied on startup only).
+    /// Per-thread `config` overrides are accepted but do not reapply this (no-ops).
+    pub model_catalog_overlay_json: Option<AbsolutePathBuf>,
+
     /// Optionally specify a personality for the model
     pub personality: Option<Personality>,
 

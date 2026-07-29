@@ -1,6 +1,7 @@
 use super::cache::ModelsCacheManager;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
+use crate::model_catalog_overlay::ResolvedModelCatalogOverlay;
 use crate::model_info;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
@@ -218,6 +219,7 @@ pub struct OpenAiModelsManager {
     cache_manager: Option<ModelsCacheManager>,
     endpoint_client: SharedModelsEndpointClient,
     auth_manager: Option<Arc<AuthManager>>,
+    model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
 }
 
 /// Static model manager backed by an authoritative in-process catalog.
@@ -234,11 +236,22 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
+        Self::new_with_overlay(codex_home, endpoint_client, auth_manager, None)
+    }
+
+    /// Construct an OpenAI-compatible remote model manager with a catalog overlay.
+    pub fn new_with_overlay(
+        codex_home: PathBuf,
+        endpoint_client: Arc<dyn ModelsEndpointClient>,
+        auth_manager: Option<Arc<AuthManager>>,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         Self::new_with_cache_manager(
             Some(ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL)),
             endpoint_client,
             auth_manager,
+            model_catalog_overlay,
         )
     }
 
@@ -247,21 +260,40 @@ impl OpenAiModelsManager {
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
     ) -> Self {
-        Self::new_with_cache_manager(/*cache_manager*/ None, endpoint_client, auth_manager)
+        Self::new_without_cache_with_overlay(endpoint_client, auth_manager, None)
+    }
+
+    /// Construct an OpenAI-compatible model manager with caching disabled and an overlay.
+    pub fn new_without_cache_with_overlay(
+        endpoint_client: Arc<dyn ModelsEndpointClient>,
+        auth_manager: Option<Arc<AuthManager>>,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
+    ) -> Self {
+        Self::new_with_cache_manager(
+            /*cache_manager*/ None,
+            endpoint_client,
+            auth_manager,
+            model_catalog_overlay,
+        )
     }
 
     fn new_with_cache_manager(
         cache_manager: Option<ModelsCacheManager>,
         endpoint_client: Arc<dyn ModelsEndpointClient>,
         auth_manager: Option<Arc<AuthManager>>,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
     ) -> Self {
-        let remote_models = load_remote_models_from_file().unwrap_or_default();
+        let remote_models = apply_model_catalog_overlay(
+            load_remote_models_from_file().unwrap_or_default(),
+            model_catalog_overlay.as_ref(),
+        );
         Self {
             remote_models: RwLock::new(remote_models),
             etag: RwLock::new(None),
             cache_manager,
             endpoint_client,
             auth_manager,
+            model_catalog_overlay,
         }
     }
 }
@@ -269,8 +301,20 @@ impl OpenAiModelsManager {
 impl StaticModelsManager {
     /// Construct a static model manager from an authoritative catalog.
     pub fn new(auth_manager: Option<Arc<AuthManager>>, model_catalog: ModelsResponse) -> Self {
+        Self::new_with_overlay(auth_manager, model_catalog, None)
+    }
+
+    /// Construct a static model manager from an authoritative catalog plus an overlay.
+    pub fn new_with_overlay(
+        auth_manager: Option<Arc<AuthManager>>,
+        model_catalog: ModelsResponse,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
+    ) -> Self {
         Self {
-            remote_models: model_catalog.models,
+            remote_models: apply_model_catalog_overlay(
+                model_catalog.models,
+                model_catalog_overlay.as_ref(),
+            ),
             auth_manager,
         }
     }
@@ -432,7 +476,8 @@ impl OpenAiModelsManager {
                     .is_some_and(AuthMode::has_chatgpt_account)
             });
         if should_use_remote_models_only {
-            *self.remote_models.write().await = models;
+            *self.remote_models.write().await =
+                apply_model_catalog_overlay(models, self.model_catalog_overlay.as_ref());
             return;
         }
 
@@ -447,7 +492,8 @@ impl OpenAiModelsManager {
                 existing_models.push(model);
             }
         }
-        *self.remote_models.write().await = existing_models;
+        *self.remote_models.write().await =
+            apply_model_catalog_overlay(existing_models, self.model_catalog_overlay.as_ref());
     }
 
     /// Attempt to satisfy the refresh from the cache when it matches the provider and TTL.
@@ -556,6 +602,18 @@ impl ModelsManager for StaticModelsManager {
 
 fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
     Ok(crate::bundled_models_response()?.models)
+}
+
+fn apply_model_catalog_overlay(
+    models: Vec<ModelInfo>,
+    model_catalog_overlay: Option<&ResolvedModelCatalogOverlay>,
+) -> Vec<ModelInfo> {
+    let Some(model_catalog_overlay) = model_catalog_overlay else {
+        return models;
+    };
+    model_catalog_overlay
+        .apply(ModelsResponse { models })
+        .models
 }
 
 fn default_model_from_available(available: Vec<ModelPreset>) -> String {

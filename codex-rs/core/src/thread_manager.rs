@@ -305,6 +305,7 @@ pub fn build_models_manager(
     provider.models_manager(
         config.codex_home.to_path_buf(),
         config.model_catalog.clone(),
+        config.model_catalog_overlay.clone(),
     )
 }
 
@@ -525,7 +526,10 @@ impl ThreadManager {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
                 models_manager: create_model_provider(provider, Some(auth_manager.clone()))
-                    .models_manager(codex_home, /*config_model_catalog*/ None),
+                    .models_manager(
+                        codex_home, /*config_model_catalog*/ None,
+                        /*model_catalog_overlay*/ None,
+                    ),
                 environment_manager,
                 starting_mcp_runtimes: std::sync::Mutex::new(Vec::new()),
                 skills_service,

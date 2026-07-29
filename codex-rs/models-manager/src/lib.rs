@@ -2,12 +2,16 @@ pub(crate) mod cache;
 pub mod collaboration_mode_presets;
 pub(crate) mod config;
 pub mod manager;
+pub mod model_catalog_overlay;
 pub mod model_info;
 pub mod model_presets;
 pub mod test_support;
 
 pub use codex_protocol::auth::AuthMode;
 pub use config::ModelsManagerConfig;
+pub use model_catalog_overlay::ModelCatalogOverlay;
+pub use model_catalog_overlay::ModelCatalogOverlayError;
+pub use model_catalog_overlay::ResolvedModelCatalogOverlay;
 
 /// Load the bundled model catalog shipped with `codex-models-manager`.
 pub fn bundled_models_response()

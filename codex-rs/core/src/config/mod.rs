@@ -86,7 +86,9 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OLLAMA_CHAT_PROVIDER_REMOVED_ERROR;
 use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::merge_configured_model_providers;
+use codex_models_manager::ModelCatalogOverlay;
 use codex_models_manager::ModelsManagerConfig;
+use codex_models_manager::ResolvedModelCatalogOverlay;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -972,6 +974,9 @@ pub struct Config {
     /// Optional full model catalog loaded from `model_catalog_json`.
     /// When set, this replaces the bundled catalog for the current process.
     pub model_catalog: Option<ModelsResponse>,
+
+    /// Optional additive model catalog overlay loaded from `model_catalog_overlay_json`.
+    pub model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -1971,6 +1976,54 @@ fn load_model_catalog(
     model_catalog_json
         .map(|path| load_catalog_json(&path))
         .transpose()
+}
+
+fn load_model_catalog_overlay(
+    model_catalog_overlay_json: Option<AbsolutePathBuf>,
+    model_catalog: Option<&ModelsResponse>,
+) -> std::io::Result<Option<ResolvedModelCatalogOverlay>> {
+    let Some(path) = model_catalog_overlay_json else {
+        return Ok(None);
+    };
+    let file_contents = std::fs::read_to_string(&path).map_err(|err| {
+        std::io::Error::new(
+            err.kind(),
+            format!(
+                "failed to read model_catalog_overlay_json path `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let overlay = ModelCatalogOverlay::from_json(&file_contents).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "invalid model_catalog_overlay_json path `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    let validation_catalog = model_catalog.cloned().map_or_else(
+        || {
+            codex_models_manager::bundled_models_response().map_err(|err| {
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("failed to parse bundled model catalog: {err}"),
+                )
+            })
+        },
+        Ok,
+    )?;
+    let overlay = overlay.resolve(validation_catalog).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "invalid model_catalog_overlay_json path `{}`: {err}",
+                path.display()
+            ),
+        )
+    })?;
+    Ok(Some(overlay))
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -3863,6 +3916,10 @@ impl Config {
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
         let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
+        let model_catalog_overlay = load_model_catalog_overlay(
+            cfg.model_catalog_overlay_json.clone(),
+            model_catalog.as_ref(),
+        )?;
 
         let log_dir = cfg
             .log_dir
@@ -4117,6 +4174,7 @@ impl Config {
             plan_mode_reasoning_effort: cfg.plan_mode_reasoning_effort,
             model_reasoning_summary: cfg.model_reasoning_summary,
             model_catalog,
+            model_catalog_overlay,
             model_verbosity: cfg.model_verbosity,
             chatgpt_base_url: cfg
                 .chatgpt_base_url

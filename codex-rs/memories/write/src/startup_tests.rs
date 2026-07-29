@@ -695,9 +695,10 @@ impl ModelProvider for MockMemoryModelProvider {
         &self,
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
+        model_catalog_overlay: Option<codex_models_manager::ResolvedModelCatalogOverlay>,
     ) -> codex_models_manager::manager::SharedModelsManager {
         self.delegate
-            .models_manager(codex_home, config_model_catalog)
+            .models_manager(codex_home, config_model_catalog, model_catalog_overlay)
     }
 }
 
