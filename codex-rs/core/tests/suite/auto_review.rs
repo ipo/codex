@@ -220,6 +220,7 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
 fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
+        aliases: Vec::new(),
         display_name: format!("{slug} display"),
         description: Some(format!("{slug} description")),
         default_reasoning_level: Some(ReasoningEffort::Medium),

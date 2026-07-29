@@ -34,6 +34,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
     Model {
         id: preset.id.clone(),
         model: preset.model.clone(),
+        aliases: preset.aliases.clone(),
         upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
         upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
             model: upgrade.id.clone(),
@@ -171,6 +172,7 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
     let server = MockServer::start().await;
     let remote_model: ModelInfo = serde_json::from_value(json!({
         "slug": "chatgpt-remote-only",
+        "aliases": ["remote-short", "provider/chatgpt-remote-only"],
         "display_name": "ChatGPT Remote Only",
         "description": "Remote-only model for app-server model/list coverage",
         "default_reasoning_level": "max",

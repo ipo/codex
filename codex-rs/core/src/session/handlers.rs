@@ -94,7 +94,20 @@ pub async fn update_thread_settings(
     sub_id: String,
     thread_settings: ThreadSettingsOverrides,
 ) {
-    let updates = thread_settings_update(sess, thread_settings).await;
+    let updates = match thread_settings_update(sess, thread_settings).await {
+        Ok(updates) => updates,
+        Err(err) => {
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    message: format!("invalid thread settings override: {err}"),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            })
+            .await;
+            return;
+        }
+    };
     match sess.update_settings(updates).await {
         Ok(()) => {
             sess.send_event_raw_without_materializing_rollout(Event {
@@ -119,7 +132,7 @@ pub async fn update_thread_settings(
 async fn thread_settings_update(
     sess: &Session,
     thread_settings: ThreadSettingsOverrides,
-) -> SessionSettingsUpdate {
+) -> Result<SessionSettingsUpdate, codex_models_manager::manager::ModelSelectionError> {
     let ThreadSettingsOverrides {
         environments,
         profile_workspace_roots,
@@ -136,7 +149,8 @@ async fn thread_settings_update(
         collaboration_mode,
         personality,
     } = thread_settings;
-    let collaboration_mode = match collaboration_mode {
+    let should_resolve_model = model.is_some() || collaboration_mode.is_some();
+    let mut collaboration_mode = match collaboration_mode {
         Some(collaboration_mode) => collaboration_mode,
         None => {
             let state = sess.state.lock().await;
@@ -148,7 +162,17 @@ async fn thread_settings_update(
                 .with_updates(model, effort, /*developer_instructions*/ None)
         }
     };
-    SessionSettingsUpdate {
+    if should_resolve_model {
+        let canonical_model = sess
+            .resolve_model_selector(collaboration_mode.model())
+            .await?;
+        collaboration_mode = collaboration_mode.with_updates(
+            Some(canonical_model),
+            /*effort*/ None,
+            /*developer_instructions*/ None,
+        );
+    }
+    Ok(SessionSettingsUpdate {
         environments,
         profile_workspace_roots,
         approval_policy,
@@ -162,7 +186,7 @@ async fn thread_settings_update(
         service_tier,
         personality,
         ..Default::default()
-    }
+    })
 }
 
 async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
@@ -207,7 +231,20 @@ pub(super) async fn user_input_or_turn_inner(
     };
     let emit_thread_settings_applied = thread_settings != ThreadSettingsOverrides::default();
     let mut updates = if emit_thread_settings_applied {
-        thread_settings_update(sess, thread_settings).await
+        match thread_settings_update(sess, thread_settings).await {
+            Ok(updates) => updates,
+            Err(err) => {
+                sess.send_event_raw(Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("invalid thread settings override: {err}"),
+                        codex_error_info: Some(CodexErrorInfo::BadRequest),
+                    }),
+                })
+                .await;
+                return;
+            }
+        }
     } else {
         SessionSettingsUpdate::default()
     };

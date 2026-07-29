@@ -1139,6 +1139,66 @@ async fn spawn_agent_requested_model_and_reasoning_override_inherited_settings_w
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_alias_override_is_canonicalized_in_child_configuration() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let child_snapshot = spawn_child_and_capture_snapshot(
+        &server,
+        json!({
+            "message": CHILD_PROMPT,
+            "model": "REQUESTED-ALIAS",
+            "reasoning_effort": REQUESTED_REASONING_EFFORT,
+        }),
+        |builder| {
+            builder.with_config(|config| {
+                let mut catalog = bundled_models_response().expect("bundled catalog should parse");
+                catalog
+                    .models
+                    .iter_mut()
+                    .find(|model| model.slug == REQUESTED_MODEL)
+                    .expect("requested model should be bundled")
+                    .aliases = vec!["requested-alias".to_string()];
+                config.model_catalog = Some(catalog);
+            })
+        },
+    )
+    .await?;
+
+    assert_eq!(child_snapshot.model, REQUESTED_MODEL);
+    assert_eq!(
+        child_snapshot.reasoning_effort,
+        Some(REQUESTED_REASONING_EFFORT)
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_default_alias_is_canonicalized_in_child_configuration() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let child_snapshot =
+        spawn_child_and_capture_snapshot(&server, json!({ "message": CHILD_PROMPT }), |builder| {
+            builder.with_config(|config| {
+                let mut catalog = bundled_models_response().expect("bundled catalog should parse");
+                catalog
+                    .models
+                    .iter_mut()
+                    .find(|model| model.slug == REQUESTED_MODEL)
+                    .expect("requested model should be bundled")
+                    .aliases = vec!["requested-alias".to_string()];
+                config.model_catalog = Some(catalog);
+                config.agent_default_subagent_model = Some("requested-alias".to_string());
+            })
+        })
+        .await?;
+
+    assert_eq!(child_snapshot.model, REQUESTED_MODEL);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_agent_uses_configured_subagent_defaults() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1719,7 +1779,7 @@ async fn skills_toggle_skips_instructions_for_parent_and_spawned_child() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> Result<()> {
+async fn spawn_agent_role_alias_overrides_requested_model_and_reasoning_settings() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1737,10 +1797,18 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
                 std::fs::write(
                     &role_path,
                     format!(
-                        "model = \"{ROLE_MODEL}\"\nmodel_reasoning_effort = \"{ROLE_REASONING_EFFORT}\"\n",
+                        "model = \"role-alias\"\nmodel_reasoning_effort = \"{ROLE_REASONING_EFFORT}\"\n",
                     ),
                 )
                 .expect("write role config");
+                let mut catalog = bundled_models_response().expect("bundled catalog should parse");
+                catalog
+                    .models
+                    .iter_mut()
+                    .find(|model| model.slug == ROLE_MODEL)
+                    .expect("role model should be bundled")
+                    .aliases = vec!["role-alias".to_string()];
+                config.model_catalog = Some(catalog);
                 config.agent_roles.insert(
                     "custom".to_string(),
                     AgentRoleConfig {

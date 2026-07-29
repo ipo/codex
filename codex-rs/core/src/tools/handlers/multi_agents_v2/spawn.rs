@@ -77,7 +77,7 @@ async fn handle_spawn_agent(
     )
     .await?;
     if !is_full_history_fork {
-        apply_spawn_agent_role(&session, &mut config, role_name).await?;
+        apply_spawn_agent_role(&session, &mut config, role_name, turn.multi_agent_version).await?;
     }
     apply_spawn_agent_service_tier(
         &session,

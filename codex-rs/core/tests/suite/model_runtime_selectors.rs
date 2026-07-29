@@ -169,6 +169,83 @@ async fn response_body_for_remote_model(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn catalog_aliases_are_canonicalized_for_startup_and_runtime_requests() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut startup_model = remote_model("canonical-startup-model");
+    startup_model.aliases = vec!["startup-alias".to_string()];
+    let mut runtime_model = remote_model("canonical-runtime-model");
+    runtime_model.aliases = vec!["runtime-alias".to_string()];
+    let model_catalog = ModelsResponse {
+        models: vec![startup_model, runtime_model],
+    };
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-startup"),
+                ev_assistant_message("msg-startup", "done"),
+                ev_completed("resp-startup"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-runtime"),
+                ev_assistant_message("msg-runtime", "done"),
+                ev_completed("resp-runtime"),
+            ]),
+        ],
+    )
+    .await;
+
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_catalog = Some(model_catalog);
+            config.model = Some("STARTUP-ALIAS".to_string());
+        })
+        .build(&server)
+        .await?;
+    test.submit_turn("startup alias").await?;
+
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            model: Some("RUNTIME-ALIAS".to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "runtime alias".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(
+        response_mock
+            .requests()
+            .iter()
+            .map(|request| request.body_json()["model"].clone())
+            .collect::<Vec<_>>(),
+        vec![
+            serde_json::json!("canonical-startup-model"),
+            serde_json::json!("canonical-runtime-model"),
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

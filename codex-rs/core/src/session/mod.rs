@@ -77,6 +77,7 @@ use codex_mcp::McpConnectionManager;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
+use codex_models_manager::manager::ModelSelectionError;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_network_proxy::NetworkProxy;
@@ -576,7 +577,6 @@ impl Session {
             )
         };
 
-        let config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
@@ -592,6 +592,39 @@ impl Session {
                 .list_models(refresh_strategy, config.http_client_factory())
                 .await;
         }
+        if let Some(requested_model) = config.model.clone() {
+            match models_manager
+                .resolve_model(
+                    &requested_model,
+                    RefreshStrategy::Offline,
+                    config.http_client_factory(),
+                )
+                .await
+            {
+                Ok(canonical_model) => config.model = Some(canonical_model),
+                Err(ModelSelectionError::BackendIncompatible {
+                    canonical_model, ..
+                }) if allow_provider_model_fallback => {
+                    info!(
+                        model_provider = %config.model_provider_id,
+                        requested_model,
+                        canonical_model,
+                        "canonicalized requested model before applying provider fallback behavior"
+                    );
+                    config.model = Some(canonical_model);
+                }
+                Err(err @ ModelSelectionError::Unknown { .. }) => {
+                    info!(
+                        model_provider = %config.model_provider_id,
+                        requested_model,
+                        error = %err,
+                        "requested model is not in the catalog; retaining provider-specific selector"
+                    );
+                }
+                Err(err) => return Err(CodexErr::InvalidRequest(err.to_string())),
+            }
+        }
+        let config = Arc::new(config);
         let model = models_manager
             .get_default_model(
                 &config.model,
@@ -3109,6 +3142,43 @@ impl Session {
     pub(crate) async fn collaboration_mode(&self) -> CollaborationMode {
         let state = self.state.lock().await;
         state.session_configuration.collaboration_mode.clone()
+    }
+
+    pub(crate) async fn resolve_model_selector(
+        &self,
+        requested: &str,
+    ) -> Result<String, codex_models_manager::manager::ModelSelectionError> {
+        let (current_model, http_client_factory) = {
+            let state = self.state.lock().await;
+            (
+                state
+                    .session_configuration
+                    .collaboration_mode
+                    .model()
+                    .to_string(),
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .http_client_factory(),
+            )
+        };
+        match self
+            .services
+            .models_manager
+            .resolve_model(
+                requested,
+                codex_models_manager::manager::RefreshStrategy::Offline,
+                http_client_factory,
+            )
+            .await
+        {
+            Err(codex_models_manager::manager::ModelSelectionError::Unknown { .. })
+                if requested == current_model =>
+            {
+                Ok(current_model)
+            }
+            result => result,
+        }
     }
 
     pub(crate) fn multi_agent_version(&self) -> Option<MultiAgentVersion> {

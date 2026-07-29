@@ -11,6 +11,7 @@ use crate::session::turn_context::TurnContext;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::multi_agents_spec_model_catalog::MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
@@ -24,6 +25,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -36,6 +38,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
@@ -46,6 +49,7 @@ use codex_protocol::protocol::FileSystemSandboxEntry;
 use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
@@ -57,6 +61,7 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
+use codex_utils_string::approx_token_count;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -68,6 +73,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+
+const LONG_PREFERRED_SELECTOR_BYTES: usize = 96;
 
 fn invocation(
     session: Arc<crate::session::session::Session>,
@@ -419,8 +426,115 @@ async fn multi_agent_v2_spawn_rejects_child_model_from_different_backend() {
     assert_eq!(
         err,
         FunctionCallError::RespondToModel(
-            "Unknown model `gpt-5.4` for spawn_agent. Available models: gpt-5.6-sol, gpt-5.6-terra"
-                .to_string()
+            "Model `gpt-5.4` is incompatible with the selected multi-agent backend for spawn_agent. Available preferred model selectors: gpt-5.6-sol\ngpt-5.6-terra"
+                .to_string(),
+        )
+    );
+}
+
+fn max_length_spawn_agent_model(index: usize) -> ModelPreset {
+    let model_prefix = format!("model-{index}-");
+    let slug = format!(
+        "{model_prefix}{}",
+        "m".repeat(LONG_PREFERRED_SELECTOR_BYTES - model_prefix.len())
+    );
+    let alias_prefix = format!("alias-{index}-");
+    let mut model = ModelPreset::from(model_info_from_slug(&slug));
+    model.aliases = vec![
+        format!(
+            "{alias_prefix}{}",
+            "a".repeat(LONG_PREFERRED_SELECTOR_BYTES - alias_prefix.len())
+        ),
+        format!("secondary-alias-{index}"),
+    ];
+    model.show_in_picker = true;
+    model.multi_agent_version = Some(MultiAgentVersion::V2);
+    model
+}
+
+#[test]
+fn spawn_agent_incompatible_model_error_preserves_exact_preferred_selectors() {
+    let available_models = (0..20)
+        .map(max_length_spawn_agent_model)
+        .collect::<Vec<_>>();
+
+    let err = find_spawn_agent_model_name(
+        &available_models,
+        "incompatible-model",
+        MultiAgentVersion::V2,
+    )
+    .expect_err("an unavailable model should be rejected");
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected model-visible error");
+    };
+    let exact_selectors = available_models
+        .iter()
+        .map(|model| model.aliases[0].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(message.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert_eq!(
+        message,
+        format!(
+            "Model `incompatible-model` is incompatible with the selected multi-agent backend for spawn_agent. Available preferred model selectors: {exact_selectors}"
+        )
+    );
+}
+
+#[test]
+fn spawn_agent_incompatible_model_error_is_bounded_with_all_preferred_selectors() {
+    let available_models = (0..410)
+        .map(max_length_spawn_agent_model)
+        .collect::<Vec<_>>();
+
+    let err = find_spawn_agent_model_name(
+        &available_models,
+        "incompatible-model",
+        MultiAgentVersion::V2,
+    )
+    .expect_err("an unavailable model should be rejected");
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected model-visible error");
+    };
+
+    assert!(message.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert!(approx_token_count(&message) < 10_000);
+    let prefix = "Model `incompatible-model` is incompatible with the selected multi-agent backend for spawn_agent. Available preferred model selectors: ";
+    let selectors = message
+        .strip_prefix(prefix)
+        .expect("error should retain its selector-list prefix");
+    assert_eq!(
+        selectors.lines().collect::<Vec<_>>(),
+        available_models
+            .iter()
+            .map(|model| model.aliases[0].as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn spawn_agent_incompatible_model_error_warns_when_exact_selectors_exceed_bound() {
+    let available_models = (0..411)
+        .map(max_length_spawn_agent_model)
+        .collect::<Vec<_>>();
+
+    let err = find_spawn_agent_model_name(
+        &available_models,
+        "incompatible-model",
+        MultiAgentVersion::V2,
+    )
+    .expect_err("an unavailable model should be rejected");
+    let FunctionCallError::RespondToModel(message) = err else {
+        panic!("expected model-visible error");
+    };
+
+    assert!(message.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert_eq!(
+        message,
+        format!(
+            "Model `incompatible-model` is incompatible with the selected multi-agent backend for spawn_agent. Available preferred model selectors: {}",
+            crate::tools::handlers::multi_agents_spec_model_catalog::SPAWN_AGENT_MODEL_CATALOG_TOO_LARGE
         )
     );
 }
