@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Select Model and Effort
+  Access legacy models by running codex -m <model_name> or in your config.toml
+
+  Search models or aliases
+› canonical-model (current)  Aliases: short-name, provider/canonical — canonical-model description
+  other-model                other-model description
+
+  Press enter to confirm or esc to go back

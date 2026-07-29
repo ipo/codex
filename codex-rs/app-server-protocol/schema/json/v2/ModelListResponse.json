@@ -37,6 +37,12 @@
           },
           "type": "array"
         },
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "availabilityNux": {
           "anyOf": [
             {
@@ -121,6 +127,7 @@
         }
       },
       "required": [
+        "aliases",
         "defaultReasoningEffort",
         "description",
         "displayName",

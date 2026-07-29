@@ -1,10 +1,12 @@
 use crate::agent::AgentStatus;
+use crate::config::ConstraintError;
 use crate::config::ConstraintResult;
 use crate::elicitation::ElicitationRegistration;
 use crate::session::SessionIo;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use crate::session::session::Session;
+use codex_config::RequirementSource;
 use codex_exec_server::SelectedCapabilityRootsStatus;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
@@ -376,14 +378,14 @@ impl CodexThread {
         &self,
         overrides: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<ThreadConfigSnapshot> {
-        let updates = self.thread_settings_update(overrides).await;
+        let updates = self.thread_settings_update(overrides).await?;
         self.session.preview_settings(&updates).await
     }
 
     async fn thread_settings_update(
         &self,
         overrides: CodexThreadSettingsOverrides,
-    ) -> SessionSettingsUpdate {
+    ) -> ConstraintResult<SessionSettingsUpdate> {
         let CodexThreadSettingsOverrides {
             environments,
             profile_workspace_roots,
@@ -400,7 +402,8 @@ impl CodexThread {
             collaboration_mode,
             personality,
         } = overrides;
-        let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
+        let should_resolve_model = model.is_some() || collaboration_mode.is_some();
+        let mut collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
             collaboration_mode
         } else {
             self.session
@@ -409,7 +412,26 @@ impl CodexThread {
                 .with_updates(model, effort, /*developer_instructions*/ None)
         };
 
-        SessionSettingsUpdate {
+        if should_resolve_model {
+            let requested_model = collaboration_mode.model().to_string();
+            let canonical_model = self
+                .session
+                .resolve_model_selector(&requested_model)
+                .await
+                .map_err(|err| ConstraintError::InvalidValue {
+                    field_name: "model",
+                    candidate: requested_model,
+                    allowed: format!("(catalog resolution failed: {err})"),
+                    requirement_source: RequirementSource::Unknown,
+                })?;
+            collaboration_mode = collaboration_mode.with_updates(
+                Some(canonical_model),
+                /*effort*/ None,
+                /*developer_instructions*/ None,
+            );
+        }
+
+        Ok(SessionSettingsUpdate {
             environments,
             profile_workspace_roots,
             approval_policy,
@@ -423,7 +445,7 @@ impl CodexThread {
             service_tier,
             personality,
             ..Default::default()
-        }
+        })
     }
 
     /// Use sparingly: this is intended to be removed soon.

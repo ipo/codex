@@ -206,6 +206,9 @@ pub struct ModelPreset {
     pub id: String,
     /// Model slug (e.g., "gpt-5").
     pub model: String,
+    /// Alternate catalog-provided names accepted for model selection.
+    #[serde(default)]
+    pub aliases: Vec<String>,
     /// Display name shown in UIs.
     pub display_name: String,
     /// Short human description shown in UIs.
@@ -369,6 +372,9 @@ const fn is_true(value: &bool) -> bool {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
     pub slug: String,
+    /// Alternate catalog-provided names accepted for model selection.
+    #[serde(default)]
+    pub aliases: Vec<String>,
     pub display_name: String,
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -610,6 +616,7 @@ impl From<ModelInfo> for ModelPreset {
         ModelPreset {
             id: info.slug.clone(),
             model: info.slug.clone(),
+            aliases: info.aliases,
             display_name: info.display_name,
             description: info.description.unwrap_or_default(),
             default_reasoning_effort: info
@@ -701,6 +708,7 @@ mod tests {
     fn test_model(spec: Option<ModelMessages>) -> ModelInfo {
         ModelInfo {
             slug: "test-model".to_string(),
+            aliases: Vec::new(),
             display_name: "Test Model".to_string(),
             description: None,
             default_reasoning_level: None,

@@ -19,7 +19,6 @@ use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::namespace_child_tool;
 use core_test_support::responses::sse;
@@ -59,6 +58,7 @@ fn test_model_info(
 ) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
+        aliases: Vec::new(),
         display_name: display_name.to_string(),
         description: Some(description.to_string()),
         default_reasoning_level: Some(default_reasoning_level),
@@ -122,52 +122,71 @@ async fn wait_for_model_available(manager: &SharedModelsManager, slug: &str) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() -> Result<()> {
     let server = start_mock_server().await;
-    mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![
-                test_model_info(
-                    "visible-model",
-                    "Visible Model",
-                    "Fast and capable",
-                    ModelVisibility::List,
-                    ReasoningEffort::Medium,
-                    vec![
-                        ReasoningEffortPreset {
-                            effort: ReasoningEffort::Low,
-                            description: "Quick scan".to_string(),
-                        },
-                        ReasoningEffortPreset {
-                            effort: ReasoningEffort::Medium,
-                            description: "Balanced".to_string(),
-                        },
-                        ReasoningEffortPreset {
-                            effort: ReasoningEffort::High,
-                            description: "Deep dive".to_string(),
-                        },
-                    ],
-                    vec![ModelServiceTier {
-                        id: "priority".to_string(),
-                        name: "Fast".to_string(),
-                        description: "1.5x speed, increased usage".to_string(),
-                    }],
-                ),
-                test_model_info(
-                    "hidden-model",
-                    "Hidden Model",
-                    "Should not be shown",
-                    ModelVisibility::Hide,
-                    ReasoningEffort::Low,
-                    vec![ReasoningEffortPreset {
-                        effort: ReasoningEffort::Low,
-                        description: "Not visible".to_string(),
-                    }],
-                    Vec::new(),
-                ),
-            ],
-        },
-    )
-    .await;
+    let mut visible_model = test_model_info(
+        "visible-model",
+        "Visible Model",
+        "Fast and capable",
+        ModelVisibility::List,
+        ReasoningEffort::Medium,
+        vec![
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Low,
+                description: "Quick scan".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "Balanced".to_string(),
+            },
+            ReasoningEffortPreset {
+                effort: ReasoningEffort::High,
+                description: "Deep dive".to_string(),
+            },
+        ],
+        vec![ModelServiceTier {
+            id: "priority".to_string(),
+            name: "Fast".to_string(),
+            description: "1.5x speed, increased usage".to_string(),
+        }],
+    );
+    visible_model.aliases = vec![
+        "visible-alias".to_string(),
+        "visible-secondary-alias".to_string(),
+    ];
+    let mut models = vec![visible_model];
+    for index in 0..6 {
+        let mut model = test_model_info(
+            &format!("extra-model-{index}"),
+            &format!("Extra Model {index}"),
+            "Additional compatible model",
+            ModelVisibility::List,
+            ReasoningEffort::Medium,
+            vec![ReasoningEffortPreset {
+                effort: ReasoningEffort::Medium,
+                description: "Balanced".to_string(),
+            }],
+            Vec::new(),
+        );
+        if index < 5 {
+            model.aliases = vec![
+                format!("extra-alias-{index}"),
+                format!("extra-secondary-alias-{index}"),
+            ];
+        }
+        models.push(model);
+    }
+    models.push(test_model_info(
+        "hidden-model",
+        "Hidden Model",
+        "Should not be shown",
+        ModelVisibility::Hide,
+        ReasoningEffort::Low,
+        vec![ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Not visible".to_string(),
+        }],
+        Vec::new(),
+    ));
+    let model_catalog = ModelsResponse { models };
     let resp_mock = mount_sse_once(
         &server,
         sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
@@ -177,7 +196,8 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     let mut builder = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model("visible-model")
-        .with_config(|config| {
+        .with_config(move |config| {
+            config.model_catalog = Some(model_catalog);
             config
                 .features
                 .enable(Feature::Collab)
@@ -193,10 +213,21 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     let description =
         spawn_agent_description(&body).expect("spawn_agent description should be present");
 
-    assert!(
-        description.contains("- `visible-model`: Fast and capable"),
-        "expected visible model summary in spawn_agent description: {description:?}"
-    );
+    assert!(description.contains("Efforts: low, medium*, high\nModels: visible-alias"));
+    assert_eq!(description.matches("visible-alias").count(), 1);
+    assert!(!description.contains("visible-model"));
+    assert!(!description.contains("visible-secondary-alias"));
+    assert!(description.contains(
+        "Efforts: medium*\nModels: extra-alias-0, extra-alias-1, extra-alias-2, extra-alias-3, extra-alias-4, extra-model-5"
+    ));
+    for index in 0..5 {
+        assert!(description.contains(&format!("extra-alias-{index}")));
+        assert!(!description.contains(&format!("extra-model-{index}")));
+        assert!(!description.contains(&format!("extra-secondary-alias-{index}")));
+    }
+    assert!(description.contains("extra-model-5"));
+    assert_eq!(description.matches("* = default").count(), 1);
+    assert!(!description.contains("(default)"));
     assert!(
         description
             .contains("Available model overrides (optional; inherited parent model is preferred):"),
@@ -214,14 +245,9 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
         ),
         "expected model override usage guidance in spawn_agent description: {description:?}"
     );
-    assert!(
-        description.contains("Reasoning efforts: low, medium (default), high."),
-        "expected default reasoning effort in spawn_agent description: {description:?}"
-    );
-    assert!(
-        description.contains("Service tiers: priority."),
-        "expected service tier guidance in spawn_agent description: {description:?}"
-    );
+    assert!(!description.contains("Fast and capable"));
+    assert!(!description.contains("Additional compatible model"));
+    assert!(!description.contains("Service tiers: priority."));
     assert!(
         !description.contains("hidden-model"),
         "hidden picker model should be omitted from spawn_agent description: {description:?}"
