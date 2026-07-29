@@ -1,5 +1,7 @@
 use super::*;
+use crate::ModelCatalogOverlay;
 use crate::ModelsManagerConfig;
+use crate::bundled_models_response;
 use chrono::Utc;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -12,6 +14,8 @@ use codex_login::ExternalAuthRefreshContext;
 use codex_login::TokenData;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::openai_models::ToolMode;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::VecDeque;
@@ -543,6 +547,182 @@ async fn refresh_available_models_uses_remote_only_catalog_for_chatgpt_auth() {
 
     assert_eq!(manager.get_remote_models().await, remote_models);
     assert_eq!(endpoint.fetch_count(), 1, "expected a single model fetch");
+}
+
+#[tokio::test]
+async fn catalog_overlay_survives_remote_and_cached_refreshes_and_drives_picker_metadata() {
+    let remote_parent = remote_model("remote-parent", "Remote Parent", /*priority*/ 10);
+    let overlay = ModelCatalogOverlay::from_json(
+        &json!({"models": [
+            {
+                "slug": "remote-parent",
+                "display_name": "Patched Parent"
+            },
+            {
+                "slug": "external/exact-model",
+                "inherits": "remote-parent",
+                "display_name": "External Exact",
+                "default_reasoning_level": "on",
+                "supported_reasoning_levels": [
+                    {"effort": "on", "description": "Provider reasoning"}
+                ],
+                "context_window": 123456,
+                "use_responses_lite": true,
+                "tool_mode": "code_mode",
+                "priority": 0
+            }
+        ]})
+        .to_string(),
+    )
+    .expect("overlay should parse")
+    .resolve(ModelsResponse {
+        models: vec![remote_parent.clone()],
+    })
+    .expect("overlay should resolve");
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(vec![vec![remote_parent.clone()]]);
+    let auth_manager = Some(AuthManager::from_auth_for_testing(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    ));
+    let manager = OpenAiModelsManager::new_with_overlay(
+        codex_home.path().to_path_buf(),
+        endpoint,
+        auth_manager.clone(),
+        Some(overlay.clone()),
+    );
+
+    let picker = manager
+        .list_models(
+            RefreshStrategy::OnlineIfUncached,
+            DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await;
+    assert_eq!(
+        picker
+            .iter()
+            .map(|preset| preset.model.as_str())
+            .collect::<Vec<_>>(),
+        vec!["external/exact-model", "remote-parent"]
+    );
+    let exact = manager
+        .get_model_info("external/exact-model", &ModelsManagerConfig::default())
+        .await;
+    assert_eq!(exact.slug, "external/exact-model");
+    assert_eq!(exact.context_window, Some(123456));
+    assert_eq!(
+        exact.default_reasoning_level,
+        Some(ReasoningEffort::Custom("on".to_string()))
+    );
+    assert!(exact.use_responses_lite);
+    assert_eq!(exact.tool_mode, Some(ToolMode::CodeMode));
+
+    let cached_manager = OpenAiModelsManager::new_with_overlay(
+        codex_home.path().to_path_buf(),
+        TestModelsEndpoint::new(Vec::new()),
+        auth_manager,
+        Some(overlay),
+    );
+    cached_manager
+        .refresh_available_models(
+            RefreshStrategy::OnlineIfUncached,
+            &DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await
+        .expect("cached refresh succeeds");
+    assert_eq!(
+        cached_manager.get_remote_models().await,
+        manager.get_remote_models().await
+    );
+}
+
+#[tokio::test]
+async fn resolved_overlay_survives_authoritative_remote_and_cache_without_baseline_models() {
+    let bundled = bundled_models_response().expect("bundled catalog should parse");
+    let patched_target = bundled.models.first().expect("patched target").clone();
+    let inherited_parent = bundled.models.get(1).expect("inheritance parent").clone();
+    let removed_unrelated_slug = bundled
+        .models
+        .get(2)
+        .expect("unrelated bundled model")
+        .slug
+        .clone();
+    let added_slug = "external/resolved-model";
+    let overlay = ModelCatalogOverlay::from_json(
+        &json!({"models": [
+            {
+                "slug": patched_target.slug,
+                "display_name": "Retained patched target"
+            },
+            {
+                "slug": added_slug,
+                "inherits": inherited_parent.slug,
+                "display_name": "Retained inherited model"
+            }
+        ]})
+        .to_string(),
+    )
+    .expect("overlay should parse")
+    .resolve(bundled)
+    .expect("overlay should resolve against the startup catalog");
+    let remote_model = remote_model(
+        "authoritative-remote",
+        "Authoritative Remote",
+        /*priority*/ 0,
+    );
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = Some(AuthManager::from_auth_for_testing(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+    ));
+    let manager = OpenAiModelsManager::new_with_overlay(
+        codex_home.path().to_path_buf(),
+        TestModelsEndpoint::new(vec![vec![remote_model.clone()]]),
+        auth_manager.clone(),
+        Some(overlay.clone()),
+    );
+
+    manager
+        .refresh_available_models(
+            RefreshStrategy::OnlineIfUncached,
+            &DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await
+        .expect("remote refresh should succeed");
+    let refreshed = manager.get_remote_models().await;
+    assert_eq!(refreshed.first(), Some(&remote_model));
+    assert_eq!(
+        refreshed
+            .iter()
+            .find(|model| model.slug == patched_target.slug)
+            .map(|model| model.display_name.as_str()),
+        Some("Retained patched target")
+    );
+    assert_eq!(
+        refreshed
+            .iter()
+            .find(|model| model.slug == added_slug)
+            .map(|model| model.display_name.as_str()),
+        Some("Retained inherited model")
+    );
+    assert!(
+        refreshed
+            .iter()
+            .all(|model| model.slug != removed_unrelated_slug)
+    );
+
+    let cached_manager = OpenAiModelsManager::new_with_overlay(
+        codex_home.path().to_path_buf(),
+        TestModelsEndpoint::new(Vec::new()),
+        auth_manager,
+        Some(overlay),
+    );
+    cached_manager
+        .refresh_available_models(
+            RefreshStrategy::OnlineIfUncached,
+            &DEFAULT_HTTP_CLIENT_FACTORY,
+        )
+        .await
+        .expect("cached refresh should succeed");
+    assert_eq!(cached_manager.get_remote_models().await, refreshed);
 }
 
 #[tokio::test]

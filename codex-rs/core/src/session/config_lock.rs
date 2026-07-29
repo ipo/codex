@@ -215,6 +215,7 @@ fn drop_lockfile_inputs(lock_config: &mut ConfigToml) {
     lock_config.model_instructions_file = None;
     lock_config.experimental_compact_prompt_file = None;
     lock_config.model_catalog_json = None;
+    lock_config.model_catalog_overlay_json = None;
     lock_config.sandbox_mode = None;
     lock_config.sandbox_workspace_write = None;
     lock_config.default_permissions = None;

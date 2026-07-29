@@ -37,6 +37,7 @@ use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::WorkspaceRootsToml;
+use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
@@ -8657,6 +8658,133 @@ async fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
     assert!(
         err.to_string().contains("must contain at least one model"),
         "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_catalog_overlay_json_applies_after_full_replacement() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let catalog_path = codex_home.path().join("catalog.json");
+    let overlay_path = codex_home.path().join("overlay.json");
+    let mut catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    catalog.models = catalog.models.into_iter().take(1).collect();
+    let parent = catalog.models.first().expect("replacement model");
+    std::fs::write(
+        &catalog_path,
+        serde_json::to_string(&catalog).expect("serialize catalog"),
+    )?;
+    std::fs::write(
+        &overlay_path,
+        serde_json::to_string(&serde_json::json!({"models": [
+            {"slug": parent.slug, "description": null, "supported_reasoning_levels": []},
+            {"slug": "external/new", "inherits": parent.slug, "display_name": "New model"}
+        ]}))
+        .expect("serialize overlay"),
+    )?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            model_catalog_json: Some(catalog_path.abs()),
+            model_catalog_overlay_json: Some(overlay_path.abs()),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    let applied = config
+        .model_catalog_overlay
+        .expect("overlay should load")
+        .apply(config.model_catalog.expect("replacement should load"));
+
+    assert_eq!(applied.models.len(), 2);
+    assert_eq!(applied.models[0].description, None);
+    assert_eq!(applied.models[0].supported_reasoning_levels, Vec::new());
+    assert_eq!(applied.models[1].slug, "external/new");
+    Ok(())
+}
+
+#[test]
+fn model_catalog_overlay_json_deserializes_in_profile() {
+    let profile: ConfigProfile =
+        toml::from_str(r#"model_catalog_overlay_json = "/tmp/provider-models-overlay.json""#)
+            .expect("profile overlay path should deserialize");
+    assert_eq!(
+        profile
+            .model_catalog_overlay_json
+            .as_ref()
+            .map(AbsolutePathBuf::as_path),
+        Some(Path::new("/tmp/provider-models-overlay.json"))
+    );
+}
+
+#[tokio::test]
+async fn model_catalog_overlay_json_errors_include_path_entry_and_slug() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let parent = bundled_models_response()
+        .expect("bundled catalog should parse")
+        .models
+        .first()
+        .expect("bundled model")
+        .slug
+        .clone();
+    let cases = [
+        ("malformed", "{".to_string(), "invalid JSON"),
+        (
+            "duplicate",
+            serde_json::json!({"models": [{"slug": parent}, {"slug": parent}]}).to_string(),
+            "entry 1 slug",
+        ),
+        (
+            "missing-parent",
+            r#"{"models":[{"slug":"new-model","inherits":"missing-parent"}]}"#.to_string(),
+            "entry 0 slug `new-model`: missing parent model `missing-parent`",
+        ),
+        (
+            "missing-inherits",
+            r#"{"models":[{"slug":"new-model"}]}"#.to_string(),
+            "entry 0 slug `new-model`: new model requires field `inherits`",
+        ),
+        (
+            "invalid-model-info",
+            serde_json::json!({"models": [{"slug": parent, "priority": "high"}]}).to_string(),
+            "invalid field `priority`",
+        ),
+    ];
+    for (name, contents, expected) in cases {
+        let overlay_path = codex_home.path().join(format!("{name}.json"));
+        std::fs::write(&overlay_path, contents)?;
+        let err = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                model_catalog_overlay_json: Some(overlay_path.abs()),
+                ..Default::default()
+            },
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await
+        .expect_err("invalid overlay should fail config load");
+        let message = err.to_string();
+        assert!(message.contains(&overlay_path.display().to_string()));
+        assert!(message.contains(expected), "unexpected error: {message}");
+    }
+
+    let missing_path = codex_home.path().join("does-not-exist.json");
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            model_catalog_overlay_json: Some(missing_path.abs()),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await
+    .expect_err("missing overlay file should fail config load");
+    assert!(
+        err.to_string()
+            .contains(&missing_path.display().to_string())
     );
     Ok(())
 }
