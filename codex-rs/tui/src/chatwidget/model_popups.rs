@@ -97,8 +97,8 @@ impl ChatWidget {
         let mut items: Vec<SelectionItem> = auto_presets
             .into_iter()
             .map(|preset| {
-                let description =
-                    (!preset.description.is_empty()).then_some(preset.description.clone());
+                let description = Self::model_picker_description(&preset);
+                let search_value = Some(Self::model_picker_search_value(&preset));
                 let model = preset.model.clone();
                 let requires_advanced_selection =
                     Self::is_advanced_reasoning_effort(&preset.default_reasoning_effort)
@@ -122,6 +122,7 @@ impl ChatWidget {
                 SelectionItem {
                     name: model.clone(),
                     description,
+                    search_value,
                     is_current: model.as_str() == current_model,
                     is_default: preset.is_default,
                     actions,
@@ -163,6 +164,8 @@ impl ChatWidget {
             footer_hint: Some(standard_popup_hint_line()),
             items,
             header,
+            is_searchable: true,
+            search_placeholder: Some("Search models or aliases".to_string()),
             ..Default::default()
         });
     }
@@ -191,8 +194,8 @@ impl ChatWidget {
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.into_iter() {
-            let description =
-                (!preset.description.is_empty()).then_some(preset.description.to_string());
+            let description = Self::model_picker_description(&preset);
+            let search_value = Some(Self::model_picker_search_value(&preset));
             let is_current = preset.model.as_str() == self.current_model();
             let single_supported_effort = preset.supported_reasoning_efforts.len() == 1;
             let preset_for_action = preset.clone();
@@ -205,6 +208,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: preset.model.clone(),
                 description,
+                search_value,
                 is_current,
                 is_default: preset.is_default,
                 actions,
@@ -222,8 +226,28 @@ impl ChatWidget {
             footer_hint: Some(self.bottom_pane.standard_popup_hint_line()),
             items,
             header,
+            is_searchable: true,
+            search_placeholder: Some("Search models or aliases".to_string()),
             ..Default::default()
         });
+    }
+
+    fn model_picker_description(preset: &ModelPreset) -> Option<String> {
+        let aliases =
+            (!preset.aliases.is_empty()).then(|| format!("Aliases: {}", preset.aliases.join(", ")));
+        match (aliases, preset.description.is_empty()) {
+            (Some(aliases), false) => Some(format!("{aliases} — {}", preset.description)),
+            (Some(aliases), true) => Some(aliases),
+            (None, false) => Some(preset.description.clone()),
+            (None, true) => None,
+        }
+    }
+
+    fn model_picker_search_value(preset: &ModelPreset) -> String {
+        std::iter::once(preset.model.as_str())
+            .chain(preset.aliases.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn model_selection_actions(

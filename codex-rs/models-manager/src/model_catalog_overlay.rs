@@ -7,6 +7,7 @@ use std::fmt;
 
 const MODEL_INFO_FIELDS: &[&str] = &[
     "slug",
+    "aliases",
     "display_name",
     "description",
     "default_reasoning_level",
@@ -216,6 +217,9 @@ fn apply_entry(
             entry.index, entry.slug
         ))
     })?;
+    if entry.inherits.is_some() {
+        merged.insert("aliases".to_string(), Value::Array(Vec::new()));
+    }
     for (field, value) in &entry.fields {
         if field != "inherits" {
             merged.insert(field.clone(), value.clone());

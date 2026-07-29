@@ -60,6 +60,50 @@ pub enum RefreshStrategy {
     OnlineIfUncached,
 }
 
+/// A catalog-backed model selector could not be resolved for the active backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelSelectionError {
+    /// No canonical model id or alias matched the requested selector.
+    Unknown { requested: String },
+    /// The selector is an alias owned by more than one canonical model.
+    Ambiguous {
+        requested: String,
+        canonical_models: Vec<String>,
+    },
+    /// The selector is known, but the canonical model is unavailable on the active backend.
+    BackendIncompatible {
+        requested: String,
+        canonical_model: String,
+    },
+}
+
+impl fmt::Display for ModelSelectionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unknown { requested } => {
+                write!(f, "unknown model or alias `{requested}`")
+            }
+            Self::Ambiguous {
+                requested,
+                canonical_models,
+            } => write!(
+                f,
+                "ambiguous model alias `{requested}` matches: {}",
+                canonical_models.join(", ")
+            ),
+            Self::BackendIncompatible {
+                requested,
+                canonical_model,
+            } => write!(
+                f,
+                "model or alias `{requested}` resolves to `{canonical_model}`, which is incompatible with the selected backend/provider"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ModelSelectionError {}
+
 impl RefreshStrategy {
     const fn as_str(self) -> &'static str {
         match self {
@@ -146,6 +190,29 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     fn try_list_models(&self) -> Result<Vec<ModelPreset>, TryLockError> {
         let remote_models = self.try_get_remote_models()?;
         Ok(self.build_available_models(remote_models))
+    }
+
+    /// Resolve a canonical model id or catalog alias for the active backend.
+    fn resolve_model<'a>(
+        &'a self,
+        requested: &'a str,
+        refresh_strategy: RefreshStrategy,
+        http_client_factory: HttpClientFactory,
+    ) -> ModelsManagerFuture<'a, Result<String, ModelSelectionError>> {
+        Box::pin(
+            async move {
+                let catalog = self
+                    .raw_model_catalog(refresh_strategy, http_client_factory)
+                    .await;
+                let available_models = self.build_available_models(catalog.models.clone());
+                resolve_model_from_catalog(requested, &catalog.models, &available_models)
+            }
+            .instrument(tracing::info_span!(
+                "resolve_model",
+                requested,
+                refresh_strategy = %refresh_strategy
+            )),
+        )
     }
 
     // todo(aibrahim): should be visible to core only and sent on session_configured event
@@ -634,6 +701,77 @@ fn requested_model_is_available(
             .iter()
             .any(|available_model| available_model.model == requested_model)
     })
+}
+
+fn resolve_model_from_catalog(
+    requested: &str,
+    catalog: &[ModelInfo],
+    available_models: &[ModelPreset],
+) -> Result<String, ModelSelectionError> {
+    if let Some(exact_match) = catalog.iter().find(|model| model.slug == requested) {
+        return ensure_model_is_available(requested, &exact_match.slug, available_models);
+    }
+    let canonical_matches = catalog
+        .iter()
+        .filter(|model| model.slug.eq_ignore_ascii_case(requested))
+        .map(|model| model.slug.clone())
+        .collect::<Vec<_>>();
+    let canonical_model = match canonical_matches.as_slice() {
+        [] => {
+            let mut alias_matches = Vec::new();
+            for model in catalog {
+                if model
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(requested))
+                    && !alias_matches.contains(&model.slug)
+                {
+                    alias_matches.push(model.slug.clone());
+                }
+            }
+            match alias_matches.as_slice() {
+                [] => {
+                    return Err(ModelSelectionError::Unknown {
+                        requested: requested.to_string(),
+                    });
+                }
+                [canonical_model] => canonical_model.clone(),
+                _ => {
+                    return Err(ModelSelectionError::Ambiguous {
+                        requested: requested.to_string(),
+                        canonical_models: alias_matches,
+                    });
+                }
+            }
+        }
+        [canonical_model] => canonical_model.clone(),
+        _ => {
+            return Err(ModelSelectionError::Ambiguous {
+                requested: requested.to_string(),
+                canonical_models: canonical_matches,
+            });
+        }
+    };
+
+    ensure_model_is_available(requested, &canonical_model, available_models)
+}
+
+fn ensure_model_is_available(
+    requested: &str,
+    canonical_model: &str,
+    available_models: &[ModelPreset],
+) -> Result<String, ModelSelectionError> {
+    if available_models
+        .iter()
+        .any(|model| model.model == canonical_model)
+    {
+        Ok(canonical_model.to_string())
+    } else {
+        Err(ModelSelectionError::BackendIncompatible {
+            requested: requested.to_string(),
+            canonical_model: canonical_model.to_string(),
+        })
+    }
 }
 
 fn find_model_by_longest_prefix(model: &str, candidates: &[ModelInfo]) -> Option<ModelInfo> {

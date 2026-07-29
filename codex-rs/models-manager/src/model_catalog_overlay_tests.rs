@@ -76,6 +76,35 @@ fn shallow_replacement_and_explicit_null_are_preserved() {
 }
 
 #[test]
+fn inherited_overlay_models_only_receive_explicit_aliases() {
+    let original = bundled_models_response().expect("bundled catalog should parse");
+    let parent = original.models.first().expect("bundled model").clone();
+    let inherited_slug = "external/inherited-without-aliases";
+    let explicit_slug = "external/inherited-with-aliases";
+    let applied = apply(json!({"models": [
+        {"slug": parent.slug, "aliases": ["parent-alias"]},
+        {"slug": inherited_slug, "inherits": parent.slug},
+        {
+            "slug": explicit_slug,
+            "inherits": parent.slug,
+            "aliases": ["child-alias"]
+        }
+    ]}))
+    .expect("overlay should apply");
+
+    let mut expected_inherited = parent.clone();
+    expected_inherited.slug = inherited_slug.to_string();
+    expected_inherited.aliases = Vec::new();
+    let mut expected_explicit = parent;
+    expected_explicit.slug = explicit_slug.to_string();
+    expected_explicit.aliases = vec!["child-alias".to_string()];
+    assert_eq!(
+        applied.models[applied.models.len() - 2..],
+        [expected_inherited, expected_explicit]
+    );
+}
+
+#[test]
 fn reports_entry_slug_and_invalid_or_missing_fields() {
     let parent = bundled_models_response()
         .expect("bundled catalog should parse")

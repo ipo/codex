@@ -213,6 +213,90 @@ fn static_manager_for_tests(model_catalog: ModelsResponse) -> StaticModelsManage
     StaticModelsManager::new(/*auth_manager*/ None, model_catalog)
 }
 
+#[test]
+fn model_resolver_prefers_canonical_ids_and_matches_aliases_case_insensitively() {
+    let mut catalog = Vec::new();
+    for (priority, (slug, aliases)) in [
+        ("gpt-5.6-sol", vec!["5.6-sol", "openai/gpt-5.6-sol"]),
+        ("kimi/k3", vec!["k3"]),
+        ("kimi/kimi-for-coding", vec!["kimi-for-coding", "kimi-2.7"]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut model = remote_model(slug, slug, priority as i32);
+        model.aliases = aliases.into_iter().map(str::to_string).collect();
+        catalog.push(model);
+    }
+    let mut colliding = remote_model("other-model", "Other", /*priority*/ 1);
+    colliding.aliases = vec!["gpt-5.6-sol".to_string()];
+    catalog.push(colliding);
+    let available = static_manager_for_tests(ModelsResponse {
+        models: catalog.clone(),
+    })
+    .build_available_models(catalog.clone());
+
+    for (requested, expected) in [
+        ("gpt-5.6-sol", "gpt-5.6-sol"),
+        ("OPENAI/GPT-5.6-SOL", "gpt-5.6-sol"),
+        ("K3", "kimi/k3"),
+        ("kimi-for-coding", "kimi/kimi-for-coding"),
+        ("KIMI-2.7", "kimi/kimi-for-coding"),
+    ] {
+        assert_eq!(
+            resolve_model_from_catalog(requested, &catalog, &available),
+            Ok(expected.to_string())
+        );
+    }
+}
+
+#[test]
+fn model_resolver_reports_ambiguous_aliases_explicitly() {
+    let mut first = remote_model("first", "First", /*priority*/ 0);
+    first.aliases = vec!["shared".to_string()];
+    let mut second = remote_model("second", "Second", /*priority*/ 1);
+    second.aliases = vec!["SHARED".to_string()];
+    let catalog = vec![first, second];
+    let available = static_manager_for_tests(ModelsResponse {
+        models: catalog.clone(),
+    })
+    .build_available_models(catalog.clone());
+
+    assert_eq!(
+        resolve_model_from_catalog("shared", &catalog, &available),
+        Err(ModelSelectionError::Ambiguous {
+            requested: "shared".to_string(),
+            canonical_models: vec!["first".to_string(), "second".to_string()],
+        })
+    );
+}
+
+#[test]
+fn model_resolver_distinguishes_unknown_from_backend_incompatible() {
+    let mut incompatible = remote_model("chatgpt-only", "ChatGPT", /*priority*/ 0);
+    incompatible.aliases = vec!["chat-only".to_string()];
+    incompatible.supported_in_api = false;
+    let catalog = vec![incompatible];
+    let available = static_manager_for_tests(ModelsResponse {
+        models: catalog.clone(),
+    })
+    .build_available_models(catalog.clone());
+
+    assert_eq!(
+        resolve_model_from_catalog("missing", &catalog, &available),
+        Err(ModelSelectionError::Unknown {
+            requested: "missing".to_string(),
+        })
+    );
+    assert_eq!(
+        resolve_model_from_catalog("CHAT-ONLY", &catalog, &available),
+        Err(ModelSelectionError::BackendIncompatible {
+            requested: "CHAT-ONLY".to_string(),
+            canonical_model: "chatgpt-only".to_string(),
+        })
+    );
+}
+
 #[tokio::test]
 async fn manager_without_cache_fetches_on_every_refresh() {
     let remote_models = vec![remote_model("remote", "Remote", /*priority*/ 0)];
