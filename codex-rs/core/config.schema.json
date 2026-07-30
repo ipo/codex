@@ -3146,6 +3146,7 @@
               "interrupt_turn": null
             },
             "composer": {
+              "complete": null,
               "history_search_next": null,
               "history_search_previous": null,
               "queue": null,
@@ -3173,6 +3174,7 @@
             },
             "global": {
               "clear_terminal": null,
+              "complete": null,
               "copy": null,
               "open_external_editor": null,
               "open_transcript": null,
@@ -3497,6 +3499,14 @@
       "additionalProperties": false,
       "description": "Composer context keybindings. These override corresponding `global` actions.",
       "properties": {
+        "complete": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Complete the current composer token."
+        },
         "history_search_next": {
           "allOf": [
             {
@@ -3695,6 +3705,14 @@
           ],
           "description": "Clear the terminal UI."
         },
+        "complete": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Complete the current composer token."
+        },
         "copy": {
           "allOf": [
             {
@@ -3811,6 +3829,7 @@
             }
           ],
           "default": {
+            "complete": null,
             "history_search_next": null,
             "history_search_previous": null,
             "queue": null,
@@ -3852,6 +3871,7 @@
           ],
           "default": {
             "clear_terminal": null,
+            "complete": null,
             "copy": null,
             "open_external_editor": null,
             "open_transcript": null,

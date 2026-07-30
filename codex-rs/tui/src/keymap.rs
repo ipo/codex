@@ -101,6 +101,7 @@ pub(crate) struct ComposerKeymap {
     pub(crate) submit: Vec<KeyBinding>,
     /// Queue current draft while a task is running.
     pub(crate) queue: Vec<KeyBinding>,
+    pub(crate) complete: Vec<KeyBinding>,
     /// Toggle composer shortcut overlay.
     pub(crate) toggle_shortcuts: Vec<KeyBinding>,
     /// Open reverse history search or move to the previous match.
@@ -447,9 +448,10 @@ impl RuntimeKeymap {
             )?,
         };
 
-        let composer = ComposerKeymap {
+        let mut composer = ComposerKeymap {
             submit: resolve_with_global!(keymap, defaults, composer, submit),
             queue: resolve_with_global!(keymap, defaults, composer, queue),
+            complete: resolve_with_global!(keymap, defaults, composer, complete),
             toggle_shortcuts: resolve_with_global!(keymap, defaults, composer, toggle_shortcuts),
             history_search_previous: resolve_local!(
                 keymap,
@@ -479,6 +481,34 @@ impl RuntimeKeymap {
             kill_line_end: resolve_local!(keymap, defaults, editor, kill_line_end),
             yank: resolve_local!(keymap, defaults, editor, yank),
         };
+
+        let configured_queue = keymap
+            .composer
+            .queue
+            .as_ref()
+            .or(keymap.global.queue.as_ref());
+        let configured_complete = keymap
+            .composer
+            .complete
+            .as_ref()
+            .or(keymap.global.complete.as_ref());
+        if configured_complete.is_none()
+            && let Some(configured_queue) = configured_queue
+        {
+            let queue_bindings = parse_bindings(configured_queue, "tui.keymap.composer.queue")?;
+            composer
+                .complete
+                .retain(|binding| !queue_bindings.contains(binding));
+        }
+        if configured_queue.is_none()
+            && let Some(configured_newline) = keymap.editor.insert_newline.as_ref()
+        {
+            let newline_bindings =
+                parse_bindings(configured_newline, "tui.keymap.editor.insert_newline")?;
+            composer
+                .queue
+                .retain(|binding| !newline_bindings.contains(binding));
+        }
 
         let mut vim_normal = VimNormalKeymap {
             enter_insert: resolve_local!(keymap, defaults, vim_normal, enter_insert),
@@ -931,7 +961,8 @@ impl RuntimeKeymap {
             },
             composer: ComposerKeymap {
                 submit: default_bindings![plain(KeyCode::Enter)],
-                queue: default_bindings![plain(KeyCode::Tab)],
+                queue: default_bindings![alt(KeyCode::Enter)],
+                complete: default_bindings![plain(KeyCode::Tab)],
                 toggle_shortcuts: default_bindings![
                     plain(KeyCode::Char('?')),
                     shift(KeyCode::Char('?'))
@@ -944,8 +975,7 @@ impl RuntimeKeymap {
                     ctrl(KeyCode::Char('j')),
                     ctrl(KeyCode::Char('m')),
                     plain(KeyCode::Enter),
-                    shift(KeyCode::Enter),
-                    alt(KeyCode::Enter)
+                    shift(KeyCode::Enter)
                 ],
                 move_left: default_bindings![plain(KeyCode::Left), ctrl(KeyCode::Char('b'))],
                 move_right: default_bindings![plain(KeyCode::Right), ctrl(KeyCode::Char('f'))],
@@ -1190,6 +1220,7 @@ impl RuntimeKeymap {
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("composer.queue", self.composer.queue.as_slice()),
+                ("composer.complete", self.composer.complete.as_slice()),
                 (
                     "composer.toggle_shortcuts",
                     self.composer.toggle_shortcuts.as_slice(),
@@ -1233,6 +1264,7 @@ impl RuntimeKeymap {
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
                 ("composer.queue", self.composer.queue.as_slice()),
+                ("composer.complete", self.composer.complete.as_slice()),
                 (
                     "composer.toggle_shortcuts",
                     self.composer.toggle_shortcuts.as_slice(),
@@ -1338,6 +1370,8 @@ impl RuntimeKeymap {
                     self.chat.increase_reasoning_effort.as_slice(),
                 ),
                 ("composer.submit", self.composer.submit.as_slice()),
+                ("composer.queue", self.composer.queue.as_slice()),
+                ("composer.complete", self.composer.complete.as_slice()),
                 ("toggle_vim_mode", self.app.toggle_vim_mode.as_slice()),
                 ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
                 ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
@@ -1887,6 +1921,9 @@ fn configured_main_surface_alias_is_used(keymap: &TuiKeymap, alias: &str) -> boo
     if keymap.composer.queue.is_some() {
         global.queue = None;
     }
+    if keymap.composer.complete.is_some() {
+        global.complete = None;
+    }
     if keymap.composer.toggle_shortcuts.is_some() {
         global.toggle_shortcuts = None;
     }
@@ -2170,6 +2207,45 @@ mod tests {
             runtime.composer.queue,
             vec![key_hint::ctrl(KeyCode::Char('q'))]
         );
+    }
+
+    #[test]
+    fn completion_defaults_and_legacy_bindings_resolve_without_conflicts() {
+        let runtime = RuntimeKeymap::defaults();
+        assert_eq!(
+            runtime.composer.complete,
+            vec![key_hint::plain(KeyCode::Tab)]
+        );
+        assert_eq!(runtime.composer.queue, vec![key_hint::alt(KeyCode::Enter)]);
+
+        let mut keymap = TuiKeymap::default();
+        keymap.composer.queue = Some(one("tab"));
+        let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
+        assert_eq!(runtime.composer.queue, vec![key_hint::plain(KeyCode::Tab)]);
+        assert!(runtime.composer.complete.is_empty());
+
+        keymap = TuiKeymap::default();
+        keymap.editor.insert_newline = Some(one("alt-enter"));
+        let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
+        assert_eq!(
+            runtime.editor.insert_newline,
+            vec![key_hint::alt(KeyCode::Enter)]
+        );
+        assert!(runtime.composer.queue.is_empty());
+    }
+
+    #[test]
+    fn completion_configuration_supports_global_and_rejects_conflicting_bindings() {
+        let mut keymap = TuiKeymap::default();
+        keymap.global.complete = Some(one("ctrl-space"));
+        let runtime = RuntimeKeymap::from_config(&keymap).unwrap();
+        assert_eq!(
+            runtime.composer.complete,
+            vec![key_hint::ctrl(KeyCode::Char(' '))]
+        );
+        keymap.composer.complete = Some(one("ctrl-space"));
+        keymap.composer.queue = Some(one("ctrl-space"));
+        expect_conflict(&keymap, "composer.complete", "composer.queue");
     }
 
     #[test]
@@ -2841,7 +2917,6 @@ mod tests {
                 key_hint::ctrl(KeyCode::Char('m')),
                 key_hint::plain(KeyCode::Enter),
                 key_hint::shift(KeyCode::Enter),
-                key_hint::alt(KeyCode::Enter),
             ]
         );
     }

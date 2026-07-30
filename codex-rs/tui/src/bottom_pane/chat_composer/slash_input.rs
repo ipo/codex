@@ -15,6 +15,7 @@ use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::bottom_pane::slash_commands::has_slash_command_prefix;
+use crate::key_hint::KeyBindingListExt;
 use crate::slash_command::SlashCommand;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
@@ -211,6 +212,7 @@ impl ChatComposer {
         &mut self,
         key_event: KeyEvent,
     ) -> (InputResult, bool) {
+        let completion_pressed = self.complete_keys.is_pressed(key_event);
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -251,9 +253,7 @@ impl ChatComposer {
                 popup.move_down();
                 (InputResult::None, true)
             }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            } => {
+            _ if completion_pressed => {
                 // Ensure popup filtering/selection reflects the latest composer text
                 // before applying completion.
                 let text = self.draft.textarea.text();
@@ -294,10 +294,8 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                 }
-                if self.is_task_running {
-                    return self.handle_submission(/*should_queue*/ true);
-                }
-                (InputResult::None, true)
+                self.popups.active = ActivePopup::None;
+                self.request_path_completion()
             }
             KeyEvent {
                 code: KeyCode::Char('/'),

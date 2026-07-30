@@ -103,6 +103,8 @@ pub struct TuiGlobalKeymap {
     pub submit: Option<KeybindingsSpec>,
     /// Queue the current composer draft while a task is running.
     pub queue: Option<KeybindingsSpec>,
+    /// Complete the current composer token.
+    pub complete: Option<KeybindingsSpec>,
     /// Toggle the composer shortcut overlay.
     pub toggle_shortcuts: Option<KeybindingsSpec>,
     /// Toggle Vim mode for the composer input.
@@ -137,6 +139,8 @@ pub struct TuiComposerKeymap {
     pub submit: Option<KeybindingsSpec>,
     /// Queue the current composer draft while a task is running.
     pub queue: Option<KeybindingsSpec>,
+    /// Complete the current composer token.
+    pub complete: Option<KeybindingsSpec>,
     /// Toggle the composer shortcut overlay.
     pub toggle_shortcuts: Option<KeybindingsSpec>,
     /// Open reverse history search or move to the previous match.

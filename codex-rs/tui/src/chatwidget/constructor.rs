@@ -259,6 +259,7 @@ impl ChatWidget {
             last_non_retry_error: None,
         };
 
+        widget.bottom_pane.set_cwd(widget.config.cwd.clone());
         widget.prefetch_rate_limits();
         if let Some(keymap) = runtime_keymap {
             widget.bottom_pane.set_keymap_bindings(&keymap);

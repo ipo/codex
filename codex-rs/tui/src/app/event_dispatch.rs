@@ -824,6 +824,16 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
+            AppEvent::StartPathCompletion(request) => {
+                let tx = self.app_event_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = crate::bottom_pane::complete_path_completion(request);
+                    tx.send(AppEvent::PathCompletionResult(result));
+                });
+            }
+            AppEvent::PathCompletionResult(result) => {
+                self.chat_widget.apply_path_completion_result(result);
+            }
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }

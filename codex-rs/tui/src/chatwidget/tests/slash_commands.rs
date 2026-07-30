@@ -62,14 +62,14 @@ fn submit_current_composer(chat: &mut ChatWidget) {
 fn queue_composer_text_with_tab(chat: &mut ChatWidget, text: &str) {
     chat.bottom_pane
         .set_composer_text(text.to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
 }
 
 fn queue_goal_with_large_paste(chat: &mut ChatWidget, paste: String) {
     chat.bottom_pane
         .set_composer_text("/goal ".to_string(), Vec::new(), Vec::new());
     chat.handle_paste(paste);
-    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
 }
 
 fn submit_initial_text(chat: &mut ChatWidget, text: &str) -> InitialUserMessageSubmission {

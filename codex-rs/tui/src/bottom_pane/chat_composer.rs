@@ -59,9 +59,9 @@
 //!
 //! # Submission and Prompt Expansion
 //!
-//! `Enter` submits immediately. `Tab` requests queuing while a task is running; if no task is
-//! running, `Tab` submits just like Enter so input is never dropped.
-//! `Tab` does not submit when entering a `!` shell command.
+//! `Enter` submits immediately. The configurable completion action (plain `Tab` by default)
+//! completes slash commands, mentions, and filesystem paths. Queueing is a separate action
+//! (`Alt+Enter` by default) and retains the existing running-vs-idle submission semantics.
 //!
 //! On submit/queue paths, the composer:
 //!
@@ -261,12 +261,14 @@ use codex_protocol::ThreadId;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::TextElement;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 mod attachment_state;
 mod completion_target;
 mod draft_state;
 mod footer_state;
 mod history_search;
+pub(crate) mod path_completion;
 mod popup_state;
 mod slash_input;
 
@@ -275,6 +277,7 @@ use self::draft_state::ComposerMentionBinding;
 use self::draft_state::DraftState;
 use self::footer_state::FooterState;
 use self::history_search::HistorySearchSession;
+use self::path_completion::PathCompletionRequest;
 use self::popup_state::ActivePopup;
 use self::popup_state::DismissedToken;
 use self::popup_state::PopupState;
@@ -493,11 +496,15 @@ pub(crate) struct ChatComposer {
     history_search: Option<HistorySearchSession>,
     submit_keys: Vec<KeyBinding>,
     queue_keys: Vec<KeyBinding>,
+    complete_keys: Vec<KeyBinding>,
     toggle_shortcuts_keys: Vec<KeyBinding>,
     history_search_previous_keys: Vec<KeyBinding>,
     history_search_next_keys: Vec<KeyBinding>,
     editor_keymap: EditorKeymap,
     vim_normal_keymap: VimNormalKeymap,
+    cwd: Option<AbsolutePathBuf>,
+    next_path_completion_request_id: u64,
+    pending_path_completion: Option<PathCompletionRequest>,
 }
 
 /// A resolved legacy `$` target plus any catalog built while disambiguating shell syntax.
@@ -631,7 +638,7 @@ impl ChatComposer {
                     &default_keymap.editor.insert_newline,
                     use_shift_enter_hint,
                 ),
-                queue_key: Some(key_hint::plain(KeyCode::Tab)),
+                queue_key: Some(key_hint::alt(KeyCode::Enter)),
                 toggle_shortcuts_key: Some(key_hint::plain(KeyCode::Char('?'))),
                 history_search_key: primary_binding(
                     &default_keymap.composer.history_search_previous,
@@ -669,7 +676,8 @@ impl ChatComposer {
             side_conversation_active: false,
             history_search: None,
             submit_keys: vec![key_hint::plain(KeyCode::Enter)],
-            queue_keys: vec![key_hint::plain(KeyCode::Tab)],
+            queue_keys: vec![key_hint::alt(KeyCode::Enter)],
+            complete_keys: vec![key_hint::plain(KeyCode::Tab)],
             toggle_shortcuts_keys: vec![
                 key_hint::plain(KeyCode::Char('?')),
                 key_hint::shift(KeyCode::Char('?')),
@@ -678,6 +686,9 @@ impl ChatComposer {
             history_search_next_keys: default_keymap.composer.history_search_next.clone(),
             editor_keymap: default_editor_keymap,
             vim_normal_keymap: default_vim_normal_keymap,
+            cwd: AbsolutePathBuf::current_dir().ok(),
+            next_path_completion_request_id: 0,
+            pending_path_completion: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -823,6 +834,7 @@ impl ChatComposer {
     pub(crate) fn set_keymap_bindings(&mut self, keymap: &RuntimeKeymap) {
         self.submit_keys = keymap.composer.submit.clone();
         self.queue_keys = keymap.composer.queue.clone();
+        self.complete_keys = keymap.composer.complete.clone();
         self.toggle_shortcuts_keys = keymap.composer.toggle_shortcuts.clone();
         self.history_search_previous_keys = keymap.composer.history_search_previous.clone();
         self.history_search_next_keys = keymap.composer.history_search_next.clone();
@@ -840,6 +852,14 @@ impl ChatComposer {
         self.footer.history_search_key = primary_binding(&keymap.composer.history_search_previous);
         self.footer.reasoning_down_key = primary_binding(&keymap.chat.decrease_reasoning_effort);
         self.footer.reasoning_up_key = primary_binding(&keymap.chat.increase_reasoning_effort);
+    }
+
+    pub(crate) fn set_cwd(&mut self, cwd: AbsolutePathBuf) {
+        self.cwd = Some(cwd);
+        self.pending_path_completion = None;
+        if matches!(self.popups.active, ActivePopup::Path(_)) {
+            self.popups.active = ActivePopup::None;
+        }
     }
 
     pub fn set_collaboration_mode_indicator(
@@ -910,6 +930,7 @@ impl ChatComposer {
             ActivePopup::MentionV2(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
+            ActivePopup::Path(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::None => Constraint::Max(footer_total_height),
         };
         let [composer_rect, popup_rect] =
@@ -1881,6 +1902,8 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
+        self.pending_path_completion = None;
+
         if self.history_search.is_some() {
             return self.handle_history_search_key(key_event);
         }
@@ -1889,11 +1912,20 @@ impl ChatComposer {
             return self.begin_history_search();
         }
 
+        if self.popups.active() && self.queue_keys.is_pressed(key_event) {
+            self.popups.active = ActivePopup::None;
+            let result = self.handle_key_event_without_popup(key_event);
+            self.reset_vim_mode_after_successful_dispatch(&result.0);
+            self.sync_popups();
+            return result;
+        }
+
         let result = match &mut self.popups.active {
             ActivePopup::Command(_) => self.handle_key_event_with_slash_popup(key_event),
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
             ActivePopup::MentionV2(_) => self.handle_key_event_with_mentions_v2_popup(key_event),
+            ActivePopup::Path(_) => self.handle_key_event_with_path_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
         self.reset_vim_mode_after_successful_dispatch(&result.0);
@@ -2012,6 +2044,7 @@ impl ChatComposer {
 
     /// Handle key events when file search popup is visible.
     fn handle_key_event_with_file_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        let completion_pressed = self.complete_keys.is_pressed(key_event);
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -2066,14 +2099,17 @@ impl ChatComposer {
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            input
+                if completion_pressed
+                    || matches!(
+                        input,
+                        KeyEvent {
+                            code: KeyCode::Enter,
+                            modifiers: KeyModifiers::NONE,
+                            ..
+                        }
+                    ) =>
+            {
                 let Some(sel) = popup.selected_match() else {
                     self.popups.active = ActivePopup::None;
                     return if key_event.code == KeyCode::Enter {
@@ -2098,6 +2134,7 @@ impl ChatComposer {
 
     /// Handle key events when the legacy skill mention popup is visible.
     fn handle_key_event_with_skill_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
+        let completion_pressed = self.complete_keys.is_pressed(key_event);
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -2147,14 +2184,17 @@ impl ChatComposer {
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Enter,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
+            input
+                if completion_pressed
+                    || matches!(
+                        input,
+                        KeyEvent {
+                            code: KeyCode::Enter,
+                            modifiers: KeyModifiers::NONE,
+                            ..
+                        }
+                    ) =>
+            {
                 if let Some(mention) = popup.selected_mention() {
                     selected_mention = Some((mention.insert_text.clone(), mention.path.clone()));
                 }
@@ -2180,6 +2220,7 @@ impl ChatComposer {
         &mut self,
         key_event: KeyEvent,
     ) -> (InputResult, bool) {
+        let completion_pressed = self.complete_keys.is_pressed(key_event);
         if self.handle_shortcut_overlay_key(&key_event) {
             return (InputResult::None, true);
         }
@@ -2252,9 +2293,7 @@ impl ChatComposer {
                 self.popups.active = ActivePopup::None;
                 (InputResult::None, true)
             }
-            KeyEvent {
-                code: KeyCode::Tab, ..
-            } => {
+            _ if completion_pressed => {
                 selected = popup.selected();
                 close_popup = true;
                 (InputResult::None, true)
@@ -3363,6 +3402,9 @@ impl ChatComposer {
         } else {
             self.footer.mode = reset_mode_after_activity(self.footer.mode);
         }
+        if self.complete_keys.is_pressed(key_event) {
+            return self.request_path_completion();
+        }
         if self.queue_keys.is_pressed(key_event)
             && (self.is_task_running || self.queue_submissions || !self.is_bang_shell_command())
         {
@@ -3700,6 +3742,7 @@ impl ChatComposer {
             key_hints: FooterKeyHints {
                 toggle_shortcuts: self.footer.toggle_shortcuts_key,
                 queue: self.footer.queue_key,
+                complete: primary_binding(&self.complete_keys),
                 insert_newline: self.footer.insert_newline_key,
                 external_editor: self.footer.external_editor_key,
                 edit_previous: Some(key_hint::plain(KeyCode::Esc)),
@@ -4430,6 +4473,7 @@ impl ChatComposer {
                 ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
                 ActivePopup::MentionV2(c) => c.calculate_required_height(width),
+                ActivePopup::Path(c) => c.calculate_required_height(),
             }
     }
 }
@@ -4461,6 +4505,9 @@ impl ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::MentionV2(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::Path(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
@@ -4868,6 +4915,20 @@ mod tests {
             ),
             rx,
         )
+    }
+
+    #[test]
+    fn alt_enter_keeps_queue_semantics() {
+        let (mut composer, _rx) = new_test_composer();
+        composer.set_task_running(true);
+        composer.set_text_content("queued".to_string(), Vec::new(), Vec::new());
+
+        assert!(matches!(
+            composer
+                .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT))
+                .0,
+            InputResult::Queued { .. }
+        ));
     }
 
     #[test]
@@ -9488,7 +9549,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_queues_slash_led_prompts_while_task_running_without_validation() {
+    fn alt_enter_queues_slash_led_prompts_while_task_running_without_validation() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -9507,7 +9568,7 @@ mod tests {
             composer.draft.textarea.set_text_clearing_elements(input);
 
             let (result, _needs_redraw) =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+                composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
 
             match result {
                 InputResult::Queued {
@@ -9572,7 +9633,7 @@ mod tests {
     }
 
     #[test]
-    fn remapped_queue_does_not_fall_back_to_tab() {
+    fn remapped_queue_does_not_fall_back_to_alt_enter() {
         use crate::key_hint;
         use crate::keymap::RuntimeKeymap;
         use crossterm::event::KeyCode;
@@ -9598,7 +9659,7 @@ mod tests {
         composer.set_keymap_bindings(&keymap);
 
         let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
 
         assert_eq!(InputResult::None, result);
         assert_eq!("queue me", composer.draft.textarea.text());
@@ -9633,7 +9694,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_queues_leading_space_slash_as_plain_text_while_task_running() {
+    fn alt_enter_queues_leading_space_slash_as_plain_text_while_task_running() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -9654,7 +9715,7 @@ mod tests {
             .set_text_clearing_elements(" /does-not-exist");
 
         let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
 
         match result {
             InputResult::Queued { text, action, .. } => {
@@ -9666,7 +9727,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_queues_bang_shell_prompts_while_task_running_without_execution() {
+    fn alt_enter_queues_bang_shell_prompts_while_task_running_without_execution() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -9685,7 +9746,7 @@ mod tests {
             composer.draft.textarea.set_text_clearing_elements(input);
 
             let (result, _needs_redraw) =
-                composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+                composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
 
             match result {
                 InputResult::Queued {
@@ -9915,7 +9976,7 @@ mod tests {
     }
 
     #[test]
-    fn tab_submits_when_no_task_running() {
+    fn alt_enter_submits_when_no_task_running() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -9933,7 +9994,7 @@ mod tests {
         type_chars_humanlike(&mut composer, &['h', 'i']);
 
         let (result, _needs_redraw) =
-            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
 
         assert!(matches!(
             result,

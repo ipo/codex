@@ -36,6 +36,7 @@ impl ChatWidget {
         self.current_rollout_path = session.rollout_path.clone();
         self.current_cwd = Some(session.cwd.to_path_buf());
         self.config.cwd = session.cwd.clone();
+        self.bottom_pane.set_cwd(session.cwd.clone());
         let runtime_workspace_roots = session.runtime_workspace_roots.clone();
         self.config.workspace_roots = runtime_workspace_roots.clone();
         self.config
