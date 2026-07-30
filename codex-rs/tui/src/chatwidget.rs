@@ -285,6 +285,7 @@ use crate::bottom_pane::McpElicitationApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::MemoriesSettingsView;
 use crate::bottom_pane::MentionBinding;
+use crate::bottom_pane::PathCompletionResult;
 use crate::bottom_pane::PermissionsApprovalRequest;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::QueuedInputAction;
@@ -1565,6 +1566,10 @@ impl ChatWidget {
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
+    }
+
+    pub(crate) fn apply_path_completion_result(&mut self, result: PathCompletionResult) {
+        self.bottom_pane.on_path_completion_result(result);
     }
 
     /// Return the markdown body width available to an active stream.

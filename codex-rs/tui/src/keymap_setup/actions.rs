@@ -100,6 +100,7 @@ pub(super) const KEYMAP_ACTIONS: &[KeymapActionDescriptor] = &[
     action("chat", "Chat", "edit_queued_message", "Edit the most recently queued message."),
     action("composer", "Composer", "submit", "Submit the current composer draft."),
     action("composer", "Composer", "queue", "Queue the draft while a task is running."),
+    action("composer", "Composer", "complete", "Complete a slash command, mention, or filesystem path."),
     action("composer", "Composer", "toggle_shortcuts", "Show or hide the composer shortcut overlay."),
     action("composer", "Composer", "history_search_previous", "Open history search or move to the previous match."),
     action("composer", "Composer", "history_search_next", "Move to the next history search match."),
@@ -244,6 +245,7 @@ pub(super) fn binding_slot<'a>(
         ("chat", "edit_queued_message") => Some(&mut keymap.chat.edit_queued_message),
         ("composer", "submit") => Some(&mut keymap.composer.submit),
         ("composer", "queue") => Some(&mut keymap.composer.queue),
+        ("composer", "complete") => Some(&mut keymap.composer.complete),
         ("composer", "toggle_shortcuts") => Some(&mut keymap.composer.toggle_shortcuts),
         ("composer", "history_search_previous") => Some(&mut keymap.composer.history_search_previous),
         ("composer", "history_search_next") => Some(&mut keymap.composer.history_search_next),
@@ -370,6 +372,7 @@ pub(super) fn bindings_for_action<'a>(
         ("chat", "edit_queued_message") => Some(runtime_keymap.chat.edit_queued_message.as_slice()),
         ("composer", "submit") => Some(runtime_keymap.composer.submit.as_slice()),
         ("composer", "queue") => Some(runtime_keymap.composer.queue.as_slice()),
+        ("composer", "complete") => Some(runtime_keymap.composer.complete.as_slice()),
         ("composer", "toggle_shortcuts") => Some(runtime_keymap.composer.toggle_shortcuts.as_slice()),
         ("composer", "history_search_previous") => Some(runtime_keymap.composer.history_search_previous.as_slice()),
         ("composer", "history_search_next") => Some(runtime_keymap.composer.history_search_next.as_slice()),
@@ -572,6 +575,7 @@ fn global_fallback_slot<'a>(
     match descriptor.action {
         "submit" => Some(&mut keymap.global.submit),
         "queue" => Some(&mut keymap.global.queue),
+        "complete" => Some(&mut keymap.global.complete),
         "toggle_shortcuts" => Some(&mut keymap.global.toggle_shortcuts),
         _ => None,
     }

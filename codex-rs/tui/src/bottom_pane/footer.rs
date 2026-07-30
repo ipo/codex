@@ -101,6 +101,7 @@ const FOOTER_CONTEXT_GAP_COLS: u16 = 1;
 pub(crate) struct FooterKeyHints {
     pub(crate) toggle_shortcuts: Option<KeyBinding>,
     pub(crate) queue: Option<KeyBinding>,
+    pub(crate) complete: Option<KeyBinding>,
     pub(crate) insert_newline: Option<KeyBinding>,
     pub(crate) external_editor: Option<KeyBinding>,
     pub(crate) edit_previous: Option<KeyBinding>,
@@ -115,7 +116,8 @@ impl FooterKeyHints {
     pub(crate) fn default_bindings() -> Self {
         Self {
             toggle_shortcuts: Some(key_hint::plain(KeyCode::Char('?'))),
-            queue: Some(key_hint::plain(KeyCode::Tab)),
+            queue: Some(key_hint::alt(KeyCode::Enter)),
+            complete: Some(key_hint::plain(KeyCode::Tab)),
             insert_newline: Some(key_hint::ctrl(KeyCode::Char('j'))),
             external_editor: Some(key_hint::ctrl(KeyCode::Char('g'))),
             edit_previous: Some(key_hint::plain(KeyCode::Esc)),
@@ -930,6 +932,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
     let mut shell_commands = Line::from("");
     let mut newline = Line::from("");
     let mut queue_message_tab = Line::from("");
+    let mut path_completion = Line::from("");
     let mut file_paths = Line::from("");
     let mut paste_image = Line::from("");
     let mut external_editor = Line::from("");
@@ -948,6 +951,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
                 ShortcutId::ShellCommands => shell_commands = text,
                 ShortcutId::InsertNewline => newline = text,
                 ShortcutId::QueueMessageTab => queue_message_tab = text,
+                ShortcutId::PathCompletion => path_completion = text,
                 ShortcutId::FilePaths => file_paths = text,
                 ShortcutId::PasteImage => paste_image = text,
                 ShortcutId::ExternalEditor => external_editor = text,
@@ -967,6 +971,7 @@ fn shortcut_overlay_lines(state: ShortcutsState) -> Vec<Line<'static>> {
         shell_commands,
         newline,
         queue_message_tab,
+        path_completion,
         file_paths,
         paste_image,
         external_editor,
@@ -1057,6 +1062,7 @@ enum ShortcutId {
     ShellCommands,
     InsertNewline,
     QueueMessageTab,
+    PathCompletion,
     FilePaths,
     PasteImage,
     ExternalEditor,
@@ -1118,6 +1124,7 @@ impl ShortcutDescriptor {
         let key = match self.id {
             ShortcutId::InsertNewline => state.key_hints.insert_newline,
             ShortcutId::QueueMessageTab => state.key_hints.queue,
+            ShortcutId::PathCompletion => state.key_hints.complete,
             ShortcutId::ExternalEditor => state.key_hints.external_editor,
             ShortcutId::EditPrevious => state.key_hints.edit_previous,
             ShortcutId::ShowTranscript => state.key_hints.show_transcript,
@@ -1206,6 +1213,12 @@ const SHORTCUTS: &[ShortcutDescriptor] = &[
         }],
         prefix: "",
         label: " to queue message",
+    },
+    ShortcutDescriptor {
+        id: ShortcutId::PathCompletion,
+        bindings: &[],
+        prefix: "",
+        label: " to complete path",
     },
     ShortcutDescriptor {
         id: ShortcutId::FilePaths,

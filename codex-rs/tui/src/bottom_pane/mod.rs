@@ -44,6 +44,7 @@ use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::TextElement;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -198,6 +199,9 @@ pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::ChatComposerConfig;
 pub(crate) use chat_composer::InputResult;
 pub(crate) use chat_composer::QueuedInputAction;
+pub(crate) use chat_composer::path_completion::PathCompletionRequest;
+pub(crate) use chat_composer::path_completion::PathCompletionResult;
+pub(crate) use chat_composer::path_completion::complete as complete_path_completion;
 pub(crate) use chat_composer_history::HistoryEntry;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
@@ -1692,6 +1696,16 @@ impl BottomPane {
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
+    }
+
+    pub(crate) fn on_path_completion_result(&mut self, result: PathCompletionResult) {
+        if self.composer.on_path_completion_result(result) {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_cwd(&mut self, cwd: AbsolutePathBuf) {
+        self.composer.set_cwd(cwd);
     }
 
     pub(crate) fn attach_image(&mut self, path: PathBuf) {

@@ -1,6 +1,7 @@
 //! Popup lifecycle state for the chat composer.
 //! Tracks the single active popup plus dismissal/query state used to synchronize it.
 
+use super::path_completion::PathCompletionPopup;
 use crate::bottom_pane::command_popup::CommandPopup;
 use crate::bottom_pane::file_search_popup::FileSearchPopup;
 use crate::bottom_pane::mentions_v2::MentionV2Popup;
@@ -110,6 +111,7 @@ pub(super) enum ActivePopup {
     File(FileSearchPopup),
     Skill(SkillPopup),
     MentionV2(MentionV2Popup),
+    Path(PathCompletionPopup),
 }
 
 #[cfg(test)]
