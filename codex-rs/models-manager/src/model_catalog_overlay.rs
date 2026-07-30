@@ -37,6 +37,8 @@ const MODEL_INFO_FIELDS: &[&str] = &[
     "max_context_window",
     "auto_compact_token_limit",
     "comp_hash",
+    "history_compatibility_group",
+    "requires_nonempty_assistant_messages",
     "effective_context_window_percent",
     "experimental_supported_tools",
     "input_modalities",
@@ -219,6 +221,7 @@ fn apply_entry(
     })?;
     if entry.inherits.is_some() {
         merged.insert("aliases".to_string(), Value::Array(Vec::new()));
+        merged.remove("history_compatibility_group");
     }
     for (field, value) in &entry.fields {
         if field != "inherits" {

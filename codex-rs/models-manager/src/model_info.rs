@@ -156,6 +156,8 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         max_context_window: Some(272_000),
         auto_compact_token_limit: None,
         comp_hash: None,
+        history_compatibility_group: None,
+        requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),

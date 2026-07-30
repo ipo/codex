@@ -17,6 +17,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
@@ -143,6 +144,15 @@ impl ContextManager {
     pub(crate) fn for_prompt(mut self, input_modalities: &[InputModality]) -> Vec<ResponseItem> {
         self.normalize_history(input_modalities);
         Arc::unwrap_or_clone(self.items)
+    }
+
+    /// Returns model-projected history without changing the stored transcript.
+    pub(crate) fn for_model_prompt(self, model_info: &ModelInfo) -> Vec<ResponseItem> {
+        let mut items = self.for_prompt(&model_info.input_modalities);
+        if model_info.requires_nonempty_assistant_messages {
+            items.retain(|item| !is_empty_assistant_message(item));
+        }
+        items
     }
 
     /// Returns raw items in the history.
@@ -432,6 +442,19 @@ impl ContextManager {
         }
         cut_idx
     }
+}
+
+fn is_empty_assistant_message(item: &ResponseItem) -> bool {
+    let ResponseItem::Message { role, content, .. } = item else {
+        return false;
+    };
+    role == "assistant"
+        && content.iter().all(|item| match item {
+            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                text.trim().is_empty()
+            }
+            ContentItem::InputImage { .. } | ContentItem::InputAudio { .. } => false,
+        })
 }
 
 pub(crate) fn truncate_function_output_payload(

@@ -383,6 +383,8 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         max_context_window: None,
         auto_compact_token_limit: None,
         comp_hash: None,
+        history_compatibility_group: None,
+        requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),

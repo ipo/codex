@@ -23,7 +23,10 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_completed_with_tokens;
+use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_image_generation_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
@@ -115,9 +118,47 @@ fn test_model_info(
         max_context_window: None,
         auto_compact_token_limit: None,
         comp_hash: None,
+        history_compatibility_group: None,
+        requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kimi_request_projection_omits_empty_assistant_message_before_tool_call() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+    let mut model = test_model_info("kimi/k3", "K3", "Kimi model", default_input_modalities());
+    model.requires_nonempty_assistant_messages = true;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("empty", " \n"),
+                ev_function_call("call-1", "shell_command", r#"{"command":"echo ok"}"#),
+                ev_completed("resp-1"),
+            ]),
+            sse_completed("resp-2"),
+        ],
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_model("kimi/k3")
+        .with_config(move |config| {
+            config.model_catalog = Some(ModelsResponse {
+                models: vec![model],
+            });
+        });
+    let test = builder.build(&server).await?;
+    test.submit_turn("run a command").await?;
+
+    let requests = responses.requests();
+    let request = &requests[1];
+    assert!(request.message_input_texts("assistant").is_empty());
+    assert_eq!(request.inputs_of_type("function_call").len(), 1);
+    assert_eq!(request.inputs_of_type("function_call_output").len(), 1);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -980,6 +1021,8 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         max_context_window: None,
         auto_compact_token_limit: None,
         comp_hash: None,
+        history_compatibility_group: None,
+        requires_nonempty_assistant_messages: false,
         effective_context_window_percent,
         experimental_supported_tools: Vec::new(),
     };

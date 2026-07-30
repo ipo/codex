@@ -424,6 +424,16 @@ pub struct ModelInfo {
     /// Opaque identifier for compaction-compatible model configurations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comp_hash: Option<String>,
+    /// Internal identifier for models that can safely inherit one another's turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub history_compatibility_group: Option<String>,
+    /// Whether outgoing requests must omit empty assistant messages.
+    #[serde(default)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub requires_nonempty_assistant_messages: bool,
     /// Percentage of the context window considered usable for inputs, after
     /// reserving headroom for system prompts, tool overhead, and model output.
     #[serde(default = "default_effective_context_window_percent")]
@@ -458,6 +468,17 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    pub fn history_compatibility_key(&self) -> &str {
+        self.history_compatibility_group
+            .as_deref()
+            .unwrap_or(&self.slug)
+    }
+
+    pub fn is_history_compatible_with(&self, other: &Self) -> bool {
+        self.slug == other.slug
+            || self.history_compatibility_key() == other.history_compatibility_key()
+    }
+
     pub fn resolved_context_window(&self) -> Option<i64> {
         self.context_window.or(self.max_context_window)
     }
@@ -738,6 +759,8 @@ mod tests {
             max_context_window: None,
             auto_compact_token_limit: None,
             comp_hash: None,
+            history_compatibility_group: None,
+            requires_nonempty_assistant_messages: false,
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             input_modalities: default_input_modalities(),
