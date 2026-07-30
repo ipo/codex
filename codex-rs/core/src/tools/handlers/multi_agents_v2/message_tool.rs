@@ -36,7 +36,8 @@ impl MessageDeliveryMode {
 /// Input for the MultiAgentV2 `send_message` tool.
 pub(crate) struct SendMessageArgs {
     pub(crate) target: String,
-    pub(crate) message: String,
+    pub(crate) message: Option<String>,
+    pub(crate) plaintext_message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,16 +45,37 @@ pub(crate) struct SendMessageArgs {
 /// Input for the MultiAgentV2 `followup_task` tool.
 pub(crate) struct FollowupTaskArgs {
     pub(crate) target: String,
-    pub(crate) message: String,
+    pub(crate) message: Option<String>,
+    pub(crate) plaintext_message: Option<String>,
 }
 
-pub(super) fn message_content(message: String) -> Result<String, FunctionCallError> {
-    if message.trim().is_empty() {
+pub(super) fn message_content(
+    message: Option<String>,
+    plaintext_message: Option<String>,
+) -> Result<ToolMessage, FunctionCallError> {
+    let selected = match (message, plaintext_message) {
+        (Some(message), None) => ToolMessage::Encrypted(message),
+        (None, Some(message)) => ToolMessage::Plaintext(message),
+        (Some(_), Some(_)) => {
+            return Err(FunctionCallError::RespondToModel(
+                "Provide exactly one of message or plaintext_message, not both".to_string(),
+            ));
+        }
+        (None, None) => {
+            return Err(FunctionCallError::RespondToModel(
+                "Provide exactly one of message or plaintext_message".to_string(),
+            ));
+        }
+    };
+    let content = match &selected {
+        ToolMessage::Encrypted(content) | ToolMessage::Plaintext(content) => content,
+    };
+    if content.trim().is_empty() {
         return Err(FunctionCallError::RespondToModel(
-            "Empty message can't be sent to an agent".to_string(),
+            "Collaboration messages must not be empty".to_string(),
         ));
     }
-    Ok(message)
+    Ok(selected)
 }
 
 /// Handles the shared MultiAgentV2 message flow for both `send_message` and `followup_task`.
@@ -61,9 +83,10 @@ pub(crate) async fn handle_message_string_tool(
     invocation: ToolInvocation,
     mode: MessageDeliveryMode,
     target: String,
-    message: String,
+    message: Option<String>,
+    plaintext_message: Option<String>,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
-    let message = message_content(message)?;
+    let message = message_content(message, plaintext_message)?;
     let ToolInvocation {
         session,
         turn,
@@ -89,6 +112,18 @@ pub(crate) async fn handle_message_string_tool(
     let receiver_agent_path = receiver_agent.agent_path.clone().ok_or_else(|| {
         FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
     })?;
+    let receiver_model = session
+        .services
+        .agent_control
+        .get_agent_model_snapshot(receiver_thread_id)
+        .await
+        .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+    let receiver_model_info = session
+        .services
+        .models_manager
+        .get_model_info(&receiver_model, &turn.config.to_models_manager_config())
+        .await;
+    validate_tool_message_family(&turn.model_info, &receiver_model_info, &message)?;
     let resume_config = build_agent_resume_config(turn.as_ref())?;
     session
         .services

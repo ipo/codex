@@ -26,6 +26,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::bundled_models_response;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -40,6 +41,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SandboxEnforcement;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::AskForApproval;
@@ -103,6 +105,21 @@ fn function_payload(args: serde_json::Value) -> ToolPayload {
     }
 }
 
+async fn spawn_v2(
+    session: &Arc<crate::session::session::Session>,
+    turn: &Arc<TurnContext>,
+    args: serde_json::Value,
+) -> Result<Box<dyn codex_tools::ToolOutput>, FunctionCallError> {
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            Arc::clone(session),
+            Arc::clone(turn),
+            "spawn_agent",
+            function_payload(args),
+        ))
+        .await
+}
+
 fn parse_agent_id(id: &str) -> ThreadId {
     ThreadId::from_string(id).expect("agent id should be valid")
 }
@@ -112,6 +129,66 @@ fn thread_manager() -> ThreadManager {
         CodexAuth::from_api_key("dummy"),
         built_in_model_providers(/* openai_base_url */ /*openai_base_url*/ None)["openai"].clone(),
     )
+}
+
+fn heterogeneous_catalog() -> ModelsResponse {
+    let base = bundled_models_response()
+        .expect("bundled catalog")
+        .models
+        .into_iter()
+        .next()
+        .expect("bundled model");
+    let model = |slug: &str, alias: &str, group: &str, requires_nonempty| {
+        let mut model = base.clone();
+        model.slug = slug.to_string();
+        model.aliases = vec![alias.to_string()];
+        model.display_name = alias.to_string();
+        model.history_compatibility_group = Some(group.to_string());
+        model.requires_nonempty_assistant_messages = requires_nonempty;
+        model
+    };
+    ModelsResponse {
+        models: vec![
+            model("openai/gpt-test", "gpt-test", "openai", false),
+            model("anthropic/claude-test", "claude-test", "anthropic", false),
+            model("kimi/k3", "K3", "kimi", true),
+            model("kimi/kimi-for-coding", "Kimi-for-Coding", "kimi", true),
+        ],
+    }
+}
+
+async fn heterogeneous_v2_harness(
+    parent_model: &str,
+    effort: ReasoningEffort,
+) -> (crate::session::session::Session, TurnContext, ThreadManager) {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let catalog = heterogeneous_catalog();
+    let manager = ThreadManager::with_models_provider_and_catalog_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        built_in_model_providers(/*openai_base_url*/ None)["openai"].clone(),
+        catalog.clone(),
+    );
+    session.services.models_manager = manager.get_models_manager();
+    let mut config = (*turn.config).clone();
+    config.model_catalog = Some(catalog);
+    config.model = Some(parent_model.to_string());
+    config.model_reasoning_effort = Some(effort.clone());
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    set_turn_config(&mut turn, config);
+    turn = turn
+        .with_model(parent_model.to_string(), &session.services.models_manager)
+        .await;
+    turn.reasoning_effort = Some(effort);
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    (session, turn, manager)
 }
 
 async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
@@ -126,9 +203,9 @@ async fn install_role_with_model_override(turn: &mut TurnContext) -> String {
         .join("fork-context-role.toml");
     tokio::fs::write(
         &role_config_path,
-        r#"model = "gpt-5-role-override"
-model_provider = "ollama"
-model_reasoning_effort = "minimal"
+        r#"model = "gpt-5.6-sol"
+model_provider = "openai"
+model_reasoning_effort = "low"
 "#,
     )
     .await
@@ -396,6 +473,268 @@ async fn multi_agent_v2_spawn_fork_turns_all_rejects_agent_type_override() {
             "Full-history forked agents inherit the parent agent type; omit agent_type, or spawn without a full-history fork.".to_string(),
         )
     );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_full_fork_inherits_exact_model_and_effort_and_bypasses_defaults() {
+    let (session, mut turn, manager) =
+        heterogeneous_v2_harness("kimi/k3", ReasoningEffort::High).await;
+    let mut config = (*turn.config).clone();
+    config.agent_default_subagent_model = Some("anthropic/claude-test".to_string());
+    config.agent_default_subagent_reasoning_effort = Some(ReasoningEffort::Low);
+    turn.config = Arc::new(config);
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    for (task_name, model) in [("bare_full", None), ("alias_full", Some("K3"))] {
+        let mut args = json!({
+            "message": "encrypted task",
+            "task_name": task_name,
+            "fork_turns": "all",
+            "reasoning_effort": "high"
+        });
+        if let Some(model) = model {
+            args["model"] = json!(model);
+        }
+        spawn_v2(&session, &turn, args)
+            .await
+            .expect("equivalent full fork should succeed");
+        let child_id = session
+            .services
+            .agent_control
+            .resolve_agent_reference(session.thread_id, &turn.session_source, task_name)
+            .await
+            .expect("child should resolve");
+        let snapshot = manager
+            .get_thread(child_id)
+            .await
+            .expect("child thread")
+            .config_snapshot()
+            .await;
+        assert_eq!(snapshot.model, "kimi/k3");
+        assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::High));
+    }
+
+    for (task_name, overrides) in [
+        ("wrong_model", json!({"model": "Kimi-for-Coding"})),
+        ("wrong_effort", json!({"reasoning_effort": "low"})),
+    ] {
+        let mut args = json!({
+            "message": "encrypted task",
+            "task_name": task_name,
+            "fork_turns": "all"
+        });
+        args.as_object_mut()
+            .expect("object")
+            .extend(overrides.as_object().expect("object").clone());
+        let err = spawn_v2(&session, &turn, args)
+            .await
+            .err()
+            .expect("actual full-fork override should fail");
+        assert!(
+            matches!(err, FunctionCallError::RespondToModel(message) if message.contains("fork_turns=\"none\""))
+        );
+        assert!(
+            session
+                .services
+                .agent_control
+                .resolve_agent_reference(session.thread_id, &turn.session_source, task_name)
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[tokio::test]
+async fn multi_agent_v2_bounded_and_clean_forks_enforce_history_groups() {
+    let (session, turn, manager) = heterogeneous_v2_harness("kimi/k3", ReasoningEffort::High).await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    spawn_v2(
+        &session,
+        &turn,
+        json!({
+            "message": "same-family encrypted task",
+            "task_name": "kimi_bounded",
+            "model": "Kimi-for-Coding",
+            "reasoning_effort": "low",
+            "fork_turns": "1"
+        }),
+    )
+    .await
+    .expect("K3 to Kimi bounded fork should succeed");
+    let child_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "kimi_bounded")
+        .await
+        .expect("child should resolve");
+    let snapshot = manager
+        .get_thread(child_id)
+        .await
+        .expect("child thread")
+        .config_snapshot()
+        .await;
+    assert_eq!(snapshot.model, "kimi/kimi-for-coding");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Low));
+
+    let err = spawn_v2(
+        &session,
+        &turn,
+        json!({
+            "plaintext_message": "cross-family bounded task",
+            "task_name": "claude_bounded",
+            "model": "claude-test",
+            "fork_turns": "1"
+        }),
+    )
+    .await
+    .err()
+    .expect("cross-family bounded fork should fail");
+    assert!(
+        matches!(err, FunctionCallError::RespondToModel(message) if message.contains("fork_turns=\"none\""))
+    );
+
+    let err = spawn_v2(
+        &session,
+        &turn,
+        json!({
+            "message": "encrypted cross-family task",
+            "task_name": "claude_encrypted",
+            "model": "claude-test",
+            "fork_turns": "none"
+        }),
+    )
+    .await
+    .err()
+    .expect("encrypted cross-family spawn should fail");
+    assert!(
+        matches!(err, FunctionCallError::RespondToModel(message) if message.contains("plaintext_message"))
+    );
+
+    spawn_v2(
+        &session,
+        &turn,
+        json!({
+            "plaintext_message": "cross-family plaintext task",
+            "task_name": "claude_plaintext",
+            "model": "claude-test",
+            "fork_turns": "none"
+        }),
+    )
+    .await
+    .expect("clean-context cross-family plaintext spawn should succeed");
+    let claude_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "claude_plaintext")
+        .await
+        .expect("Claude child should resolve");
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == claude_id
+            && matches!(op, Op::InterAgentCommunication { communication }
+                if communication.content == "cross-family plaintext task"
+                    && communication.encrypted_content.is_none())
+    }));
+    let delivered_before = manager
+        .captured_ops()
+        .iter()
+        .filter(|(id, op)| *id == claude_id && matches!(op, Op::InterAgentCommunication { .. }))
+        .count();
+    for (tool_name, trigger_turn) in [("send_message", false), ("followup_task", true)] {
+        let result = if trigger_turn {
+            FollowupTaskHandlerV2
+                .handle(invocation(
+                    session.clone(),
+                    turn.clone(),
+                    tool_name,
+                    function_payload(
+                        json!({"target": "claude_plaintext", "message": "ciphertext"}),
+                    ),
+                ))
+                .await
+        } else {
+            SendMessageHandlerV2
+                .handle(invocation(
+                    session.clone(),
+                    turn.clone(),
+                    tool_name,
+                    function_payload(
+                        json!({"target": "claude_plaintext", "message": "ciphertext"}),
+                    ),
+                ))
+                .await
+        };
+        let err = result
+            .err()
+            .expect("encrypted cross-family delivery should fail");
+        assert!(
+            matches!(err, FunctionCallError::RespondToModel(message) if message.contains("plaintext_message"))
+        );
+    }
+    assert_eq!(
+        manager
+            .captured_ops()
+            .iter()
+            .filter(|(id, op)| {
+                *id == claude_id && matches!(op, Op::InterAgentCommunication { .. })
+            })
+            .count(),
+        delivered_before
+    );
+    SendMessageHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "send_message",
+            function_payload(json!({
+                "target": "claude_plaintext",
+                "plaintext_message": "plain message"
+            })),
+        ))
+        .await
+        .expect("cross-family plaintext message should succeed");
+    FollowupTaskHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "followup_task",
+            function_payload(json!({
+                "target": "claude_plaintext",
+                "plaintext_message": "plain followup"
+            })),
+        ))
+        .await
+        .expect("cross-family plaintext followup should succeed");
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == claude_id
+            && matches!(op, Op::InterAgentCommunication { communication }
+                if communication.content == "plain message"
+                    && communication.encrypted_content.is_none()
+                    && !communication.trigger_turn)
+    }));
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == claude_id
+            && matches!(op, Op::InterAgentCommunication { communication }
+                if communication.content == "plain followup"
+                    && communication.encrypted_content.is_none()
+                    && communication.trigger_turn)
+    }));
+
+    let (reverse_session, reverse_turn, _reverse_manager) =
+        heterogeneous_v2_harness("kimi/kimi-for-coding", ReasoningEffort::Low).await;
+    spawn_v2(
+        &Arc::new(reverse_session),
+        &Arc::new(reverse_turn),
+        json!({
+            "message": "reverse encrypted task",
+            "task_name": "k3_bounded",
+            "model": "K3",
+            "fork_turns": "1"
+        }),
+    )
+    .await
+    .expect("Kimi to K3 bounded fork should succeed");
 }
 
 #[tokio::test]
@@ -1032,7 +1371,7 @@ async fn multi_agent_v2_full_history_fork_accepts_explicit_service_tier() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
+async fn multi_agent_v2_spawn_clean_fork_allows_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
     let manager = thread_manager();
@@ -1059,14 +1398,14 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
             Arc::new(turn),
             "spawn_agent",
             function_payload(json!({
-                "message": "inspect this repo",
+                "plaintext_message": "inspect this repo",
                 "task_name": "partial_fork",
                 "agent_type": role_name,
-                "fork_turns": "1"
+                "fork_turns": "none"
             })),
         ))
         .await
-        .expect("partial fork should allow agent_type overrides");
+        .expect("clean fork should allow agent_type overrides");
     let (content, _) = expect_text_output(output);
     let result: serde_json::Value =
         serde_json::from_str(&content).expect("spawn_agent result should be json");
@@ -1084,9 +1423,9 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
         .config_snapshot()
         .await;
 
-    assert_eq!(snapshot.model, "gpt-5-role-override");
-    assert_eq!(snapshot.model_provider_id, "ollama");
-    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
+    assert_eq!(snapshot.model, "gpt-5.6-sol");
+    assert_eq!(snapshot.model_provider_id, "openai");
+    assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Low));
 }
 
 #[tokio::test]
@@ -1992,9 +2331,8 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
     let FunctionCallError::RespondToModel(message) = err else {
         panic!("expected model-facing parse error");
     };
-    assert!(message.starts_with(
-        "failed to parse function arguments: unknown field `interrupt`, expected `target` or `message`"
-    ));
+    assert!(message.contains("unknown field `interrupt`"));
+    assert!(message.contains("plaintext_message"));
 
     let ops = manager.captured_ops();
     let ops_for_agent: Vec<&Op> = ops

@@ -382,6 +382,68 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     Ok(())
 }
 
+pub(crate) async fn validate_full_history_spawn_agent_overrides(
+    session: &Session,
+    turn: &TurnContext,
+    config: &Config,
+    requested_model: Option<&str>,
+    requested_reasoning_effort: Option<ReasoningEffort>,
+) -> Result<(), FunctionCallError> {
+    if let Some(requested_model) = requested_model {
+        let (canonical_model, _) =
+            resolve_spawn_agent_model(session, config, requested_model, turn.multi_agent_version)
+                .await?;
+        if canonical_model != turn.model_info.slug {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "Full-history forks must use the parent model `{}`; use fork_turns=\"none\" to spawn `{canonical_model}` without inherited history.",
+                turn.model_info.slug
+            )));
+        }
+    }
+
+    let parent_effort = turn
+        .reasoning_effort
+        .clone()
+        .or_else(|| turn.model_info.default_reasoning_level.clone());
+    if requested_reasoning_effort.is_some() && requested_reasoning_effort != parent_effort {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Full-history forks must use the parent's effective reasoning effort `{}`; omit reasoning_effort or use fork_turns=\"none\" to change it.",
+            parent_effort
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "none".to_string())
+        )));
+    }
+    Ok(())
+}
+
+pub(crate) async fn validate_inherited_history_compatibility(
+    session: &Session,
+    turn: &TurnContext,
+    config: &Config,
+) -> Result<ModelInfo, FunctionCallError> {
+    let child_model = config.model.as_deref().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent could not resolve the child model for history validation".to_string(),
+        )
+    })?;
+    let child_model_info = session
+        .services
+        .models_manager
+        .get_model_info(child_model, &config.to_models_manager_config())
+        .await;
+    if !turn
+        .model_info
+        .is_history_compatible_with(&child_model_info)
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Model `{child_model}` cannot inherit turns from model `{}` because their history compatibility groups differ; retry with fork_turns=\"none\".",
+            turn.model_info.slug
+        )));
+    }
+    Ok(child_model_info)
+}
+
 pub(crate) async fn apply_spawn_agent_service_tier(
     session: &Session,
     config: &mut Config,
@@ -471,7 +533,7 @@ pub(crate) async fn apply_spawn_agent_role(
     )
 }
 
-async fn resolve_spawn_agent_model(
+pub(crate) async fn resolve_spawn_agent_model(
     session: &Session,
     config: &Config,
     requested_model: &str,

@@ -295,7 +295,7 @@ pub(crate) async fn run_turn(
             let sampling_request_input: Vec<ResponseItem> = async {
                 sess.clone_history()
                     .await
-                    .for_prompt(&turn_context.model_info.input_modalities)
+                    .for_model_prompt(&turn_context.model_info)
             }
             .instrument(trace_span!("run_turn.prepare_sampling_request_input"))
             .await;
@@ -1205,7 +1205,7 @@ async fn run_sampling_request(
         } else {
             sess.clone_history()
                 .await
-                .for_prompt(&turn_context.model_info.input_modalities)
+                .for_model_prompt(&turn_context.model_info)
         };
         let prompt = build_prompt(
             prompt_input,
