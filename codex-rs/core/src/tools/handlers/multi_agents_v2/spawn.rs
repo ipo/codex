@@ -55,7 +55,7 @@ async fn handle_spawn_agent(
         .map(str::trim)
         .filter(|role| !role.is_empty());
 
-    let message = message_content(args.message)?;
+    let message = message_content(args.message, args.plaintext_message)?;
     let environments = resolve_spawn_agent_environments(turn.as_ref(), args.cwd.as_deref()).await?;
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
@@ -67,16 +67,23 @@ async fn handle_spawn_agent(
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
     if is_full_history_fork {
         reject_full_fork_agent_type_override(role_name)?;
-    }
-    apply_requested_spawn_agent_model_overrides(
-        &session,
-        turn.as_ref(),
-        &mut config,
-        args.model.as_deref(),
-        args.reasoning_effort.clone(),
-    )
-    .await?;
-    if !is_full_history_fork {
+        validate_full_history_spawn_agent_overrides(
+            &session,
+            turn.as_ref(),
+            &config,
+            args.model.as_deref(),
+            args.reasoning_effort.clone(),
+        )
+        .await?;
+    } else {
+        apply_requested_spawn_agent_model_overrides(
+            &session,
+            turn.as_ref(),
+            &mut config,
+            args.model.as_deref(),
+            args.reasoning_effort.clone(),
+        )
+        .await?;
         apply_spawn_agent_role(&session, &mut config, role_name, turn.multi_agent_version).await?;
     }
     apply_spawn_agent_service_tier(
@@ -87,6 +94,21 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+    let child_model_info = if fork_mode.is_some() {
+        validate_inherited_history_compatibility(&session, turn.as_ref(), &config).await?
+    } else {
+        let child_model = config.model.as_deref().ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "spawn_agent could not resolve the child model for message validation".to_string(),
+            )
+        })?;
+        session
+            .services
+            .models_manager
+            .get_model_info(child_model, &config.to_models_manager_config())
+            .await
+    };
+    validate_tool_message_family(&turn.model_info, &child_model_info, &message)?;
 
     let spawn_source = thread_spawn_source(
         session.thread_id,
@@ -174,7 +196,8 @@ impl CoreToolRuntime for Handler {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SpawnAgentArgs {
-    message: String,
+    message: Option<String>,
+    plaintext_message: Option<String>,
     task_name: String,
     agent_type: Option<String>,
     model: Option<String>,

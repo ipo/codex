@@ -303,6 +303,25 @@ impl AgentControl {
         Some(thread.config_snapshot().await)
     }
 
+    pub(crate) async fn get_agent_model_snapshot(&self, agent_id: ThreadId) -> CodexResult<String> {
+        let state = self.upgrade()?;
+        if let Ok(thread) = state.get_thread(agent_id).await {
+            return Ok(thread.config_snapshot().await.model);
+        }
+        let stored = state
+            .read_stored_thread(ReadThreadParams {
+                thread_id: agent_id,
+                include_archived: true,
+                include_history: false,
+            })
+            .await?;
+        stored.model.ok_or_else(|| {
+            CodexErr::InvalidRequest(format!(
+                "stored configuration for agent {agent_id} does not contain a model"
+            ))
+        })
+    }
+
     pub(crate) async fn resolve_agent_reference(
         &self,
         _current_thread_id: ThreadId,

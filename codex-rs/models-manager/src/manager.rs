@@ -821,9 +821,17 @@ pub(crate) fn construct_model_info_from_candidates(
     let remote = find_model_by_longest_prefix(model, candidates)
         .or_else(|| find_model_by_namespaced_suffix(model, candidates));
     let model_info = if let Some(remote) = remote {
+        let is_exact_match = remote.slug == model;
         ModelInfo {
             slug: model.to_string(),
             used_fallback_model_metadata: false,
+            history_compatibility_group: if is_exact_match {
+                remote.history_compatibility_group.clone()
+            } else {
+                None
+            },
+            requires_nonempty_assistant_messages: is_exact_match
+                && remote.requires_nonempty_assistant_messages,
             ..remote
         }
     } else {

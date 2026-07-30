@@ -42,6 +42,8 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
+#[cfg(test)]
+use codex_models_manager::manager::StaticModelsManager;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::CodexErr;
@@ -407,6 +409,21 @@ impl ThreadManager {
             Arc::new(EnvironmentManager::default_for_tests()),
         );
         manager._test_codex_home_guard = Some(TempCodexHomeGuard { path: codex_home });
+        manager
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_models_provider_and_catalog_for_tests(
+        auth: CodexAuth,
+        provider: ModelProviderInfo,
+        model_catalog: codex_protocol::openai_models::ModelsResponse,
+    ) -> Self {
+        let mut manager = Self::with_models_provider_for_tests(auth, provider);
+        let state = Arc::get_mut(&mut manager.state).expect("new manager state should be unique");
+        state.models_manager = Arc::new(StaticModelsManager::new(
+            Some(Arc::clone(&state.auth_manager)),
+            model_catalog,
+        ));
         manager
     }
 

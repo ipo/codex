@@ -105,6 +105,45 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     h
 }
 
+#[test]
+fn model_projection_omits_only_empty_assistant_messages_for_marked_models() {
+    let empty = assistant_msg("  \n");
+    let nonempty = assistant_msg("answer");
+    let call = ResponseItem::FunctionCall {
+        id: None,
+        name: "tool".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-1".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let output = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: "call-1".to_string(),
+        output: FunctionCallOutputPayload::from_text("result".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let items = vec![
+        user_msg("question"),
+        empty,
+        call.clone(),
+        output.clone(),
+        reasoning_msg("reasoning"),
+        nonempty.clone(),
+    ];
+    let history = create_history_with_items(items.clone());
+    let mut marked = codex_models_manager::model_info::model_info_from_slug("kimi/k3");
+    marked.requires_nonempty_assistant_messages = true;
+    assert_eq!(
+        history.clone().for_model_prompt(&marked),
+        vec![items[0].clone(), call, output, items[4].clone(), nonempty]
+    );
+    assert_eq!(history.raw_items(), items);
+
+    let unmarked = codex_models_manager::model_info::model_info_from_slug("unknown");
+    assert_eq!(history.for_model_prompt(&unmarked), items);
+}
+
 struct TestWorldStateSection;
 
 impl WorldStateSection for TestWorldStateSection {

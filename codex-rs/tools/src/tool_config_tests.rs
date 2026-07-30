@@ -12,6 +12,7 @@ use super::*;
 fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
     ModelInfo {
         slug: "test-model".to_string(),
+        aliases: Vec::new(),
         display_name: "Test Model".to_string(),
         description: None,
         default_reasoning_level: None,
@@ -41,6 +42,8 @@ fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
         max_context_window: None,
         auto_compact_token_limit: None,
         comp_hash: None,
+        history_compatibility_group: None,
+        requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: codex_protocol::openai_models::default_input_modalities(),

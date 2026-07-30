@@ -51,16 +51,46 @@ pub(crate) async fn emit_sub_agent_activity(
         .await;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ToolMessage {
+    Encrypted(String),
+    Plaintext(String),
+}
+
 pub(super) fn communication_from_tool_message(
     author: AgentPath,
     recipient: AgentPath,
-    message: String,
+    message: ToolMessage,
 ) -> InterAgentCommunication {
-    InterAgentCommunication::new_encrypted(
-        author,
-        recipient,
-        Vec::new(),
-        message,
-        /*trigger_turn*/ true,
-    )
+    match message {
+        ToolMessage::Encrypted(message) => InterAgentCommunication::new_encrypted(
+            author,
+            recipient,
+            Vec::new(),
+            message,
+            /*trigger_turn*/ true,
+        ),
+        ToolMessage::Plaintext(message) => InterAgentCommunication::new(
+            author,
+            recipient,
+            Vec::new(),
+            message,
+            /*trigger_turn*/ true,
+        ),
+    }
+}
+
+fn validate_tool_message_family(
+    sender: &codex_protocol::openai_models::ModelInfo,
+    recipient: &codex_protocol::openai_models::ModelInfo,
+    message: &ToolMessage,
+) -> Result<(), FunctionCallError> {
+    if matches!(message, ToolMessage::Encrypted(_)) && !sender.is_history_compatible_with(recipient)
+    {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Encrypted collaboration messages cannot cross model families (`{}` to `{}`); retry with plaintext_message.",
+            sender.slug, recipient.slug
+        )));
+    }
+    Ok(())
 }
