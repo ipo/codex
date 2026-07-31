@@ -1358,6 +1358,7 @@ async fn list_threads_metadata_filter_keeps_valid_rows_beyond_head_scan() -> std
     writeln!(file, "{meta}")?;
     let filler = RolloutLine {
         timestamp: ts.to_string(),
+        ordinal: None,
         item: RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
             message: "still working".to_string(),
             phase: None,
@@ -1370,6 +1371,7 @@ async fn list_threads_metadata_filter_keeps_valid_rows_beyond_head_scan() -> std
     }
     let user_event = RolloutLine {
         timestamp: ts.to_string(),
+        ordinal: None,
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             client_id: None,
             message: "Hello beyond the bounded head scan".to_string(),
@@ -1386,7 +1388,7 @@ async fn list_threads_metadata_filter_keeps_valid_rows_beyond_head_scan() -> std
     )?;
 
     let runtime = codex_state::StateRuntime::init(
-        home.path().to_path_buf(),
+        codex_state::SqliteConfig::new_for_testing(home.path().abs()),
         config.model_provider_id.clone(),
     )
     .await
