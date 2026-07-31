@@ -196,6 +196,13 @@ struct DbOutcomeTags {
 }
 
 impl DbOutcomeTags {
+    fn from_error(error: &anyhow::Error) -> Self {
+        Self {
+            status: "failed",
+            error: classify_error(error),
+        }
+    }
+
     fn from_result<T>(result: &anyhow::Result<T>) -> Self {
         match result {
             Ok(_) => Self {

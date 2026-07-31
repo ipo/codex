@@ -1,9 +1,13 @@
 use codex_utils_absolute_path::test_support::PathExt;
 use sqlx::Connection;
 use sqlx::Row;
+use sqlx::SqliteConnection;
 use sqlx::migrate::Migration;
 use sqlx::migrate::Migrator;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::SqliteJournalMode;
 use std::borrow::Cow;
+use std::time::Duration;
 
 use super::STATE_MIGRATOR;
 use super::THREAD_HISTORY_MIGRATOR;
@@ -476,20 +480,23 @@ async fn repair_recency_migration_succeeds_while_another_connection_holds_writer
         .run(&pool)
         .await
         .expect("current migrations should apply");
-    let read_pool = sqlite
-        .open_read_only_pool(&state_path)
+    let mut read_connection = pool
+        .acquire()
         .await
-        .expect("read-only pool should open");
-    let mut write_connection = pool.acquire().await.expect("write connection should open");
+        .expect("read connection should open");
+    let options = SqliteConnectOptions::new()
+        .filename(&state_path)
+        .create_if_missing(false)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_millis(100));
+    let mut write_connection = SqliteConnection::connect_with(&options)
+        .await
+        .expect("write connection should open");
     let write_transaction = write_connection
         .begin_with("BEGIN IMMEDIATE")
         .await
         .expect("write transaction should acquire the writer slot");
 
-    let mut read_connection = read_pool
-        .acquire()
-        .await
-        .expect("acquire read-only SQLite connection");
     let repair_result =
         repair_legacy_recency_migration_version(&mut read_connection, &STATE_MIGRATOR).await;
 
@@ -498,7 +505,7 @@ async fn repair_recency_migration_succeeds_while_another_connection_holds_writer
         .await
         .expect("write transaction should roll back");
     drop(write_connection);
-    read_pool.close().await;
+    drop(read_connection);
     pool.close().await;
     repair_result.expect("current migration history should not need the writer slot");
 }

@@ -1,4 +1,5 @@
 use super::super::STATE_DB;
+use super::super::STATE_DB_FILENAME;
 use super::init_lock_path;
 use super::open_owner_only_lock_file;
 use super::open_sqlite;
@@ -125,7 +126,7 @@ async fn open_state_concurrently(path: &Path) {
 #[tokio::test]
 async fn new_database_uses_wal_and_incremental_auto_vacuum() {
     let codex_home = create_home().await;
-    let path = codex_home.join(crate::STATE_DB_FILENAME);
+    let path = codex_home.join(STATE_DB_FILENAME);
 
     let pool = open_state(path.as_path()).await;
 
@@ -170,7 +171,7 @@ async fn new_database_uses_wal_and_incremental_auto_vacuum() {
 #[tokio::test]
 async fn established_database_keeps_schema_and_auto_vacuum_setting() {
     let codex_home = create_home().await;
-    let path = codex_home.join(crate::STATE_DB_FILENAME);
+    let path = codex_home.join(STATE_DB_FILENAME);
     let mut original_connection = open_raw_connection(path.as_path(), true).await;
     STATE_MIGRATOR
         .run_direct(
@@ -219,7 +220,7 @@ async fn established_database_keeps_schema_and_auto_vacuum_setting() {
 #[tokio::test]
 async fn current_database_does_not_wait_for_init_lock() {
     let codex_home = create_home().await;
-    let path = codex_home.join(crate::STATE_DB_FILENAME);
+    let path = codex_home.join(STATE_DB_FILENAME);
     open_state(path.as_path()).await.close().await;
     let lock_file = open_owner_only_lock_file(init_lock_path(path.as_path()).as_path())
         .expect("open init lock file");
@@ -240,7 +241,7 @@ async fn current_database_does_not_wait_for_init_lock() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_cold_initialization_applies_schema_once() {
     let codex_home = create_home().await;
-    let path = codex_home.join(crate::STATE_DB_FILENAME);
+    let path = codex_home.join(STATE_DB_FILENAME);
 
     open_state_concurrently(path.as_path()).await;
 
@@ -264,7 +265,7 @@ async fn concurrent_cold_initialization_applies_schema_once() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_upgrade_preserves_existing_data() {
     let codex_home = create_home().await;
-    let path = codex_home.join(crate::STATE_DB_FILENAME);
+    let path = codex_home.join(STATE_DB_FILENAME);
     let mut connection = open_raw_connection(path.as_path(), true).await;
     migrator_through(/*version*/ 37)
         .run_direct(/*target*/ None, &mut connection, /*skip*/ false)
@@ -309,7 +310,7 @@ async fn concurrent_upgrade_preserves_existing_data() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_hot_initialization_succeeds_while_writes_continue() {
     let codex_home = create_home().await;
-    let path = codex_home.join(crate::STATE_DB_FILENAME);
+    let path = codex_home.join(STATE_DB_FILENAME);
     let writer_pool = open_state(path.as_path()).await;
     let stop = Arc::new(AtomicBool::new(false));
     let writer_stop = Arc::clone(&stop);
