@@ -494,8 +494,7 @@ async fn advanced_reasoning_selection_in_plan_mode_uses_expected_scope() {
         )));
         assert!(events.iter().all(|event| !matches!(
             event,
-            AppEvent::PersistPlanModeReasoningEffort(_)
-                | AppEvent::PersistModelSelection { .. }
+            AppEvent::PersistPlanModeReasoningEffort(_) | AppEvent::PersistModelSelection { .. }
         )));
     }
 }

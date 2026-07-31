@@ -660,8 +660,7 @@ impl ChatWidget {
                 }
                 _ => unreachable!("advanced choices are limited to Max and Ultra"),
             };
-            let actions =
-                self.model_selection_actions(model_slug.clone(), Some(effort.clone()));
+            let actions = self.model_selection_actions(model_slug.clone(), Some(effort.clone()));
 
             items.push(SelectionItem {
                 name: Self::reasoning_effort_label(&effort),

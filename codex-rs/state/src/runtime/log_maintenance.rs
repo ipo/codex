@@ -1,5 +1,5 @@
-use crate::telemetry::DbTelemetry;
 use crate::SqliteConfig;
+use crate::telemetry::DbTelemetry;
 use anyhow::Context;
 use chrono::Utc;
 use sqlx::Connection;
