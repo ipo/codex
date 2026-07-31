@@ -34,6 +34,7 @@ async fn spawn_agent_cwd_updates_only_the_primary_environment() {
             "secondary".to_string(),
             Arc::clone(&primary.environment),
             PathUri::from_host_native_path(secondary.path()).expect("secondary cwd URI"),
+            Vec::new(),
             primary.shell.clone(),
         )));
     let original = turn.environments.to_selections();

@@ -182,7 +182,7 @@ async fn heterogeneous_v2_harness(
         .await;
     turn.reasoning_effort = Some(effort);
     let root = manager
-        .start_thread((*turn.config).clone())
+        .start_thread(StartThreadOptions::new((*turn.config).clone()))
         .await
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
