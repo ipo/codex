@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/app_server.rs
 expression: rendered
 ---
 • Working (0s • esc to interrupt)
-  └ This request requires additional safety checks, which can take extra time.
+  └ Our systems are thinking a bit more about this request before responding.
 
 
 › Ask Codex to do anything
