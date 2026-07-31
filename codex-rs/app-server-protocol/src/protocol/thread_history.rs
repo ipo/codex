@@ -2522,6 +2522,7 @@ mod tests {
         builder.handle_event(&EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some("turn-1".into()),
             reason: TurnAbortReason::Interrupted,
+            started_at: Some(10),
             completed_at: Some(11),
             duration_ms: Some(1_000),
         }));
