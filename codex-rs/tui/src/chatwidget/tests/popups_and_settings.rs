@@ -3113,6 +3113,7 @@ fn model_picker_preset(slug: &str, show_in_picker: bool) -> ModelPreset {
         is_default: false,
         upgrade: None,
         show_in_picker,
+        multi_agent_version: None,
         availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),

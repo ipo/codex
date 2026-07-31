@@ -5,7 +5,7 @@ use codex_utils_path_uri::PathUri;
 impl SessionConfiguration {
     pub(super) fn file_system_sandbox_context(&self, cwd: &PathUri) -> FileSystemSandboxContext {
         let mut workspace_roots: Vec<PathUri> = self
-            .workspace_roots
+            .primary_workspace_roots()
             .iter()
             .map(PathUri::from_abs_path)
             .collect();
@@ -24,6 +24,7 @@ impl SessionConfiguration {
                 .original_config_do_not_use
                 .permissions
                 .windows_sandbox_private_desktop,
+            windows_sandbox_proxy_settings_mode: None,
             use_legacy_landlock: self
                 .original_config_do_not_use
                 .features
