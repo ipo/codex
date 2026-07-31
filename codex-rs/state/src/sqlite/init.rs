@@ -91,9 +91,7 @@ pub(super) async fn open_sqlite(
         started.elapsed(),
         &pool_result,
     );
-    pool_result.map_err(|source| {
-        RuntimeDbInitError::new(spec.label, "open", path, source).into()
-    })
+    pool_result.map_err(|source| RuntimeDbInitError::new(spec.label, "open", path, source).into())
 }
 
 async fn ensure_initialized(
@@ -111,8 +109,8 @@ async fn ensure_initialized(
         started.elapsed(),
         &lock_result,
     );
-    let _lock = lock_result
-        .map_err(|source| RuntimeDbInitError::new(spec.label, "lock", path, source))?;
+    let _lock =
+        lock_result.map_err(|source| RuntimeDbInitError::new(spec.label, "lock", path, source))?;
 
     let schema_state = check_database(path, migrator, spec, telemetry_override)
         .await
@@ -139,9 +137,8 @@ async fn ensure_initialized(
         started.elapsed(),
         &connection_result,
     );
-    let mut connection = connection_result.map_err(|source| {
-        RuntimeDbInitError::new(spec.label, "bootstrap", path, source)
-    })?;
+    let mut connection = connection_result
+        .map_err(|source| RuntimeDbInitError::new(spec.label, "bootstrap", path, source))?;
 
     if plan.needs_migration {
         let started = Instant::now();
@@ -188,14 +185,13 @@ async fn ensure_initialized(
         );
         if let Err(source) = migrate_result {
             let _ = connection.close().await;
-            return Err(
-                RuntimeDbInitError::new(spec.label, "migrate", path, source).into(),
-            );
+            return Err(RuntimeDbInitError::new(spec.label, "migrate", path, source).into());
         }
     }
-    connection.close().await.map_err(|source| {
-        RuntimeDbInitError::new(spec.label, "bootstrap", path, source.into())
-    })?;
+    connection
+        .close()
+        .await
+        .map_err(|source| RuntimeDbInitError::new(spec.label, "bootstrap", path, source.into()))?;
 
     match check_database(path, migrator, spec, telemetry_override)
         .await

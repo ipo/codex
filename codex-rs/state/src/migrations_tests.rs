@@ -480,10 +480,7 @@ async fn repair_recency_migration_succeeds_while_another_connection_holds_writer
         .run(&pool)
         .await
         .expect("current migrations should apply");
-    let mut read_connection = pool
-        .acquire()
-        .await
-        .expect("read connection should open");
+    let mut read_connection = pool.acquire().await.expect("read connection should open");
     let options = SqliteConnectOptions::new()
         .filename(&state_path)
         .create_if_missing(false)
