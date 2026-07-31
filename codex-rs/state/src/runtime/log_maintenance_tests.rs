@@ -13,7 +13,6 @@ use crate::DB_MAINTENANCE_DURATION_METRIC;
 use crate::DB_MAINTENANCE_METRIC;
 use crate::DB_MAINTENANCE_WAL_FRAMES_METRIC;
 use crate::DbTelemetry;
-use crate::LOGS_DB_FILENAME;
 use crate::SqliteConfig;
 use crate::migrations::LOGS_MIGRATOR;
 use chrono::Utc;
@@ -52,7 +51,7 @@ async fn create_logs_db() -> (PathBuf, SqliteConnection) {
     tokio::fs::create_dir_all(&codex_home)
         .await
         .expect("create Codex home");
-    let logs_path = codex_home.join(LOGS_DB_FILENAME);
+    let logs_path = sqlite_config(&codex_home).logs_db_path();
     let options = SqliteConnectOptions::new()
         .filename(&logs_path)
         .create_if_missing(true)
@@ -132,7 +131,7 @@ async fn migration_rows(connection: &mut SqliteConnection) -> Vec<(i64, bool, Ve
 async fn maintenance_is_bounded_resumes_after_busy_and_preserves_fresh_rows() {
     let (codex_home, mut connection) = create_logs_db().await;
     let sqlite = sqlite_config(&codex_home);
-    let logs_path = codex_home.join(LOGS_DB_FILENAME);
+    let logs_path = sqlite_config(&codex_home).logs_db_path();
     let now = Utc::now().timestamp();
     let old_ts = now - 11 * 24 * 60 * 60;
     for index in 0..5 {
@@ -230,7 +229,7 @@ async fn maintenance_is_bounded_resumes_after_busy_and_preserves_fresh_rows() {
 async fn maintenance_lock_is_nonblocking_and_stamp_intervals_are_enforced() {
     let (codex_home, connection) = create_logs_db().await;
     let sqlite = sqlite_config(&codex_home);
-    let logs_path = codex_home.join(LOGS_DB_FILENAME);
+    let logs_path = sqlite_config(&codex_home).logs_db_path();
     connection.close().await.expect("close setup connection");
     let lock_path = maintenance_path(logs_path.as_path());
     let lock_file = open_owner_only_file(lock_path.as_path()).expect("open maintenance lock");
@@ -289,7 +288,7 @@ async fn maintenance_lock_is_nonblocking_and_stamp_intervals_are_enforced() {
 async fn active_reader_defers_truncate_then_quiet_run_truncates_without_schema_changes() {
     let (codex_home, mut setup) = create_logs_db().await;
     let sqlite = sqlite_config(&codex_home);
-    let logs_path = codex_home.join(LOGS_DB_FILENAME);
+    let logs_path = sqlite_config(&codex_home).logs_db_path();
     insert_log(&mut setup, Utc::now().timestamp(), "baseline").await;
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
         .execute(&mut setup)
@@ -405,7 +404,7 @@ async fn runtime_startup_does_not_wait_for_maintenance_lock_or_log_writer() {
         .await
         .expect("initialize fixture runtime");
     initial_runtime.close().await;
-    let logs_path = codex_home.join(LOGS_DB_FILENAME);
+    let logs_path = sqlite_config(&codex_home).logs_db_path();
     let lock_file = open_owner_only_file(maintenance_path(logs_path.as_path()).as_path())
         .expect("open maintenance lock");
     fs2::FileExt::lock_exclusive(&lock_file).expect("hold maintenance lock");
@@ -483,7 +482,6 @@ fn tags_to_map(tags: &[(&str, &str)]) -> BTreeMap<String, String> {
 async fn maintenance_records_outcome_rows_and_checkpoint_values() {
     let (codex_home, mut connection) = create_logs_db().await;
     let sqlite = sqlite_config(&codex_home);
-    let logs_path = codex_home.join(LOGS_DB_FILENAME);
     insert_log(
         &mut connection,
         Utc::now().timestamp() - 11 * 24 * 60 * 60,
