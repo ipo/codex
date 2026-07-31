@@ -52,6 +52,33 @@ fn patches_existing_and_adds_inherited_model_without_changing_unrelated_models()
 }
 
 #[test]
+fn explicitly_disables_responses_lite_for_an_enabled_model() {
+    let mut catalog = bundled_models_response().expect("bundled catalog should parse");
+    let parent = catalog.models.first_mut().expect("bundled model");
+    parent.use_responses_lite = true;
+    let parent_slug = parent.slug.clone();
+
+    let applied = ModelCatalogOverlay::from_json(
+        &json!({"models": [{
+            "slug": parent_slug,
+            "use_responses_lite": false
+        }]})
+        .to_string(),
+    )
+    .expect("overlay should parse")
+    .apply(catalog)
+    .expect("overlay should apply");
+
+    assert!(
+        !applied
+            .models
+            .first()
+            .expect("patched model")
+            .use_responses_lite
+    );
+}
+
+#[test]
 fn shallow_replacement_and_explicit_null_are_preserved() {
     let original = bundled_models_response().expect("bundled catalog should parse");
     let parent = original.models.first().expect("bundled model");

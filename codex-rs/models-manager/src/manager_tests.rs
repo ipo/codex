@@ -645,12 +645,14 @@ async fn refresh_available_models_uses_remote_only_catalog_for_chatgpt_auth() {
 
 #[tokio::test]
 async fn catalog_overlay_survives_remote_and_cached_refreshes_and_drives_picker_metadata() {
-    let remote_parent = remote_model("remote-parent", "Remote Parent", /*priority*/ 10);
+    let mut remote_parent = remote_model("remote-parent", "Remote Parent", /*priority*/ 10);
+    remote_parent.use_responses_lite = true;
     let overlay = ModelCatalogOverlay::from_json(
         &json!({"models": [
             {
                 "slug": "remote-parent",
-                "display_name": "Patched Parent"
+                "display_name": "Patched Parent",
+                "use_responses_lite": false
             },
             {
                 "slug": "external/exact-model",
@@ -709,6 +711,10 @@ async fn catalog_overlay_survives_remote_and_cached_refreshes_and_drives_picker_
     );
     assert!(exact.use_responses_lite);
     assert_eq!(exact.tool_mode, Some(ToolMode::CodeMode));
+    let patched_parent = manager
+        .get_model_info("remote-parent", &ModelsManagerConfig::default())
+        .await;
+    assert!(!patched_parent.use_responses_lite);
 
     let cached_manager = OpenAiModelsManager::new_with_overlay(
         codex_home.path().to_path_buf(),

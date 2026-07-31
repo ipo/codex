@@ -477,7 +477,15 @@ async fn responses_lite_compact_request_uses_lite_transport_contract() -> Result
     })
     .await;
 
-    response_mock.single_request();
+    let response_request = response_mock.single_request();
+    assert_eq!(
+        response_request.header(RESPONSES_LITE_HEADER).as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        response_request.body_json().get("parallel_tool_calls"),
+        Some(&Value::Bool(false))
+    );
     let compact_request = compact_mock.single_request();
     assert_eq!(
         compact_request.header(RESPONSES_LITE_HEADER).as_deref(),
@@ -494,6 +502,38 @@ async fn responses_lite_compact_request_uses_lite_transport_contract() -> Result
     assert_eq!(
         compact_body.get("parallel_tool_calls"),
         Some(&Value::Bool(false))
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn normal_responses_uses_model_parallel_tool_call_capability_without_lite_header()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex().with_model_info_override("gpt-5.4", |model_info| {
+        model_info.use_responses_lite = false;
+        model_info.supports_parallel_tool_calls = true;
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("Use normal Responses").await?;
+
+    let request = response_mock.single_request();
+    assert_eq!(request.header(RESPONSES_LITE_HEADER), None);
+    assert_eq!(
+        request.body_json().get("parallel_tool_calls"),
+        Some(&Value::Bool(true))
     );
 
     Ok(())
