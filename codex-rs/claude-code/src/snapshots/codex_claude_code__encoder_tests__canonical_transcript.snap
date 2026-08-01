@@ -1,0 +1,135 @@
+---
+source: claude-code/src/encoder_tests.rs
+expression: request.body.messages
+---
+[
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "text",
+        "text": "inspect these"
+      },
+      {
+        "type": "image",
+        "source": {
+          "type": "base64",
+          "media_type": "image/png",
+          "data": "aGVsbG8="
+        }
+      },
+      {
+        "type": "text",
+        "text": "in order"
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "thinking",
+        "thinking": "think\u0000\nexact",
+        "signature": "sig+/=\u0000"
+      },
+      {
+        "type": "redacted_thinking",
+        "data": "redacted+/=\u0000"
+      },
+      {
+        "type": "text",
+        "text": "Checking both."
+      },
+      {
+        "type": "tool_use",
+        "id": "call-a",
+        "name": "read",
+        "input": {
+          "path": "a"
+        }
+      },
+      {
+        "type": "tool_use",
+        "id": "call-b",
+        "name": "read",
+        "input": {
+          "path": "b"
+        }
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "call-a",
+        "content": [
+          {
+            "type": "text",
+            "text": "first"
+          },
+          {
+            "type": "image",
+            "source": {
+              "type": "base64",
+              "media_type": "image/jpeg",
+              "data": "d29ybGQ="
+            }
+          },
+          {
+            "type": "text",
+            "text": "after image"
+          }
+        ]
+      },
+      {
+        "type": "tool_result",
+        "tool_use_id": "call-b",
+        "content": "failed",
+        "is_error": true
+      }
+    ]
+  },
+  {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "call-c",
+        "name": "read",
+        "input": {
+          "path": "c"
+        }
+      },
+      {
+        "type": "tool_use",
+        "id": "call-d",
+        "name": "read",
+        "input": {
+          "path": "d"
+        }
+      }
+    ]
+  },
+  {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "call-c",
+        "content": "completed"
+      },
+      {
+        "type": "tool_result",
+        "tool_use_id": "call-d",
+        "content": "Tool execution result was not recorded by Codex.",
+        "is_error": true,
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
+    ]
+  }
+]

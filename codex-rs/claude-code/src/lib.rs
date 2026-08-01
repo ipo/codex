@@ -1,9 +1,16 @@
 //! Native Anthropic Messages wire types and opaque thinking replay support.
 
+mod encoder;
+mod history;
+mod history_content;
 mod policy;
 mod replay;
 mod types;
 
+pub use encoder::CanonicalOutputSchema;
+pub use encoder::EncodeError;
+pub use encoder::EncodeRequest;
+pub use encoder::encode_request;
 pub use policy::AssembleError;
 pub use policy::AssembleRequest;
 pub use policy::AssembledRequest;
@@ -43,3 +50,7 @@ mod tests;
 #[cfg(test)]
 #[path = "policy_tests.rs"]
 mod policy_tests;
+
+#[cfg(test)]
+#[path = "encoder_tests.rs"]
+mod encoder_tests;

@@ -13,6 +13,7 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+base64 = { workspace = true }
 codex-protocol = { workspace = true }
 codex-tools = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
