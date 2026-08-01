@@ -107,6 +107,7 @@ async fn models_client_hits_models_endpoint() {
             auto_review_model_override: None,
             tool_mode: None,
             multi_agent_version: None,
+            inference: None,
         }],
     };
 
