@@ -1417,6 +1417,14 @@
       },
       "type": "object"
     },
+    "InferenceDialect": {
+      "description": "Provider-specific semantics layered on top of a wire grammar.",
+      "enum": [
+        "open_ai",
+        "kimi"
+      ],
+      "type": "string"
+    },
     "KeybindingsSpec": {
       "anyOf": [
         {
@@ -1810,8 +1818,61 @@
           ],
           "default": "responses",
           "description": "Which wire protocol this provider expects."
+        },
+        "wire_routes": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ModelProviderWireRoute"
+          },
+          "description": "Additional named routes used by explicit model inference contracts.",
+          "type": "object"
         }
       },
+      "type": "object"
+    },
+    "ModelProviderWireRoute": {
+      "additionalProperties": false,
+      "description": "Transport facts for one named provider route.",
+      "properties": {
+        "base_url": {
+          "type": "string"
+        },
+        "dialect": {
+          "$ref": "#/definitions/InferenceDialect"
+        },
+        "query_params": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "request_max_retries": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "request_path": {
+          "type": "string"
+        },
+        "stream_idle_timeout_ms": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "stream_max_retries": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "wire_api": {
+          "$ref": "#/definitions/WireApi"
+        }
+      },
+      "required": [
+        "base_url",
+        "dialect",
+        "request_path",
+        "wire_api"
+      ],
       "type": "object"
     },
     "MultiAgentV2ConfigToml": {
@@ -4825,16 +4886,12 @@
       "type": "object"
     },
     "WireApi": {
-      "description": "Wire protocol that the provider speaks.",
-      "oneOf": [
-        {
-          "description": "The Responses API exposed by OpenAI at `/v1/responses`.",
-          "enum": [
-            "responses"
-          ],
-          "type": "string"
-        }
-      ]
+      "description": "The request and response grammar used for model inference.",
+      "enum": [
+        "responses",
+        "chat_completions"
+      ],
+      "type": "string"
     },
     "WorkspaceRootsToml": {
       "type": "object"

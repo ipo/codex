@@ -13,6 +13,10 @@ use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::EnvVarError;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::ModelInferenceConfig;
+pub use codex_protocol::model_inference::WireApi;
+use codex_protocol::openai_models::ModelInfo;
 use http::HeaderMap;
 use http::header::HeaderName;
 use http::header::HeaderValue;
@@ -20,7 +24,6 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::fmt;
 use std::time::Duration;
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS: u64 = 300_000;
@@ -47,41 +50,74 @@ pub const AMAZON_BEDROCK_DEFAULT_BASE_URL: &str =
     "https://bedrock-mantle.us-east-1.api.aws/openai/v1";
 const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER: &str = "x-amzn-mantle-client-agent";
 const AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE: &str = "codex";
-const CHAT_WIRE_API_REMOVED_ERROR: &str = "`wire_api = \"chat\"` is no longer supported.\nHow to fix: set `wire_api = \"responses\"` in your provider config.\nMore info: https://github.com/openai/codex/discussions/7782";
 pub const LEGACY_OLLAMA_CHAT_PROVIDER_ID: &str = "ollama-chat";
 pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer supported.\nHow to fix: replace `ollama-chat` with `ollama` in `model_provider`, `oss_provider`, or `--local-provider`.\nMore info: https://github.com/openai/codex/discussions/7782";
 
-/// Wire protocol that the provider speaks.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum WireApi {
-    /// The Responses API exposed by OpenAI at `/v1/responses`.
-    #[default]
-    Responses,
+/// Transport facts for one named provider route.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelProviderWireRoute {
+    pub wire_api: WireApi,
+    pub dialect: InferenceDialect,
+    pub base_url: String,
+    pub request_path: String,
+    pub query_params: Option<HashMap<String, String>>,
+    pub request_max_retries: Option<u64>,
+    pub stream_max_retries: Option<u64>,
+    pub stream_idle_timeout_ms: Option<u64>,
 }
 
-impl fmt::Display for WireApi {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            Self::Responses => "responses",
-        };
-        f.write_str(value)
-    }
+/// Fully resolved transport facts consumed by a typed inference plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWireRoute {
+    pub name: Option<String>,
+    pub wire_api: WireApi,
+    pub dialect: InferenceDialect,
+    pub base_url: Option<String>,
+    pub request_path: String,
+    pub query_params: Option<HashMap<String, String>>,
+    pub request_max_retries: u64,
+    pub stream_max_retries: u64,
+    pub stream_idle_timeout: Duration,
 }
 
-impl<'de> Deserialize<'de> for WireApi {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        match value.as_str() {
-            "responses" => Ok(Self::Responses),
-            "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
-            _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
+/// Exhaustive model-family plan resolved before sampling begins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedInferencePlan {
+    Legacy {
+        wire_model: String,
+        route: ResolvedWireRoute,
+    },
+    OpenAi {
+        wire_model: String,
+        route: ResolvedWireRoute,
+    },
+    Kimi {
+        wire_model: String,
+        route: ResolvedWireRoute,
+    },
+}
+
+impl ResolvedInferencePlan {
+    pub fn route(&self) -> &ResolvedWireRoute {
+        match self {
+            Self::Legacy { route, .. }
+            | Self::OpenAi { route, .. }
+            | Self::Kimi { route, .. } => route,
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InferencePlanError(String);
+
+impl std::fmt::Display for InferencePlanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for InferencePlanError {}
 
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
@@ -109,6 +145,9 @@ pub struct ModelProviderInfo {
     /// Which wire protocol this provider expects.
     #[serde(default)]
     pub wire_api: WireApi,
+    /// Additional named routes used by explicit model inference contracts.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub wire_routes: HashMap<String, ModelProviderWireRoute>,
     /// Optional query parameters to append to the base URL.
     pub query_params: Option<HashMap<String, String>>,
     /// Additional HTTP headers to include in requests to this provider where
@@ -155,6 +194,21 @@ pub struct ModelProviderAwsAuthInfo {
 
 impl ModelProviderInfo {
     pub fn validate(&self) -> std::result::Result<(), String> {
+        for (name, route) in &self.wire_routes {
+            if name.trim().is_empty() {
+                return Err("provider wire route name must not be empty".to_string());
+            }
+            if route.base_url.trim().is_empty() {
+                return Err(format!(
+                    "provider wire route `{name}` base_url must not be empty"
+                ));
+            }
+            if route.request_path.trim().is_empty() {
+                return Err(format!(
+                    "provider wire route `{name}` request_path must not be empty"
+                ));
+            }
+        }
         if self.aws.is_some() {
             if self.supports_websockets {
                 // TODO(celia-oai): Support AWS SigV4 signing for WebSocket
@@ -212,6 +266,125 @@ impl ModelProviderInfo {
                 conflicts.join(", ")
             ))
         }
+    }
+
+    pub fn resolve_inference_plan(
+        &self,
+        model: &ModelInfo,
+    ) -> Result<ResolvedInferencePlan, InferencePlanError> {
+        self.resolve_inference_contract(&model.slug, model.inference.as_ref())
+    }
+
+    fn resolve_inference_contract(
+        &self,
+        model: &str,
+        inference: Option<&ModelInferenceConfig>,
+    ) -> Result<ResolvedInferencePlan, InferencePlanError> {
+        let Some(inference) = inference else {
+            return Ok(ResolvedInferencePlan::Legacy {
+                wire_model: model.to_string(),
+                route: self.resolve_legacy_route(),
+            });
+        };
+        if !inference.route_contract_is_supported() {
+            let (wire_api, dialect, _) = inference.route_contract();
+            let supported = inference
+                .supported_route_contracts()
+                .iter()
+                .map(|(wire_api, dialect)| {
+                    format!("`wire_api = \"{wire_api}\"` with `dialect = \"{dialect}\"`")
+                })
+                .collect::<Vec<_>>()
+                .join(" or ");
+            return Err(InferencePlanError(format!(
+                "model `{model}` declares an incompatible inference contract for family `{}`: \
+`wire_api = \"{wire_api}\"` with `dialect = \"{dialect}\"`; supported: {supported}",
+                inference.family()
+            )));
+        }
+        let route = self.resolve_named_route(model, inference)?;
+        Ok(match inference {
+            ModelInferenceConfig::OpenAi { wire_model, .. } => ResolvedInferencePlan::OpenAi {
+                wire_model: wire_model.clone(),
+                route,
+            },
+            ModelInferenceConfig::Kimi { wire_model, .. } => ResolvedInferencePlan::Kimi {
+                wire_model: wire_model.clone(),
+                route,
+            },
+        })
+    }
+
+    fn resolve_legacy_route(&self) -> ResolvedWireRoute {
+        ResolvedWireRoute {
+            name: None,
+            wire_api: self.wire_api,
+            dialect: InferenceDialect::OpenAi,
+            base_url: self.base_url.clone(),
+            request_path: match self.wire_api {
+                WireApi::Responses => "responses",
+                WireApi::ChatCompletions => "chat/completions",
+            }
+            .to_string(),
+            query_params: self.query_params.clone(),
+            request_max_retries: self.request_max_retries(),
+            stream_max_retries: self.stream_max_retries(),
+            stream_idle_timeout: self.stream_idle_timeout(),
+        }
+    }
+
+    fn resolve_named_route(
+        &self,
+        model: &str,
+        inference: &ModelInferenceConfig,
+    ) -> Result<ResolvedWireRoute, InferencePlanError> {
+        let (expected_wire_api, expected_dialect, name) = inference.route_contract();
+        let route = self.wire_routes.get(name).ok_or_else(|| {
+            InferencePlanError(format!(
+                "model `{}` ({}) requires provider wire route `{name}`; configure \
+`model_providers.<provider>.wire_routes.{name}` with `wire_api = \
+\"{expected_wire_api}\"` and `dialect = \"{expected_dialect}\"`",
+                model,
+                inference.family()
+            ))
+        })?;
+        if route.wire_api != expected_wire_api || route.dialect != expected_dialect {
+            return Err(InferencePlanError(format!(
+                "provider wire route `{name}` is incompatible with model `{}` ({}): expected \
+wire_api `{expected_wire_api}` and dialect `{expected_dialect}`, found wire_api `{}` and \
+dialect `{}`",
+                model,
+                inference.family(),
+                route.wire_api,
+                route.dialect
+            )));
+        }
+        if route.base_url.trim().is_empty() || route.request_path.trim().is_empty() {
+            return Err(InferencePlanError(format!(
+                "provider wire route `{name}` for model `{model}` must define non-empty base_url and request_path"
+            )));
+        }
+        Ok(ResolvedWireRoute {
+            name: Some(name.to_string()),
+            wire_api: route.wire_api,
+            dialect: route.dialect,
+            base_url: Some(route.base_url.clone()),
+            request_path: route.request_path.clone(),
+            query_params: route.query_params.clone(),
+            request_max_retries: route
+                .request_max_retries
+                .unwrap_or_else(|| self.request_max_retries())
+                .min(MAX_REQUEST_MAX_RETRIES),
+            stream_max_retries: route
+                .stream_max_retries
+                .unwrap_or_else(|| self.stream_max_retries())
+                .min(MAX_STREAM_MAX_RETRIES),
+            stream_idle_timeout: Duration::from_millis(
+                route.stream_idle_timeout_ms.unwrap_or_else(|| {
+                    u64::try_from(self.stream_idle_timeout().as_millis()).unwrap_or(u64::MAX)
+                }),
+            ),
+        })
     }
 
     fn build_header_map(&self) -> CodexResult<HeaderMap> {
@@ -339,6 +512,7 @@ impl ModelProviderInfo {
             auth: None,
             aws: None,
             wire_api: WireApi::Responses,
+            wire_routes: HashMap::new(),
             query_params: None,
             http_headers: Some(
                 [("version".to_string(), env!("CARGO_PKG_VERSION").to_string())]
@@ -385,6 +559,7 @@ impl ModelProviderInfo {
                 region: None,
             })),
             wire_api: WireApi::Responses,
+            wire_routes: HashMap::new(),
             query_params: None,
             http_headers: Some(HashMap::from([(
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string(),
@@ -536,6 +711,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         auth: None,
         aws: None,
         wire_api,
+        wire_routes: HashMap::new(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,

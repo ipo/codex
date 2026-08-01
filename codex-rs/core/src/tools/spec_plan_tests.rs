@@ -10,6 +10,9 @@ use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::ModelInferenceConfig;
+use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -1927,4 +1930,28 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     })
     .await;
     unsupported_provider.assert_visible_lacks(&["web_search"]);
+
+    let kimi_model = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            set_web_search_mode(turn, WebSearchMode::Live);
+            turn.model_info.use_responses_lite = false;
+            turn.model_info.input_modalities = vec![InputModality::Image];
+            turn.model_info.inference = Some(ModelInferenceConfig::Kimi {
+                wire_api: WireApi::ChatCompletions,
+                dialect: InferenceDialect::Kimi,
+                route: "kimi_code".to_string(),
+                wire_model: "k3".to_string(),
+            });
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
+                namespace: "image_gen",
+                tool_name: "imagegen",
+            })],
+            ..Default::default()
+        },
+    )
+    .await;
+    kimi_model.assert_visible_lacks(&["web_search", "image_gen"]);
 }

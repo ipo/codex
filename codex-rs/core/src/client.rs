@@ -522,9 +522,9 @@ impl ModelClient {
     pub(crate) fn force_http_fallback(
         &self,
         session_telemetry: &SessionTelemetry,
-        _model_info: &ModelInfo,
+        model_info: &ModelInfo,
     ) -> bool {
-        let websocket_enabled = self.responses_websocket_enabled();
+        let websocket_enabled = self.responses_websocket_enabled(model_info);
         let activated =
             websocket_enabled && !self.state.disable_websockets.swap(true, Ordering::Relaxed);
         if activated {
@@ -935,14 +935,19 @@ impl ModelClient {
     /// Returns whether the Responses-over-WebSocket transport is active for this session.
     ///
     /// WebSocket use is controlled by provider capability and session-scoped fallback state.
-    pub fn responses_websocket_enabled(&self) -> bool {
-        if !self.state.provider.info().supports_websockets
-            || self.state.disable_websockets.load(Ordering::Relaxed)
+    pub fn responses_websocket_enabled(&self, model_info: &ModelInfo) -> bool {
+        if !self.provider_websocket_enabled()
+            || !model_info.supports_responses_capabilities(self.state.provider.info().wire_api)
         {
             return false;
         }
 
         true
+    }
+
+    pub(crate) fn provider_websocket_enabled(&self) -> bool {
+        self.state.provider.info().supports_websockets
+            && !self.state.disable_websockets.load(Ordering::Relaxed)
     }
 
     /// Returns auth + provider configuration resolved from the current session auth state.
@@ -1257,10 +1262,11 @@ impl ModelClientSession {
     /// This performs only connection setup; it never sends prompt payloads.
     pub async fn preconnect_websocket(
         &mut self,
+        model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
         responses_metadata: &CodexResponsesMetadata,
     ) -> std::result::Result<(), ApiError> {
-        if !self.client.responses_websocket_enabled() {
+        if !self.client.responses_websocket_enabled(model_info) {
             return Ok(());
         }
         if self.websocket_session.connection.is_some() {
@@ -1740,7 +1746,7 @@ impl ModelClientSession {
         service_tier: Option<String>,
         responses_metadata: &CodexResponsesMetadata,
     ) -> Result<()> {
-        if !self.client.responses_websocket_enabled() {
+        if !self.client.responses_websocket_enabled(model_info) {
             return Ok(());
         }
         if self.websocket_session.last_request.is_some() {
@@ -1802,10 +1808,28 @@ impl ModelClientSession {
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
-        let wire_api = self.client.state.provider.info().wire_api;
+        let plan = self
+            .client
+            .state
+            .provider
+            .info()
+            .resolve_inference_plan(model_info)
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+        let wire_api = match plan {
+            codex_model_provider_info::ResolvedInferencePlan::Legacy { route, .. } => {
+                route.wire_api
+            }
+            codex_model_provider_info::ResolvedInferencePlan::OpenAi { .. }
+            | codex_model_provider_info::ResolvedInferencePlan::Kimi { .. } => {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "model `{}` declares explicit native inference routing, which is not active in this build",
+                    model_info.slug
+                )));
+            }
+        };
         match wire_api {
             WireApi::Responses => {
-                if self.client.responses_websocket_enabled() {
+                if self.client.responses_websocket_enabled(model_info) {
                     let request_trace = current_span_w3c_trace_context();
                     match self
                         .stream_responses_websocket(
@@ -1840,6 +1864,11 @@ impl ModelClientSession {
                     inference_trace,
                 )
                 .await
+            }
+            WireApi::ChatCompletions => {
+                Err(CodexErr::InvalidRequest(format!(
+                    "legacy provider wire API `{wire_api}` is not supported by the active inference client"
+                )))
             }
         }
     }

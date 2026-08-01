@@ -22,6 +22,7 @@ mod legacy_events;
 pub mod mcp;
 pub mod mcp_approval_meta;
 pub mod memory_citation;
+pub mod model_inference;
 pub mod models;
 pub mod network_policy;
 pub mod num_format;

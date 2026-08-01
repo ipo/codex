@@ -20,6 +20,7 @@ base_url = "http://localhost:11434/v1"
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: Default::default(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -53,6 +54,7 @@ query_params = { api-version = "2025-04-01-preview" }
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: Default::default(),
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".to_string(),
         }),
@@ -90,6 +92,7 @@ supports_standalone_web_search = true
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: Default::default(),
         query_params: None,
         http_headers: Some(maplit::hashmap! {
             "X-Example-Header".to_string() => "example-value".to_string(),
@@ -120,7 +123,162 @@ wire_api = "chat"
         "#;
 
     let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
-    assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
+    assert!(
+        err.to_string()
+            .contains("`wire_api = \"chat\"` is no longer supported")
+    );
+}
+
+#[test]
+fn named_route_toml_and_kimi_plan_resolve_complete_transport_contract() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "Native proxy"
+base_url = "http://127.0.0.1:8080/v1/openai"
+wire_api = "responses"
+
+[wire_routes.kimi_code]
+wire_api = "chat_completions"
+dialect = "kimi"
+base_url = "http://127.0.0.1:8080/v1/kimi"
+request_path = "chat/completions"
+stream_max_retries = 10
+"#,
+    )
+    .expect("provider route should deserialize");
+    let inference = ModelInferenceConfig::Kimi {
+        wire_api: WireApi::ChatCompletions,
+        dialect: InferenceDialect::Kimi,
+        route: "kimi_code".to_string(),
+        wire_model: "k3".to_string(),
+    };
+
+    let plan = provider
+        .resolve_inference_contract("kimi/k3", Some(&inference))
+        .expect("compatible route should resolve");
+
+    assert_eq!(
+        plan,
+        ResolvedInferencePlan::Kimi {
+            wire_model: "k3".to_string(),
+            route: ResolvedWireRoute {
+                name: Some("kimi_code".to_string()),
+                wire_api: WireApi::ChatCompletions,
+                dialect: InferenceDialect::Kimi,
+                base_url: Some("http://127.0.0.1:8080/v1/kimi".to_string()),
+                request_path: "chat/completions".to_string(),
+                query_params: None,
+                request_max_retries: 4,
+                stream_max_retries: 10,
+                stream_idle_timeout: Duration::from_millis(300_000),
+            },
+        }
+    );
+}
+
+#[test]
+fn missing_and_incompatible_routes_are_actionable_before_sampling() {
+    let inference = ModelInferenceConfig::Kimi {
+        wire_api: WireApi::ChatCompletions,
+        dialect: InferenceDialect::Kimi,
+        route: "kimi_code".to_string(),
+        wire_model: "k3".to_string(),
+    };
+    let missing = ModelProviderInfo::default()
+        .resolve_inference_contract("kimi/k3", Some(&inference))
+        .expect_err("missing route should fail");
+    assert_eq!(
+        missing.to_string(),
+        "model `kimi/k3` (kimi) requires provider wire route `kimi_code`; configure `model_providers.<provider>.wire_routes.kimi_code` with `wire_api = \"chat_completions\"` and `dialect = \"kimi\"`"
+    );
+
+    let provider = ModelProviderInfo {
+        wire_routes: HashMap::from([(
+            "kimi_code".to_string(),
+            ModelProviderWireRoute {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::OpenAi,
+                base_url: "http://127.0.0.1:8080/v1/kimi".to_string(),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: None,
+                stream_max_retries: None,
+                stream_idle_timeout_ms: None,
+            },
+        )]),
+        ..ModelProviderInfo::default()
+    };
+    let incompatible = provider
+        .resolve_inference_contract("kimi/k3", Some(&inference))
+        .expect_err("incompatible route should fail");
+    assert_eq!(
+        incompatible.to_string(),
+        "provider wire route `kimi_code` is incompatible with model `kimi/k3` (kimi): expected wire_api `chat_completions` and dialect `kimi`, found wire_api `responses` and dialect `open_ai`"
+    );
+}
+
+#[test]
+fn family_incompatible_profile_is_rejected_even_when_named_route_matches() {
+    let inference = ModelInferenceConfig::Kimi {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::OpenAi,
+        route: "kimi_code".to_string(),
+        wire_model: "k3".to_string(),
+    };
+    let provider = ModelProviderInfo {
+        wire_routes: HashMap::from([(
+            "kimi_code".to_string(),
+            ModelProviderWireRoute {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::OpenAi,
+                base_url: "http://127.0.0.1:8080/v1/kimi".to_string(),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: None,
+                stream_max_retries: None,
+                stream_idle_timeout_ms: None,
+            },
+        )]),
+        ..ModelProviderInfo::default()
+    };
+
+    assert_eq!(
+        provider
+            .resolve_inference_contract("kimi/k3", Some(&inference))
+            .expect_err("family-incompatible profile should fail")
+            .to_string(),
+        "model `kimi/k3` declares an incompatible inference contract for family `kimi`: `wire_api = \"responses\"` with `dialect = \"open_ai\"`; supported: `wire_api = \"chat_completions\"` with `dialect = \"kimi\"`"
+    );
+}
+
+#[test]
+fn metadata_free_model_resolves_legacy_provider_route() {
+    let provider = ModelProviderInfo {
+        base_url: Some("https://example.test/v1".to_string()),
+        wire_api: WireApi::Responses,
+        stream_max_retries: Some(8),
+        ..ModelProviderInfo::default()
+    };
+
+    assert_eq!(
+        provider
+            .resolve_inference_contract("legacy-model", None)
+            .expect("legacy route should resolve"),
+        ResolvedInferencePlan::Legacy {
+            wire_model: "legacy-model".to_string(),
+            route: ResolvedWireRoute {
+                name: None,
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::OpenAi,
+                base_url: Some("https://example.test/v1".to_string()),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: 4,
+                stream_max_retries: 8,
+                stream_idle_timeout: Duration::from_millis(300_000),
+            },
+        }
+    );
 }
 
 #[test]
@@ -172,6 +330,7 @@ fn test_supports_remote_compaction_for_azure_name() {
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: Default::default(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -198,6 +357,7 @@ fn test_supports_remote_compaction_for_non_openai_non_azure_provider() {
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: Default::default(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -304,6 +464,7 @@ fn test_create_amazon_bedrock_provider() {
                 region: None,
             }),
             wire_api: WireApi::Responses,
+            wire_routes: Default::default(),
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>

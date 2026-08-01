@@ -824,6 +824,7 @@ pub(crate) fn construct_model_info_from_candidates(
         let is_exact_match = remote.slug == model;
         ModelInfo {
             slug: model.to_string(),
+            inference: is_exact_match.then(|| remote.inference.clone()).flatten(),
             used_fallback_model_metadata: false,
             history_compatibility_group: if is_exact_match {
                 remote.history_compatibility_group.clone()

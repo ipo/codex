@@ -465,6 +465,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
 
     let remote_model = ModelInfo {
         slug: REMOTE_MODEL_SLUG.to_string(),
+        inference: None,
         aliases: Vec::new(),
         display_name: "Remote Test".to_string(),
         description: Some("A remote model that requires the test shell".to_string()),
@@ -722,6 +723,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
     let remote_base = "Use the remote base instructions only.";
     let remote_model = ModelInfo {
         slug: model.to_string(),
+        inference: None,
         aliases: Vec::new(),
         display_name: "Parallel Remote".to_string(),
         description: Some("A remote model with custom instructions".to_string()),
@@ -1252,6 +1254,7 @@ fn test_remote_model_with_policy(
 ) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
+        inference: None,
         aliases: Vec::new(),
         display_name: format!("{slug} display"),
         description: Some(format!("{slug} description")),

@@ -302,7 +302,11 @@ fn spec_for_model_request(
 fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
     let turn_context = context.turn_context;
     // Responses Lite accepts schemas for client-executed tools, not hosted Responses tools.
-    if turn_context.model_info.use_responses_lite {
+    if turn_context.model_info.use_responses_lite
+        || !turn_context
+            .model_info
+            .supports_responses_capabilities(turn_context.provider.info().wire_api)
+    {
         return Vec::new();
     }
 
@@ -361,6 +365,13 @@ fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn image_generation_available(turn_context: &TurnContext) -> bool {
+    if !turn_context
+        .model_info
+        .supports_responses_capabilities(turn_context.provider.info().wire_api)
+    {
+        return false;
+    }
+
     if !turn_context
         .config
         .features

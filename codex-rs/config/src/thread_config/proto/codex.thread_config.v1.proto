@@ -49,6 +49,19 @@ message ModelProvider {
   bool requires_openai_auth = 16;
   bool supports_websockets = 17;
   bool supports_standalone_web_search = 18;
+  repeated NamedWireRoute wire_routes = 19;
+}
+
+message NamedWireRoute {
+  string name = 1;
+  WireApi wire_api = 2;
+  InferenceDialect dialect = 3;
+  string base_url = 4;
+  string request_path = 5;
+  map<string, string> query_params = 6;
+  optional uint64 request_max_retries = 7;
+  optional uint64 stream_max_retries = 8;
+  optional uint64 stream_idle_timeout_ms = 9;
 }
 
 message StringMap {
@@ -66,4 +79,11 @@ message ModelProviderAuthInfo {
 enum WireApi {
   WIRE_API_UNSPECIFIED = 0;
   WIRE_API_RESPONSES = 1;
+  WIRE_API_CHAT_COMPLETIONS = 3;
+}
+
+enum InferenceDialect {
+  INFERENCE_DIALECT_UNSPECIFIED = 0;
+  INFERENCE_DIALECT_OPEN_AI = 1;
+  INFERENCE_DIALECT_KIMI = 3;
 }
