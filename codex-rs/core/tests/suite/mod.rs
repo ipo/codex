@@ -73,6 +73,7 @@ mod hooks;
 mod hooks_mcp;
 mod image_rollout;
 mod inference_routes;
+mod item_presentation_lifecycle;
 mod items;
 mod json_result;
 mod live_cli;

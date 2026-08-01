@@ -352,7 +352,10 @@ pub fn process_responses_event(
         }
         "response.output_text.delta" => {
             if let Some(delta) = event.delta {
-                return Ok(Some(ResponseEvent::OutputTextDelta(delta)));
+                return Ok(Some(ResponseEvent::OutputTextDelta {
+                    item_id: event.item_id,
+                    delta,
+                }));
             }
         }
         "response.custom_tool_call_input.delta" => {
@@ -369,6 +372,7 @@ pub fn process_responses_event(
         "response.reasoning_summary_text.delta" => {
             if let (Some(delta), Some(summary_index)) = (event.delta, event.summary_index) {
                 return Ok(Some(ResponseEvent::ReasoningSummaryDelta {
+                    item_id: event.item_id,
                     delta,
                     summary_index,
                 }));
@@ -388,6 +392,7 @@ pub fn process_responses_event(
         "response.reasoning_text.delta" => {
             if let (Some(delta), Some(content_index)) = (event.delta, event.content_index) {
                 return Ok(Some(ResponseEvent::ReasoningContentDelta {
+                    item_id: event.item_id,
                     delta,
                     content_index,
                 }));
@@ -493,6 +498,7 @@ pub fn process_responses_event(
         "response.reasoning_summary_part.added" => {
             if let Some(summary_index) = event.summary_index {
                 return Ok(Some(ResponseEvent::ReasoningSummaryPartAdded {
+                    item_id: event.item_id,
                     summary_index,
                 }));
             }
@@ -1532,6 +1538,7 @@ mod tests {
             }),
             json!({
                 "type": "response.output_text.delta",
+                "item_id": "message-1",
                 "delta": "hello",
                 "safety_buffering": {
                     "use_cases": ["cyber"],
@@ -1568,13 +1575,17 @@ mod tests {
                     && buffering.show_buffering_ui
                     && buffering.faster_model.as_deref() == Some("gpt-fast-wire")
         );
-        assert_matches!(&events[2], ResponseEvent::OutputTextDelta(delta) if delta == "hello");
+        assert_matches!(
+            &events[2],
+            ResponseEvent::OutputTextDelta { item_id, delta }
+                if item_id.as_deref() == Some("message-1") && delta == "hello"
+        );
         assert_matches!(
             &events[3],
             ResponseEvent::SafetyBuffering(buffering)
                 if buffering.use_cases == ["cyber"] && buffering.reasons == ["user_risk"]
         );
-        assert_matches!(&events[4], ResponseEvent::OutputTextDelta(delta) if delta == " world");
+        assert_matches!(&events[4], ResponseEvent::OutputTextDelta { delta, .. } if delta == " world");
         assert_matches!(
             &events[5],
             ResponseEvent::SafetyBuffering(buffering)
