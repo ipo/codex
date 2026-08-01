@@ -4,8 +4,10 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ModelProviderWireRoute;
 use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
+use codex_protocol::model_inference::InferenceDialect;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::SessionThreadConfig;
@@ -157,18 +159,12 @@ fn model_provider_from_proto(
         ));
     }
     let id = provider.id;
-    let wire_api = match proto::WireApi::try_from(provider.wire_api) {
-        Ok(proto::WireApi::Responses) => WireApi::Responses,
-        Ok(proto::WireApi::Unspecified) => {
-            return Err(parse_error("remote thread config omitted wire_api"));
-        }
-        Err(_) => {
-            return Err(parse_error(format!(
-                "remote thread config returned unknown wire_api: {}",
-                provider.wire_api
-            )));
-        }
-    };
+    let wire_api = wire_api_from_proto(provider.wire_api)?;
+    let wire_routes = provider
+        .wire_routes
+        .into_iter()
+        .map(named_wire_route_from_proto)
+        .collect::<Result<HashMap<_, _>, _>>()?;
     let info = ModelProviderInfo {
         name: provider.name,
         base_url: provider.base_url,
@@ -181,6 +177,7 @@ fn model_provider_from_proto(
             .transpose()?,
         aws: None,
         wire_api,
+        wire_routes,
         query_params: provider.query_params.map(|map| map.values),
         http_headers: provider.http_headers.map(|map| map.values),
         env_http_headers: provider.env_http_headers.map(|map| map.values),
@@ -209,6 +206,7 @@ fn model_provider_to_proto(
         auth,
         aws: _,
         wire_api,
+        wire_routes,
         query_params,
         http_headers,
         env_http_headers,
@@ -230,6 +228,10 @@ fn model_provider_to_proto(
         experimental_bearer_token,
         auth: auth.map(model_provider_auth_to_proto),
         wire_api: proto_wire_api(wire_api).into(),
+        wire_routes: wire_routes
+            .into_iter()
+            .map(named_wire_route_to_proto)
+            .collect(),
         query_params: query_params.map(proto_string_map),
         http_headers: http_headers.map(proto_string_map),
         env_http_headers: env_http_headers.map(proto_string_map),
@@ -241,6 +243,57 @@ fn model_provider_to_proto(
         supports_websockets,
         supports_standalone_web_search,
     }
+}
+
+fn wire_api_from_proto(value: i32) -> Result<WireApi, ThreadConfigLoadError> {
+    match proto::WireApi::try_from(value) {
+        Ok(proto::WireApi::Responses) => Ok(WireApi::Responses),
+        Ok(proto::WireApi::AnthropicMessages) => Ok(WireApi::AnthropicMessages),
+        Ok(proto::WireApi::ChatCompletions) => Ok(WireApi::ChatCompletions),
+        Ok(proto::WireApi::Unspecified) => {
+            Err(parse_error("remote thread config omitted wire_api"))
+        }
+        Err(_) => Err(parse_error(format!(
+            "remote thread config returned unknown wire_api: {value}"
+        ))),
+    }
+}
+
+fn inference_dialect_from_proto(value: i32) -> Result<InferenceDialect, ThreadConfigLoadError> {
+    match proto::InferenceDialect::try_from(value) {
+        Ok(proto::InferenceDialect::OpenAi) => Ok(InferenceDialect::OpenAi),
+        Ok(proto::InferenceDialect::ClaudeCode) => Ok(InferenceDialect::ClaudeCode),
+        Ok(proto::InferenceDialect::Kimi) => Ok(InferenceDialect::Kimi),
+        Ok(proto::InferenceDialect::Unspecified) => Err(parse_error(
+            "remote thread config omitted inference dialect",
+        )),
+        Err(_) => Err(parse_error(format!(
+            "remote thread config returned unknown inference dialect: {value}"
+        ))),
+    }
+}
+
+fn named_wire_route_from_proto(
+    route: proto::NamedWireRoute,
+) -> Result<(String, ModelProviderWireRoute), ThreadConfigLoadError> {
+    if route.name.is_empty() {
+        return Err(parse_error(
+            "remote thread config returned unnamed wire route",
+        ));
+    }
+    Ok((
+        route.name,
+        ModelProviderWireRoute {
+            wire_api: wire_api_from_proto(route.wire_api)?,
+            dialect: inference_dialect_from_proto(route.dialect)?,
+            base_url: route.base_url,
+            request_path: route.request_path,
+            query_params: (!route.query_params.is_empty()).then_some(route.query_params),
+            request_max_retries: route.request_max_retries,
+            stream_max_retries: route.stream_max_retries,
+            stream_idle_timeout_ms: route.stream_idle_timeout_ms,
+        },
+    ))
 }
 
 fn model_provider_auth_from_proto(
@@ -292,6 +345,34 @@ fn proto_string_map(values: HashMap<String, String>) -> proto::StringMap {
 fn proto_wire_api(wire_api: WireApi) -> proto::WireApi {
     match wire_api {
         WireApi::Responses => proto::WireApi::Responses,
+        WireApi::AnthropicMessages => proto::WireApi::AnthropicMessages,
+        WireApi::ChatCompletions => proto::WireApi::ChatCompletions,
+    }
+}
+
+#[cfg(test)]
+fn proto_inference_dialect(dialect: InferenceDialect) -> proto::InferenceDialect {
+    match dialect {
+        InferenceDialect::OpenAi => proto::InferenceDialect::OpenAi,
+        InferenceDialect::ClaudeCode => proto::InferenceDialect::ClaudeCode,
+        InferenceDialect::Kimi => proto::InferenceDialect::Kimi,
+    }
+}
+
+#[cfg(test)]
+fn named_wire_route_to_proto(
+    (name, route): (String, ModelProviderWireRoute),
+) -> proto::NamedWireRoute {
+    proto::NamedWireRoute {
+        name,
+        wire_api: proto_wire_api(route.wire_api).into(),
+        dialect: proto_inference_dialect(route.dialect).into(),
+        base_url: route.base_url,
+        request_path: route.request_path,
+        query_params: route.query_params.unwrap_or_default(),
+        request_max_retries: route.request_max_retries,
+        stream_max_retries: route.stream_max_retries,
+        stream_idle_timeout_ms: route.stream_idle_timeout_ms,
     }
 }
 
@@ -467,6 +548,20 @@ mod tests {
                                 cwd: workspace_cwd,
                             }),
                             wire_api: proto::WireApi::Responses.into(),
+                            wire_routes: vec![proto::NamedWireRoute {
+                                name: "claude_code".to_string(),
+                                wire_api: proto::WireApi::AnthropicMessages.into(),
+                                dialect: proto::InferenceDialect::ClaudeCode.into(),
+                                base_url: "http://127.0.0.1:8080/v1/claude-code".to_string(),
+                                request_path: "v1/messages".to_string(),
+                                query_params: HashMap::from([(
+                                    "beta".to_string(),
+                                    "true".to_string(),
+                                )]),
+                                request_max_retries: None,
+                                stream_max_retries: Some(10),
+                                stream_idle_timeout_ms: None,
+                            }],
                             query_params: Some(proto::StringMap {
                                 values: HashMap::from([(
                                     "api-version".to_string(),
@@ -537,6 +632,19 @@ mod tests {
                 cwd: workspace_dir(),
             }),
             wire_api: WireApi::Responses,
+            wire_routes: HashMap::from([(
+                "claude_code".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::AnthropicMessages,
+                    dialect: InferenceDialect::ClaudeCode,
+                    base_url: "http://127.0.0.1:8080/v1/claude-code".to_string(),
+                    request_path: "v1/messages".to_string(),
+                    query_params: Some(HashMap::from([("beta".to_string(), "true".to_string())])),
+                    request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            )]),
             query_params: Some(HashMap::from([(
                 "api-version".to_string(),
                 "2026-04-16".to_string(),

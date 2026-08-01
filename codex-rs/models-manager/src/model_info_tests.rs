@@ -254,3 +254,40 @@ fn model_context_window_uses_model_value_without_override() {
 
     assert_eq!(updated, model);
 }
+
+#[test]
+fn fallback_instruction_sources_use_family_neutral_codex_identity() {
+    let expected_opening = "You are Codex, an AI coding agent.";
+    let fallback = model_info_from_slug("unknown-model");
+    let personality_fallback = model_info_from_slug("gpt-5.2-codex");
+
+    for instructions in [
+        fallback.get_model_instructions(/*personality*/ None),
+        personality_fallback.get_model_instructions(/*personality*/ None),
+    ] {
+        assert!(instructions.starts_with(expected_opening));
+        assert!(!instructions.contains("based on GPT"));
+        assert!(!instructions.starts_with("You are GPT"));
+    }
+}
+
+#[test]
+fn bundled_instruction_sources_use_family_neutral_codex_identity() {
+    let expected_opening = "You are Codex, an AI coding agent.";
+    let catalog = crate::bundled_models_response().expect("bundled catalog should parse");
+
+    for model in catalog.models {
+        for instructions in [
+            model.base_instructions.clone(),
+            model.get_model_instructions(/*personality*/ None),
+        ] {
+            assert!(
+                instructions.starts_with(expected_opening),
+                "{} instructions had an unexpected opening",
+                model.slug
+            );
+            assert!(!instructions.contains("based on GPT"));
+            assert!(!instructions.starts_with("You are GPT"));
+        }
+    }
+}

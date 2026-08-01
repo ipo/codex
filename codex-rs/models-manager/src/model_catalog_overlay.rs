@@ -7,6 +7,7 @@ use std::fmt;
 
 const MODEL_INFO_FIELDS: &[&str] = &[
     "slug",
+    "inference",
     "aliases",
     "display_name",
     "description",

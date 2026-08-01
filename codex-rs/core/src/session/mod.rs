@@ -678,6 +678,10 @@ impl Session {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        config
+            .model_provider
+            .resolve_inference_plan(&model_info)
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
         let multi_agent_version = config.multi_agent_version_override().or_else(|| {
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version)
         });

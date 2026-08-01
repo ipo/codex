@@ -58,6 +58,7 @@ fn test_model_info(
 ) -> ModelInfo {
     ModelInfo {
         slug: slug.to_string(),
+        inference: None,
         aliases: Vec::new(),
         display_name: display_name.to_string(),
         description: Some(description.to_string()),

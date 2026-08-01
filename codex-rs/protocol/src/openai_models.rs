@@ -29,6 +29,8 @@ use crate::config_types::ReasoningSummary;
 use crate::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
+use crate::model_inference::ModelInferenceConfig;
+use crate::model_inference::WireApi;
 use crate::protocol::MultiAgentVersion;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
@@ -372,6 +374,9 @@ const fn is_true(value: &bool) -> bool {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]
 pub struct ModelInfo {
     pub slug: String,
+    /// Optional family-specific inference contract. Omission preserves legacy provider routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inference: Option<ModelInferenceConfig>,
     /// Alternate catalog-provided names accepted for model selection.
     #[serde(default)]
     pub aliases: Vec<String>,
@@ -468,6 +473,13 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    pub fn supports_responses_capabilities(&self, legacy_wire_api: WireApi) -> bool {
+        self.inference.as_ref().map_or(
+            legacy_wire_api == WireApi::Responses,
+            ModelInferenceConfig::supports_responses_capabilities,
+        )
+    }
+
     pub fn history_compatibility_key(&self) -> &str {
         self.history_compatibility_group
             .as_deref()
@@ -729,6 +741,7 @@ mod tests {
     fn test_model(spec: Option<ModelMessages>) -> ModelInfo {
         ModelInfo {
             slug: "test-model".to_string(),
+            inference: None,
             aliases: Vec::new(),
             display_name: "Test Model".to_string(),
             description: None,
@@ -1144,6 +1157,7 @@ mod tests {
         .expect("deserialize model info");
 
         assert_eq!(model.availability_nux, None);
+        assert_eq!(model.inference, None);
         assert_eq!(
             model.input_modalities,
             vec![InputModality::Text, InputModality::Image]

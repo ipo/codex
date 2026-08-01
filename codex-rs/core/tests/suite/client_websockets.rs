@@ -24,6 +24,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::model_inference::AnthropicThinkingPolicy;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -404,7 +407,11 @@ async fn responses_websocket_preconnect_does_not_replace_turn_trace_payload() {
     let mut client_session = harness.client.new_session();
     let responses_metadata = websocket_connection_metadata(&harness);
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &responses_metadata)
+        .preconnect_websocket(
+            &harness.model_info,
+            &harness.session_telemetry,
+            &responses_metadata,
+        )
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -441,7 +448,11 @@ async fn responses_websocket_preconnect_reuses_connection() {
     let mut client_session = harness.client.new_session();
     let responses_metadata = websocket_connection_metadata(&harness);
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &responses_metadata)
+        .preconnect_websocket(
+            &harness.model_info,
+            &harness.session_telemetry,
+            &responses_metadata,
+        )
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -460,6 +471,47 @@ async fn responses_websocket_preconnect_reuses_connection() {
     assert_eq!(connection.len(), 1);
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anthropic_model_never_preconnects_responses_websocket() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(Vec::new()).await;
+    let mut harness = websocket_harness(&server).await;
+    let responses_metadata = websocket_connection_metadata(&harness);
+
+    for (wire_api, dialect) in [
+        (WireApi::AnthropicMessages, InferenceDialect::ClaudeCode),
+        (WireApi::Responses, InferenceDialect::OpenAi),
+    ] {
+        harness.model_info.inference = Some(ModelInferenceConfig::Anthropic {
+            wire_api,
+            dialect,
+            route: "claude_code".to_string(),
+            wire_model: "claude-sonnet-5".to_string(),
+            max_output_tokens: 64_000,
+            thinking: AnthropicThinkingPolicy::Adaptive,
+            supports_disabled_thinking: true,
+        });
+        let mut client_session = harness.client.new_session();
+
+        client_session
+            .preconnect_websocket(
+                &harness.model_info,
+                &harness.session_telemetry,
+                &responses_metadata,
+            )
+            .await
+            .expect("Anthropic preconnect should be a no-op");
+
+        assert!(
+            !harness
+                .client
+                .responses_websocket_enabled(&harness.model_info)
+        );
+    }
+    assert!(server.handshakes().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -813,7 +865,11 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
     let mut client_session = harness.client.new_session();
     let preconnect_metadata = websocket_connection_metadata(&harness);
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &preconnect_metadata)
+        .preconnect_websocket(
+            &harness.model_info,
+            &harness.session_telemetry,
+            &preconnect_metadata,
+        )
         .await
         .expect("websocket preconnect failed");
     let prompt = prompt_with_input(vec![message_item("hello")]);
@@ -984,7 +1040,11 @@ async fn responses_websocket_preconnect_runs_when_only_v2_feature_enabled() {
     let mut client_session = harness.client.new_session();
     let responses_metadata = websocket_connection_metadata(&harness);
     client_session
-        .preconnect_websocket(&harness.session_telemetry, &responses_metadata)
+        .preconnect_websocket(
+            &harness.model_info,
+            &harness.session_telemetry,
+            &responses_metadata,
+        )
         .await
         .expect("websocket preconnect failed");
 
@@ -2276,6 +2336,7 @@ fn websocket_provider_with_connect_timeout(
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: Default::default(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,

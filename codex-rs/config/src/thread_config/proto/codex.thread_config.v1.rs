@@ -77,6 +77,30 @@ pub struct ModelProvider {
     pub supports_websockets: bool,
     #[prost(bool, tag = "18")]
     pub supports_standalone_web_search: bool,
+    #[prost(message, repeated, tag = "19")]
+    pub wire_routes: ::prost::alloc::vec::Vec<NamedWireRoute>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NamedWireRoute {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(enumeration = "WireApi", tag = "2")]
+    pub wire_api: i32,
+    #[prost(enumeration = "InferenceDialect", tag = "3")]
+    pub dialect: i32,
+    #[prost(string, tag = "4")]
+    pub base_url: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub request_path: ::prost::alloc::string::String,
+    #[prost(map = "string, string", tag = "6")]
+    pub query_params:
+        ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag = "7")]
+    pub request_max_retries: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "8")]
+    pub stream_max_retries: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "9")]
+    pub stream_idle_timeout_ms: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StringMap {
@@ -102,6 +126,8 @@ pub struct ModelProviderAuthInfo {
 pub enum WireApi {
     Unspecified = 0,
     Responses = 1,
+    AnthropicMessages = 2,
+    ChatCompletions = 3,
 }
 impl WireApi {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -112,6 +138,8 @@ impl WireApi {
         match self {
             Self::Unspecified => "WIRE_API_UNSPECIFIED",
             Self::Responses => "WIRE_API_RESPONSES",
+            Self::AnthropicMessages => "WIRE_API_ANTHROPIC_MESSAGES",
+            Self::ChatCompletions => "WIRE_API_CHAT_COMPLETIONS",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -119,6 +147,40 @@ impl WireApi {
         match value {
             "WIRE_API_UNSPECIFIED" => Some(Self::Unspecified),
             "WIRE_API_RESPONSES" => Some(Self::Responses),
+            "WIRE_API_ANTHROPIC_MESSAGES" => Some(Self::AnthropicMessages),
+            "WIRE_API_CHAT_COMPLETIONS" => Some(Self::ChatCompletions),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum InferenceDialect {
+    Unspecified = 0,
+    OpenAi = 1,
+    ClaudeCode = 2,
+    Kimi = 3,
+}
+impl InferenceDialect {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "INFERENCE_DIALECT_UNSPECIFIED",
+            Self::OpenAi => "INFERENCE_DIALECT_OPEN_AI",
+            Self::ClaudeCode => "INFERENCE_DIALECT_CLAUDE_CODE",
+            Self::Kimi => "INFERENCE_DIALECT_KIMI",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "INFERENCE_DIALECT_UNSPECIFIED" => Some(Self::Unspecified),
+            "INFERENCE_DIALECT_OPEN_AI" => Some(Self::OpenAi),
+            "INFERENCE_DIALECT_CLAUDE_CODE" => Some(Self::ClaudeCode),
+            "INFERENCE_DIALECT_KIMI" => Some(Self::Kimi),
             _ => None,
         }
     }

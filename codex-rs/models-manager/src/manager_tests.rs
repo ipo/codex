@@ -1448,3 +1448,15 @@ fn bundled_models_json_roundtrips() {
         "bundled models.json should contain at least one model"
     );
 }
+
+#[test]
+fn inference_metadata_is_not_inherited_by_model_name_prefixes() {
+    let catalog = bundled_models_response().expect("bundled catalog should parse");
+    let model = construct_model_info_from_candidates(
+        "anthropic/claude-sonnet-5-custom",
+        &catalog.models,
+        &ModelsManagerConfig::default(),
+    );
+
+    assert_eq!(model.inference, None);
+}
