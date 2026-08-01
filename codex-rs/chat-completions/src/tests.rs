@@ -45,6 +45,35 @@ impl DialectHooks for RecordingDialect {
             json!({"visible": replay.visible, "opaque": replay.opaque}),
         )]))
     }
+
+    fn reasoning_delta(
+        &self,
+        context: DialectContext<'_>,
+        _extensions: &Extensions,
+    ) -> Result<Option<String>, DialectError> {
+        self.record(context);
+        Ok(None)
+    }
+
+    #[rustfmt::skip]
+    fn finish_reason(&self, context: DialectContext<'_>, reason: FinishReason) -> Result<codex_api::TerminalOutcome, DialectError> {
+        self.record(context);
+        Ok(match reason {
+            FinishReason::Stop => codex_api::TerminalOutcome::Completed,
+            FinishReason::ToolCalls | FinishReason::FunctionCall => codex_api::TerminalOutcome::ToolsReady,
+            FinishReason::Length | FinishReason::MaxTokens => codex_api::TerminalOutcome::OutputExhausted,
+            FinishReason::ContentFilter => codex_api::TerminalOutcome::Refusal,
+        })
+    }
+
+    fn usage_details(
+        &self,
+        context: DialectContext<'_>,
+        _usage: &ChunkUsage,
+    ) -> Result<UsageDetails, DialectError> {
+        self.record(context);
+        Ok(UsageDetails::default())
+    }
 }
 
 fn item(value: Value) -> ResponseItem {

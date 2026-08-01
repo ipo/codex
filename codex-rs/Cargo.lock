@@ -2292,6 +2292,7 @@ dependencies = [
 name = "codex-chat-completions"
 version = "0.146.0"
 dependencies = [
+ "codex-api",
  "codex-protocol",
  "codex-tools",
  "pretty_assertions",
