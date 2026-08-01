@@ -1,8 +1,14 @@
 //! Native Anthropic Messages wire types and opaque thinking replay support.
 
+mod policy;
 mod replay;
 mod types;
 
+pub use policy::AssembleError;
+pub use policy::AssembleRequest;
+pub use policy::AssembledRequest;
+pub use policy::RequestTransport;
+pub use policy::assemble_request;
 pub use replay::ReplayDecision;
 pub use replay::ReplayError;
 pub use replay::ThinkingReplayBlock;
@@ -33,3 +39,7 @@ pub use types::Usage;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "policy_tests.rs"]
+mod policy_tests;

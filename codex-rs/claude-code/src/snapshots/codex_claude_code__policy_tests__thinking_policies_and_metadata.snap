@@ -1,0 +1,644 @@
+---
+source: claude-code/src/policy_tests.rs
+expression: requests
+---
+[
+  [
+    "haiku_enabled",
+    {
+      "transport": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "query": {
+          "beta": "true"
+        },
+        "headers": {
+          "User-Agent": "codex-cli/0.146.0",
+          "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+          "anthropic-version": "2023-06-01",
+          "x-app": "codex",
+          "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+        }
+      },
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 32000,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are Codex, an AI coding agent.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Follow the user.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 31999,
+          "display": "omitted"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  [
+    "haiku_disabled",
+    {
+      "transport": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "query": {
+          "beta": "true"
+        },
+        "headers": {
+          "User-Agent": "codex-cli/0.146.0",
+          "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+          "anthropic-version": "2023-06-01",
+          "x-app": "codex",
+          "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+        }
+      },
+      "body": {
+        "model": "claude-haiku-4-5-20251001",
+        "max_tokens": 32000,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are Codex, an AI coding agent.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Follow the user.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "disabled"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  [
+    "adaptive_minimal",
+    {
+      "transport": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "query": {
+          "beta": "true"
+        },
+        "headers": {
+          "User-Agent": "codex-cli/0.146.0",
+          "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+          "anthropic-version": "2023-06-01",
+          "x-app": "codex",
+          "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+        }
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "max_tokens": 64000,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are Codex, an AI coding agent.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Follow the user.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "adaptive",
+          "display": "omitted"
+        },
+        "output_config": {
+          "effort": "low"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  [
+    "adaptive_low",
+    {
+      "transport": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "query": {
+          "beta": "true"
+        },
+        "headers": {
+          "User-Agent": "codex-cli/0.146.0",
+          "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+          "anthropic-version": "2023-06-01",
+          "x-app": "codex",
+          "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+        }
+      },
+      "body": {
+        "model": "claude-opus-4-8",
+        "max_tokens": 64000,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are Codex, an AI coding agent.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Follow the user.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "adaptive",
+          "display": "omitted"
+        },
+        "output_config": {
+          "effort": "low"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  [
+    "adaptive_medium",
+    {
+      "transport": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "query": {
+          "beta": "true"
+        },
+        "headers": {
+          "User-Agent": "codex-cli/0.146.0",
+          "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+          "anthropic-version": "2023-06-01",
+          "x-app": "codex",
+          "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+        }
+      },
+      "body": {
+        "model": "claude-opus-5",
+        "max_tokens": 64000,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are Codex, an AI coding agent.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Follow the user.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "adaptive",
+          "display": "omitted"
+        },
+        "output_config": {
+          "effort": "medium"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  [
+    "adaptive_high",
+    {
+      "transport": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "query": {
+          "beta": "true"
+        },
+        "headers": {
+          "User-Agent": "codex-cli/0.146.0",
+          "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+          "anthropic-version": "2023-06-01",
+          "x-app": "codex",
+          "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+        }
+      },
+      "body": {
+        "model": "claude-fable-5",
+        "max_tokens": 64000,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are Codex, an AI coding agent.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Follow the user.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "adaptive",
+          "display": "omitted"
+        },
+        "output_config": {
+          "effort": "high"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  [
+    "adaptive_xhigh",
+    {
+      "transport": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "query": {
+          "beta": "true"
+        },
+        "headers": {
+          "User-Agent": "codex-cli/0.146.0",
+          "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+          "anthropic-version": "2023-06-01",
+          "x-app": "codex",
+          "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+        }
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "max_tokens": 64000,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are Codex, an AI coding agent.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Follow the user.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "adaptive",
+          "display": "omitted"
+        },
+        "output_config": {
+          "effort": "xhigh"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  [
+    "adaptive_max",
+    {
+      "transport": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "query": {
+          "beta": "true"
+        },
+        "headers": {
+          "User-Agent": "codex-cli/0.146.0",
+          "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+          "anthropic-version": "2023-06-01",
+          "x-app": "codex",
+          "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+        }
+      },
+      "body": {
+        "model": "claude-opus-5",
+        "max_tokens": 64000,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are Codex, an AI coding agent.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Follow the user.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "adaptive",
+          "display": "omitted"
+        },
+        "output_config": {
+          "effort": "max"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  [
+    "adaptive_disabled",
+    {
+      "transport": {
+        "method": "POST",
+        "path": "/v1/messages",
+        "query": {
+          "beta": "true"
+        },
+        "headers": {
+          "User-Agent": "codex-cli/0.146.0",
+          "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+          "anthropic-version": "2023-06-01",
+          "x-app": "codex",
+          "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+        }
+      },
+      "body": {
+        "model": "claude-sonnet-5",
+        "max_tokens": 64000,
+        "stream": true,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are Codex, an AI coding agent.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          },
+          {
+            "type": "text",
+            "text": "Follow the user.",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "hello",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ],
+        "thinking": {
+          "type": "disabled"
+        },
+        "context_management": {
+          "edits": [
+            {
+              "type": "clear_thinking_20251015",
+              "keep": "all"
+            }
+          ]
+        }
+      }
+    }
+  ]
+]

@@ -1,0 +1,149 @@
+---
+source: claude-code/src/policy_tests.rs
+expression: request
+---
+{
+  "transport": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "query": {
+      "beta": "true"
+    },
+    "headers": {
+      "User-Agent": "codex-cli/0.146.0",
+      "anthropic-beta": "oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,claude-code-20250219,extended-cache-ttl-2025-04-11",
+      "anthropic-version": "2023-06-01",
+      "x-app": "codex",
+      "x-claude-code-session-id": "be0be928-3354-5656-a778-823cfe32886f"
+    }
+  },
+  "body": {
+    "model": "claude-sonnet-5",
+    "max_tokens": 64000,
+    "stream": true,
+    "system": [
+      {
+        "type": "text",
+        "text": "first",
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      },
+      {
+        "type": "text",
+        "text": "second",
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "initial user message"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "call-1",
+            "name": "read",
+            "input": {
+              "path": "a"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call-1",
+            "content": "contents"
+          },
+          {
+            "type": "text",
+            "text": "continue",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "1h"
+            }
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "trailing assistant content"
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "name": "read",
+        "description": "Run read",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "File path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "name": "write",
+        "description": "Run write",
+        "input_schema": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "description": "File path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "cache_control": {
+          "type": "ephemeral",
+          "ttl": "1h"
+        }
+      }
+    ],
+    "thinking": {
+      "type": "adaptive",
+      "display": "omitted"
+    },
+    "output_config": {
+      "effort": "high"
+    },
+    "context_management": {
+      "edits": [
+        {
+          "type": "clear_thinking_20251015",
+          "keep": "all"
+        }
+      ]
+    }
+  }
+}
