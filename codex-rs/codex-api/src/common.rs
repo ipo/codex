@@ -94,13 +94,19 @@ pub enum ResponseEvent {
         token_usage: Option<TokenUsage>,
         terminal_outcome: TerminalOutcome,
     },
-    OutputTextDelta(String),
+    OutputTextDelta {
+        /// Target item when supplied by the provider. `None` preserves legacy sequential streams.
+        item_id: Option<String>,
+        delta: String,
+    },
     ToolCallInputDelta {
         item_id: String,
         call_id: Option<String>,
         delta: String,
     },
     ReasoningSummaryDelta {
+        /// Target item when supplied by the provider. `None` preserves legacy sequential streams.
+        item_id: Option<String>,
         delta: String,
         summary_index: i64,
     },
@@ -110,10 +116,14 @@ pub enum ResponseEvent {
         summary_index: i64,
     },
     ReasoningContentDelta {
+        /// Target item when supplied by the provider. `None` preserves legacy sequential streams.
+        item_id: Option<String>,
         delta: String,
         content_index: i64,
     },
     ReasoningSummaryPartAdded {
+        /// Target item when supplied by the provider. `None` preserves legacy sequential streams.
+        item_id: Option<String>,
         summary_index: i64,
     },
     RateLimits(RateLimitSnapshot),

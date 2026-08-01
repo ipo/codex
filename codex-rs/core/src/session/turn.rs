@@ -41,6 +41,8 @@ use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::presentation_lifecycle::PresentationItem;
+use crate::session::presentation_lifecycle::PresentationLifecycle;
 use crate::session::sampling_attempt::CommittedAttempt;
 use crate::session::sampling_attempt::SamplingAttempt;
 use crate::session::session::Session;
@@ -2104,11 +2106,11 @@ async fn try_run_sampling_request(
     let mut sampling_attempt = SamplingAttempt::default();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut active_item: Option<TurnItem> = None;
-    let mut active_tool_argument_diff_consumer: Option<(
+    let mut presentation_lifecycle = PresentationLifecycle::default();
+    let mut tool_argument_diff_consumers: HashMap<
         String,
-        Box<dyn ToolArgumentDiffConsumer>,
-    )> = None;
+        (String, Box<dyn ToolArgumentDiffConsumer>),
+    > = HashMap::new();
     let mut should_emit_turn_diff = false;
     let mut should_emit_token_count = false;
     let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
@@ -2117,7 +2119,6 @@ async fn try_run_sampling_request(
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let defer_streamed_turn_items_for_contributors =
         !sess.services.extensions.turn_item_contributors().is_empty();
-    let mut active_item_is_streaming_to_client = false;
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -2165,19 +2166,32 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(mut item) => {
-                assign_missing_streamed_response_item_id(&mut item, active_item.as_ref());
-                if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
+                let provider_item_id = item.id().map(ToString::to_string);
+                let tool_call_id = match &item {
+                    ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
+                    _ => None,
+                };
+                assign_missing_streamed_response_item_id(
+                    &mut item,
+                    presentation_lifecycle.legacy_active_item(),
+                );
+                let item_id = item.id().map(ToString::to_string);
+                if let Some((_, mut consumer)) = provider_item_id
+                    .as_deref()
+                    .and_then(|item_id| tool_argument_diff_consumers.remove(item_id))
+                    .or_else(|| {
+                        tool_call_id
+                            .as_deref()
+                            .and_then(|call_id| tool_argument_diff_consumers.remove(call_id))
+                    })
                     && let Ok(Some(event)) = consumer.finish()
                 {
                     sess.send_event(&turn_context, event).await;
                 }
-                let previously_active_item = active_item.take();
-                let previously_streamed_item = if active_item_is_streaming_to_client {
-                    previously_active_item
-                } else {
-                    None
-                };
-                active_item_is_streaming_to_client = false;
+                let previously_streamed_item = presentation_lifecycle
+                    .take(item_id.as_deref())
+                    .filter(|item| item.streamed_to_client)
+                    .map(|item| item.turn_item);
                 if let Some(previous) = previously_streamed_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
                 {
@@ -2216,6 +2230,7 @@ async fn try_run_sampling_request(
                 sampling_attempt.push(item, previously_streamed_item, preempt_for_mailbox_mail);
             }
             ResponseEvent::OutputItemAdded(mut item) => {
+                let provider_item_id = item.id().map(ToString::to_string);
                 assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
                 if let ResponseItem::CustomToolCall {
                     call_id,
@@ -2225,11 +2240,11 @@ async fn try_run_sampling_request(
                 } = &item
                 {
                     let tool_name = ToolName::new(namespace.clone(), name.as_str());
-                    active_tool_argument_diff_consumer = tool_runtime
-                        .create_diff_consumer(&tool_name)
-                        .map(|consumer| (call_id.clone(), consumer));
-                } else if matches!(&item, ResponseItem::FunctionCall { .. }) {
-                    active_tool_argument_diff_consumer = None;
+                    if let Some(consumer) = tool_runtime.create_diff_consumer(&tool_name) {
+                        let consumer_key = provider_item_id.unwrap_or_else(|| call_id.clone());
+                        tool_argument_diff_consumers
+                            .insert(consumer_key, (call_id.clone(), consumer));
+                    }
                 }
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
@@ -2263,7 +2278,11 @@ async fn try_run_sampling_request(
                         seeded_parsed = plan_mode.then_some(seeded);
                         seeded_item_id = Some(item_id);
                     }
-                    if stream_item_to_client {
+                    let inserted = presentation_lifecycle.insert(PresentationItem {
+                        turn_item: turn_item.clone(),
+                        streamed_to_client: stream_item_to_client,
+                    });
+                    if stream_item_to_client && inserted {
                         if let Some(state) = plan_mode_state.as_mut()
                             && matches!(turn_item, TurnItem::AgentMessage(_))
                         {
@@ -2289,8 +2308,6 @@ async fn try_run_sampling_request(
                             .await;
                         }
                     }
-                    active_item = Some(turn_item);
-                    active_item_is_streaming_to_client = stream_item_to_client;
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
@@ -2405,15 +2422,15 @@ async fn try_run_sampling_request(
                     last_agent_message,
                 });
             }
-            ResponseEvent::OutputTextDelta(delta) => {
+            ResponseEvent::OutputTextDelta { item_id, delta } => {
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if let Some(active) = presentation_lifecycle.get(item_id.as_deref()) {
+                    if !active.streamed_to_client {
                         continue;
                     }
-                    let item_id = active.id();
-                    if matches!(active, TurnItem::AgentMessage(_)) {
+                    let item_id = active.turn_item.id();
+                    if matches!(&active.turn_item, TurnItem::AgentMessage(_)) {
                         let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
                         emit_streamed_assistant_text_delta(
                             &sess,
@@ -2438,11 +2455,12 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ToolCallInputDelta {
-                item_id: _,
+                item_id,
                 call_id,
                 delta,
             } => {
-                let Some((active_call_id, consumer)) = active_tool_argument_diff_consumer.as_mut()
+                let Some((active_call_id, consumer)) =
+                    tool_argument_diff_consumers.get_mut(&item_id)
                 else {
                     continue;
                 };
@@ -2456,20 +2474,21 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ReasoningSummaryDelta {
+                item_id,
                 delta,
                 summary_index,
             } => {
                 if uses_sequential_cutoff_reasoning_summaries {
                     continue;
                 }
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if let Some(active) = presentation_lifecycle.get(item_id.as_deref()) {
+                    if !active.streamed_to_client {
                         continue;
                     }
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id: active.turn_item.id(),
                         delta,
                         summary_index,
                     };
@@ -2479,17 +2498,20 @@ async fn try_run_sampling_request(
                     error_or_panic("ReasoningSummaryDelta without active item".to_string());
                 }
             }
-            ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
+            ResponseEvent::ReasoningSummaryPartAdded {
+                item_id,
+                summary_index,
+            } => {
                 if uses_sequential_cutoff_reasoning_summaries {
                     continue;
                 }
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if let Some(active) = presentation_lifecycle.get(item_id.as_deref()) {
+                    if !active.streamed_to_client {
                         continue;
                     }
                     let event =
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
-                            item_id: active.id(),
+                            item_id: active.turn_item.id(),
                             summary_index,
                         });
                     sess.send_event(&turn_context, event).await;
@@ -2505,10 +2527,10 @@ async fn try_run_sampling_request(
                 if !uses_sequential_cutoff_reasoning_summaries {
                     continue;
                 }
-                let Some(active) = active_item.as_ref() else {
+                let Some(active) = presentation_lifecycle.get(Some(&item_id)) else {
                     continue;
                 };
-                if !active_item_is_streaming_to_client || active.id() != item_id {
+                if !active.streamed_to_client {
                     continue;
                 }
                 if summary_index > 0 {
@@ -2532,17 +2554,18 @@ async fn try_run_sampling_request(
                     .await;
             }
             ResponseEvent::ReasoningContentDelta {
+                item_id,
                 delta,
                 content_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
-                    if !active_item_is_streaming_to_client {
+                if let Some(active) = presentation_lifecycle.get(item_id.as_deref()) {
+                    if !active.streamed_to_client {
                         continue;
                     }
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
-                        item_id: active.id(),
+                        item_id: active.turn_item.id(),
                         delta,
                         content_index,
                     };
