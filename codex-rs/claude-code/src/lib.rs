@@ -6,6 +6,7 @@ mod history_content;
 mod policy;
 mod replay;
 mod stream;
+mod transport;
 mod types;
 
 pub use encoder::CanonicalOutputSchema;
@@ -25,8 +26,12 @@ pub use replay::encode_thinking_replay;
 pub use stream::DecodeError;
 pub use stream::DecodedBlock;
 pub use stream::DecodedStream;
+pub use stream::IncrementalDecoder;
 pub use stream::PresentationDelta;
 pub use stream::decode_stream;
+pub use transport::ClaudeHttpAdapter;
+pub use transport::ClaudeResponseStream;
+pub use transport::NativeStreamError;
 pub use types::CacheControl;
 pub use types::CacheCreationUsage;
 pub use types::CacheTtl;
@@ -64,3 +69,7 @@ mod encoder_tests;
 #[cfg(test)]
 #[path = "stream_tests.rs"]
 mod stream_tests;
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod transport_tests;

@@ -22,6 +22,8 @@ pub enum DecodeError {
     UnknownStopReason(String),
     #[error("tool block {index} contained invalid JSON: {input}")]
     InvalidToolJson { index: usize, input: String },
+    #[error("failed to encode native Claude thinking replay: {0}")]
+    Replay(String),
     #[error("native Claude stream ended before {expected}")]
     PrematureEof { expected: String },
 }

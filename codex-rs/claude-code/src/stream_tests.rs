@@ -94,13 +94,13 @@ fn reconstructs_ordered_interleaved_blocks_and_usage() {
         token_usage: TokenUsage { input_tokens:150, cached_input_tokens:30, cache_write_input_tokens:20, output_tokens:40, reasoning_output_tokens:11, total_tokens:190 },
     });
     assert_eq!(presentation, vec![
-        PresentationDelta::ToolInput { index:3, delta:"{\"x\":".into() },
+        PresentationDelta::ToolInput { index:3, id:"call-a".into(), name:"alpha".into(), delta:"{\"x\":".into() },
         PresentationDelta::Thinking { index:0, delta:"consider ".into() },
-        PresentationDelta::ToolInput { index:4, delta:"{\"y\":".into() },
+        PresentationDelta::ToolInput { index:4, id:"call-b".into(), name:"beta".into(), delta:"{\"y\":".into() },
         PresentationDelta::Text { index:2, delta:"hello ".into() },
-        PresentationDelta::ToolInput { index:3, delta:"1}".into() },
+        PresentationDelta::ToolInput { index:3, id:"call-a".into(), name:"alpha".into(), delta:"1}".into() },
         PresentationDelta::Thinking { index:0, delta:"carefully".into() },
-        PresentationDelta::ToolInput { index:4, delta:"2}".into() },
+        PresentationDelta::ToolInput { index:4, id:"call-b".into(), name:"beta".into(), delta:"2}".into() },
         PresentationDelta::Text { index:2, delta:"world".into() },
     ]);
 }

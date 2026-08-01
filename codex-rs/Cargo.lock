@@ -2327,14 +2327,20 @@ name = "codex-claude-code"
 version = "0.146.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "codex-api",
+ "codex-client",
  "codex-protocol",
  "codex-tools",
+ "futures",
+ "http 1.4.0",
  "insta",
  "pretty_assertions",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
  "uuid",
 ]
 
