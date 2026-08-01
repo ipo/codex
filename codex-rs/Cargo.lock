@@ -2314,6 +2314,7 @@ name = "codex-claude-code"
 version = "0.146.0"
 dependencies = [
  "base64 0.22.1",
+ "codex-api",
  "codex-protocol",
  "codex-tools",
  "insta",

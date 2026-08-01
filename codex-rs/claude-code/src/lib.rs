@@ -5,6 +5,7 @@ mod history;
 mod history_content;
 mod policy;
 mod replay;
+mod stream;
 mod types;
 
 pub use encoder::CanonicalOutputSchema;
@@ -21,6 +22,11 @@ pub use replay::ReplayError;
 pub use replay::ThinkingReplayBlock;
 pub use replay::decode_thinking_replay;
 pub use replay::encode_thinking_replay;
+pub use stream::DecodeError;
+pub use stream::DecodedBlock;
+pub use stream::DecodedStream;
+pub use stream::PresentationDelta;
+pub use stream::decode_stream;
 pub use types::CacheControl;
 pub use types::CacheCreationUsage;
 pub use types::CacheTtl;
@@ -54,3 +60,7 @@ mod policy_tests;
 #[cfg(test)]
 #[path = "encoder_tests.rs"]
 mod encoder_tests;
+
+#[cfg(test)]
+#[path = "stream_tests.rs"]
+mod stream_tests;

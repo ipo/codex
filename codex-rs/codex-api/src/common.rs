@@ -122,6 +122,21 @@ pub enum ResponseEvent {
     ModelsEtag(String),
 }
 
+/// Exhaustive provider-neutral disposition of a successfully decoded model attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalOutcome {
+    /// The model completed normally and its pending output can be committed.
+    Completed,
+    /// Complete tool calls can be committed and then executed.
+    ToolsReady,
+    /// Pending output can be committed before automatically continuing sampling.
+    Continue,
+    /// The current turn ended because its output allowance was exhausted.
+    OutputExhausted,
+    /// The provider refused the request or stopped for a safety reason.
+    Refusal,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct SafetyBuffering {
     pub use_cases: Vec<String>,
