@@ -185,9 +185,8 @@ async fn record_stage1_output_usage_for_memory_citation(
     true
 }
 
-/// Handle a completed output item from the model stream, recording it and
-/// queuing any tool execution futures. This records items immediately so
-/// history and rollout stay in sync even if the turn is later cancelled.
+/// Commit a completed output item after the sampling attempt reaches a valid terminal.
+/// This records the item and queues any tool execution future.
 pub(crate) type InFlightFuture<'f> =
     Pin<Box<dyn Future<Output = Result<ResponseInputItem>> + Send + 'f>>;
 
@@ -293,7 +292,7 @@ pub(crate) async fn handle_output_item_done(
     let plan_mode = ctx.turn_context.mode == ModeKind::Plan;
 
     match ToolRouter::build_tool_call(item.clone()) {
-        // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
+        // The model emitted a tool call; log it, persist it, and queue execution.
         Ok(Some(call)) => {
             ctx.sess
                 .input_queue

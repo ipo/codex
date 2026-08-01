@@ -3720,7 +3720,7 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Result<()> {
+async fn incomplete_response_emits_nonretryable_content_filter_error() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
     let server = MockServer::start().await;
 
@@ -3769,7 +3769,7 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
             error_event,
             EventMsg::Error(ref err)
                 if err.message
-                    == "stream disconnected before completion: Incomplete response returned, reason: content_filter"
+                    == "model refused to complete the turn for safety reasons"
         ),
         "expected incomplete content filter error; got {error_event:?}"
     );

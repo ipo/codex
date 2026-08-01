@@ -18,6 +18,7 @@ use crate::test_support::responses_metadata as test_responses_metadata;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
+use codex_api::TerminalOutcome;
 use codex_api::TransportError;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -629,7 +630,7 @@ async fn response_stream_records_last_model_feedback_ids() {
         Ok(ResponseEvent::Completed {
             response_id: "resp-123".to_string(),
             token_usage: None,
-            end_turn: Some(true),
+            terminal_outcome: TerminalOutcome::Completed,
         }),
     ]);
     let (mut stream, _) = super::map_response_events(

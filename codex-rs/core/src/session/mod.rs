@@ -219,6 +219,7 @@ pub(crate) mod multi_agents;
 mod review;
 mod rollout_budget;
 mod rollout_reconstruction;
+mod sampling_attempt;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 pub(crate) mod step_context;

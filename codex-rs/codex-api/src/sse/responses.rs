@@ -2,6 +2,7 @@ use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
 use crate::common::SafetyBuffering;
 use crate::common::SafetyBufferingTreatment;
+use crate::common::TerminalOutcome;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::safety_buffering::treatment_from_headers;
@@ -117,6 +118,19 @@ struct ResponseCompleted {
     usage: Option<ResponseCompletedUsage>,
     #[serde(default)]
     end_turn: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseIncomplete {
+    id: String,
+    #[serde(default)]
+    usage: Option<ResponseCompletedUsage>,
+    incomplete_details: ResponseIncompleteDetails,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseIncompleteDetails {
+    reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -421,15 +435,30 @@ pub fn process_responses_event(
             )));
         }
         "response.incomplete" => {
-            let reason = event.response.as_ref().and_then(|response| {
-                response
-                    .get("incomplete_details")
-                    .and_then(|details| details.get("reason"))
-                    .and_then(Value::as_str)
-            });
-            let reason = reason.unwrap_or("unknown");
-            let message = format!("Incomplete response returned, reason: {reason}");
-            return Err(ResponsesEventError::Api(ApiError::Stream(message)));
+            let Some(resp_val) = event.response else {
+                return Err(ResponsesEventError::Api(ApiError::Stream(
+                    "response.incomplete missing response".into(),
+                )));
+            };
+            let resp = serde_json::from_value::<ResponseIncomplete>(resp_val).map_err(|err| {
+                ResponsesEventError::Api(ApiError::Stream(format!(
+                    "failed to parse response.incomplete: {err}"
+                )))
+            })?;
+            let terminal_outcome = match resp.incomplete_details.reason.as_str() {
+                "max_output_tokens" | "max_tokens" => TerminalOutcome::OutputExhausted,
+                "content_filter" | "refusal" | "safety" => TerminalOutcome::Refusal,
+                reason => {
+                    return Err(ResponsesEventError::Api(ApiError::Stream(format!(
+                        "unknown response.incomplete reason: {reason}"
+                    ))));
+                }
+            };
+            return Ok(Some(ResponseEvent::Completed {
+                response_id: resp.id,
+                token_usage: resp.usage.map(Into::into),
+                terminal_outcome,
+            }));
         }
         "response.completed" => {
             if let Some(resp_val) = event.response {
@@ -438,7 +467,11 @@ pub fn process_responses_event(
                         return Ok(Some(ResponseEvent::Completed {
                             response_id: resp.id,
                             token_usage: resp.usage.map(Into::into),
-                            end_turn: resp.end_turn,
+                            terminal_outcome: if resp.end_turn == Some(false) {
+                                TerminalOutcome::Continue
+                            } else {
+                                TerminalOutcome::Completed
+                            },
                         }));
                     }
                     Err(err) => {
@@ -497,7 +530,6 @@ async fn process_sse_with_treatment(
     safety_buffering_treatment: SafetyBufferingTreatment,
 ) {
     let mut stream = stream.eventsource();
-    let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
 
     loop {
@@ -514,10 +546,11 @@ async fn process_sse_with_treatment(
                 return;
             }
             Ok(None) => {
-                let error = response_error.unwrap_or(ApiError::Stream(
-                    "stream closed before response.completed".into(),
-                ));
-                let _ = tx_event.send(Err(error)).await;
+                let _ = tx_event
+                    .send(Err(ApiError::Stream(
+                        "stream closed before response.completed".into(),
+                    )))
+                    .await;
                 return;
             }
             Err(_) => {
@@ -590,7 +623,8 @@ async fn process_sse_with_treatment(
             }
             Ok(None) => {}
             Err(error) => {
-                response_error = Some(error.into_api_error());
+                let _ = tx_event.send(Err(error.into_api_error())).await;
+                return;
             }
         };
     }
@@ -796,11 +830,11 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
-                end_turn,
+                terminal_outcome,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
-                assert!(end_turn.is_none());
+                assert_eq!(*terminal_outcome, TerminalOutcome::Completed);
             }
             other => panic!("unexpected third event: {other:?}"),
         }
@@ -990,14 +1024,71 @@ mod tests {
             Ok(ResponseEvent::Completed {
                 response_id,
                 token_usage,
-                end_turn,
+                terminal_outcome,
             }) => {
                 assert_eq!(response_id, "resp1");
                 assert!(token_usage.is_none());
-                assert!(end_turn.is_none());
+                assert_eq!(*terminal_outcome, TerminalOutcome::Completed);
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn maps_incomplete_reasons_to_terminal_outcomes() {
+        for (reason, expected) in [
+            ("max_output_tokens", TerminalOutcome::OutputExhausted),
+            ("max_tokens", TerminalOutcome::OutputExhausted),
+            ("content_filter", TerminalOutcome::Refusal),
+            ("refusal", TerminalOutcome::Refusal),
+            ("safety", TerminalOutcome::Refusal),
+        ] {
+            let events = run_sse(vec![
+                json!({
+                    "type": "response.incomplete",
+                    "response": {
+                        "id": format!("response-{reason}"),
+                        "incomplete_details": { "reason": reason }
+                    }
+                }),
+                json!({
+                    "type": "response.completed",
+                    "response": { "id": "conflicting-later-terminal" }
+                }),
+            ])
+            .await;
+            assert_eq!(events.len(), 1);
+            assert_matches!(
+                &events[0],
+                ResponseEvent::Completed { terminal_outcome, .. }
+                    if *terminal_outcome == expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_incomplete_reason() {
+        let event = json!({
+            "type": "response.incomplete",
+            "response": {
+                "id": "unknown-incomplete",
+                "incomplete_details": { "reason": "future_reason" }
+            }
+        });
+        let completed = json!({
+            "type": "response.completed",
+            "response": { "id": "must-not-rehabilitate" }
+        });
+        let body = format!(
+            "event: response.incomplete\ndata: {event}\n\nevent: response.completed\ndata: {completed}\n\n"
+        );
+        let events = collect_events(&[body.as_bytes()]).await;
+        assert_eq!(events.len(), 1);
+        assert_matches!(
+            &events[0],
+            Err(ApiError::Stream(message))
+                if message == "unknown response.incomplete reason: future_reason"
+        );
     }
 
     #[tokio::test]
@@ -1318,7 +1409,7 @@ mod tests {
             ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
-                end_turn: None,
+                terminal_outcome: TerminalOutcome::Completed,
             } if response_id == "resp-1"
         );
     }
@@ -1355,7 +1446,7 @@ mod tests {
             ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
-                end_turn: None,
+                terminal_outcome: TerminalOutcome::Completed,
             } if response_id == "resp-1"
         );
     }
@@ -1390,7 +1481,7 @@ mod tests {
             ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
-                end_turn: None,
+                terminal_outcome: TerminalOutcome::Completed,
             } if response_id == "resp-1"
         );
     }
@@ -1425,7 +1516,7 @@ mod tests {
             ResponseEvent::Completed {
                 response_id,
                 token_usage: None,
-                end_turn: None,
+                terminal_outcome: TerminalOutcome::Completed,
             } if response_id == "resp-1"
         );
     }

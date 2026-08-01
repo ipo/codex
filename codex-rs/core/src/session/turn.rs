@@ -41,6 +41,8 @@ use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
+use crate::session::sampling_attempt::CommittedAttempt;
+use crate::session::sampling_attempt::SamplingAttempt;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::session::turn_context::TurnContext;
@@ -1994,6 +1996,57 @@ fn assign_missing_streamed_response_item_id(
     Session::assign_missing_response_item_id(item);
 }
 
+async fn commit_sampling_attempt(
+    mut output_ctx: HandleOutputCtx,
+    committed: CommittedAttempt,
+    plan_mode_state: &mut Option<PlanModeStreamState>,
+    last_agent_message: &mut Option<String>,
+    needs_follow_up: &mut bool,
+    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+) -> CodexResult<()> {
+    *needs_follow_up |= committed.needs_follow_up;
+    for pending in committed.pending_items {
+        if let Some(state) = plan_mode_state.as_mut()
+            && handle_assistant_item_done_in_plan_mode(
+                output_ctx.sess.as_ref(),
+                output_ctx.turn_context.as_ref(),
+                output_ctx.turn_store.as_ref(),
+                &pending.item,
+                state,
+                pending.previously_streamed_item.as_ref(),
+                last_agent_message,
+            )
+            .await
+        {
+            continue;
+        }
+
+        let output = handle_output_item_done(
+            &mut output_ctx,
+            pending.item,
+            pending.previously_streamed_item,
+        )
+        .await?;
+        if let Some(tool_future) = output.tool_future {
+            in_flight.push_back(tool_future);
+        }
+        if let Some(agent_message) = output.last_agent_message {
+            *last_agent_message = Some(agent_message);
+        }
+        *needs_follow_up |= output.needs_follow_up;
+    }
+    if committed.preempt_for_mailbox_mail
+        && output_ctx
+            .sess
+            .input_queue
+            .has_pending_mailbox_items()
+            .await
+    {
+        *needs_follow_up = true;
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -2048,6 +2101,7 @@ async fn try_run_sampling_request(
         .await??;
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
+    let mut sampling_attempt = SamplingAttempt::default();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -2137,29 +2191,6 @@ async fn try_run_sampling_request(
                     )
                     .await;
                 }
-                if let Some(state) = plan_mode_state.as_mut()
-                    && handle_assistant_item_done_in_plan_mode(
-                        &sess,
-                        &turn_context,
-                        turn_store.as_ref(),
-                        &item,
-                        state,
-                        previously_streamed_item.as_ref(),
-                        &mut last_agent_message,
-                    )
-                    .await
-                {
-                    continue;
-                }
-
-                let mut ctx = HandleOutputCtx {
-                    sess: sess.clone(),
-                    turn_context: turn_context.clone(),
-                    turn_store: Arc::clone(&turn_store),
-                    tool_runtime: tool_runtime.clone(),
-                    cancellation_token: cancellation_token.child_token(),
-                };
-
                 let preempt_for_mailbox_mail = match &item {
                     ResponseItem::Message { role, phase, .. } => {
                         role == "assistant" && matches!(phase, Some(MessagePhase::Commentary))
@@ -2182,28 +2213,7 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
-                let output_result =
-                    match handle_output_item_done(&mut ctx, item, previously_streamed_item)
-                        .instrument(handle_responses)
-                        .await
-                    {
-                        Ok(output_result) => output_result,
-                        Err(err) => break Err(err),
-                    };
-                if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
-                }
-                if let Some(agent_message) = output_result.last_agent_message {
-                    last_agent_message = Some(agent_message);
-                }
-                needs_follow_up |= output_result.needs_follow_up;
-                // todo: remove before stabilizing multi-agent v2
-                if preempt_for_mailbox_mail && sess.input_queue.has_pending_mailbox_items().await {
-                    break Ok(SamplingRequestResult {
-                        needs_follow_up: true,
-                        last_agent_message,
-                    });
-                }
+                sampling_attempt.push(item, previously_streamed_item, preempt_for_mailbox_mail);
             }
             ResponseEvent::OutputItemAdded(mut item) => {
                 assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
@@ -2341,7 +2351,7 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id,
                 token_usage,
-                end_turn,
+                terminal_outcome,
             } => {
                 flush_assistant_text_segments_all(
                     &sess,
@@ -2350,6 +2360,30 @@ async fn try_run_sampling_request(
                     &mut assistant_message_stream_parsers,
                 )
                 .await;
+                let committed = match sampling_attempt.finish(terminal_outcome) {
+                    Ok(committed) => committed,
+                    Err(err) => break Err(err),
+                };
+                let output_ctx = HandleOutputCtx {
+                    sess: sess.clone(),
+                    turn_context: turn_context.clone(),
+                    turn_store: Arc::clone(&turn_store),
+                    tool_runtime: tool_runtime.clone(),
+                    cancellation_token: cancellation_token.child_token(),
+                };
+                if let Err(err) = commit_sampling_attempt(
+                    output_ctx,
+                    committed,
+                    &mut plan_mode_state,
+                    &mut last_agent_message,
+                    &mut needs_follow_up,
+                    &mut in_flight,
+                )
+                .instrument(handle_responses)
+                .await
+                {
+                    break Err(err);
+                }
                 sess.send_event(
                     &turn_context,
                     EventMsg::RawResponseCompleted(RawResponseCompletedEvent {
@@ -2365,9 +2399,6 @@ async fn try_run_sampling_request(
                 should_emit_turn_diff = true;
                 if let Err(err) = budget_result {
                     break Err(err);
-                }
-                if let Some(false) = end_turn {
-                    needs_follow_up = true;
                 }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
@@ -2533,12 +2564,14 @@ async fn try_run_sampling_request(
     )
     .await;
 
-    let tool_blocking_timing_guard = if in_flight.is_empty() {
+    let tool_blocking_timing_guard = if in_flight.is_empty() || outcome.is_err() {
         None
     } else {
         Some(turn_context.turn_timing_state.begin_tool_blocking())
     };
-    drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    if outcome.is_ok() {
+        drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    }
     drop(tool_blocking_timing_guard);
 
     if should_emit_token_count {
