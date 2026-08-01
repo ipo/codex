@@ -2031,7 +2031,7 @@ where
                 Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
-                    end_turn,
+                    terminal_outcome,
                 }) => {
                     feedback_tags!(last_model_response_id = &response_id);
                     if let Some(usage) = &token_usage {
@@ -2053,7 +2053,7 @@ where
                         .send(Ok(ResponseEvent::Completed {
                             response_id,
                             token_usage,
-                            end_turn,
+                            terminal_outcome,
                         }))
                         .await
                         .is_err()

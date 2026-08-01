@@ -28,6 +28,8 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
+#[cfg(test)]
+use codex_api::TerminalOutcome;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
@@ -839,7 +841,7 @@ mod tests {
                     reasoning_output_tokens: 5,
                     total_tokens: 123_498,
                 }),
-                end_turn: Some(true),
+                terminal_outcome: TerminalOutcome::Completed,
             }),
         ]);
 
