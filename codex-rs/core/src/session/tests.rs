@@ -6008,6 +6008,75 @@ async fn resumed_subagent_session_restores_persisted_session_id() {
 }
 
 #[tokio::test]
+async fn forked_root_session_restores_persisted_session_id() {
+    let source_thread_id = ThreadId::new();
+    let source_session_id = SessionId::from(source_thread_id);
+    let (session, rx_event) = make_session_with_history_source_and_agent_control_and_rx(
+        InitialHistory::Forked(vec![RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: source_session_id,
+                id: source_thread_id,
+                ..SessionMeta::default()
+            },
+            git: None,
+        })]),
+        SessionSource::Exec,
+        AgentControl::default(),
+    )
+    .await
+    .expect("fork should succeed");
+
+    assert_ne!(session.thread_id(), source_thread_id);
+    assert_eq!(session.session_id(), source_session_id);
+
+    let event = rx_event.recv().await.expect("session configured event");
+    let EventMsg::SessionConfigured(event) = event.msg else {
+        panic!("expected session configured event");
+    };
+    assert_eq!(event.session_id, source_session_id);
+    assert_eq!(event.thread_id, session.thread_id());
+}
+
+#[tokio::test]
+async fn forked_legacy_subagent_session_uses_inherited_control_session_id() {
+    let parent_thread_id = ThreadId::new();
+    let legacy_subagent_thread_id = ThreadId::new();
+    let inherited_session_id = SessionId::from(ThreadId::new());
+    let session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+        parent_thread_id,
+        depth: 1,
+        agent_path: None,
+        agent_nickname: None,
+        agent_role: None,
+    });
+    let agent_control = AgentControl::default()
+        .with_session_id(inherited_session_id, /*max_threads*/ usize::MAX);
+    let (session, rx_event) = make_session_with_history_source_and_agent_control_and_rx(
+        InitialHistory::Forked(vec![RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                session_id: SessionId::from(legacy_subagent_thread_id),
+                id: legacy_subagent_thread_id,
+                source: session_source.clone(),
+                ..SessionMeta::default()
+            },
+            git: None,
+        })]),
+        session_source,
+        agent_control,
+    )
+    .await
+    .expect("legacy subagent fork should succeed");
+
+    assert_eq!(session.session_id(), inherited_session_id);
+
+    let event = rx_event.recv().await.expect("session configured event");
+    let EventMsg::SessionConfigured(event) = event.msg else {
+        panic!("expected session configured event");
+    };
+    assert_eq!(event.session_id, inherited_session_id);
+}
+
+#[tokio::test]
 async fn notify_request_permissions_response_ignores_unmatched_call_id() {
     let (session, _turn_context) = make_session_and_context().await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());

@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
+use codex_core::ForkSnapshot;
 use codex_core::StartThreadOptions;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
@@ -314,6 +315,61 @@ async fn native_session_lineage_is_exact_through_recovery_resume_and_subagent() 
         0,
         "Claude must not prewarm, attempt, or fall back to Responses WebSockets"
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_fork_preserves_claude_native_session_header() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    mount_native(
+        &server,
+        vec![
+            native_response(native_text("root", "root complete", "end_turn")),
+            native_response(native_text("branch", "branch complete", "end_turn")),
+            native_response(native_text("distinct", "distinct complete", "end_turn")),
+        ],
+    )
+    .await;
+
+    let root = native_builder(&server).build_with_auto_env(&server).await?;
+    root.submit_turn("root turn").await?;
+    let root_session_id = root.session_configured.session_id;
+    let root_thread_id = root.session_configured.thread_id;
+    let home = root.home.clone();
+    let rollout_path = root.codex.rollout_path().expect("root rollout path");
+    root.codex.shutdown_and_wait().await?;
+
+    let resumed = native_builder(&server)
+        .resume_with_auto_env(&server, home, rollout_path.clone())
+        .await?;
+    assert_eq!(resumed.session_configured.thread_id, root_thread_id);
+    assert_eq!(resumed.session_configured.session_id, root_session_id);
+
+    let branch = resumed
+        .thread_manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            resumed.config.clone(),
+            rollout_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    assert_ne!(branch.thread_id, root_thread_id);
+    assert_eq!(branch.session_configured.session_id, root_session_id);
+    submit(&branch.thread, "branch turn").await?;
+
+    let distinct = native_builder(&server).build_with_auto_env(&server).await?;
+    assert_ne!(distinct.session_configured.session_id, root_session_id);
+    distinct.submit_turn("distinct root turn").await?;
+
+    let requests = server.received_requests().await.expect("native requests");
+    assert_eq!(requests.len(), 3);
+    let root_native_session = session_id(&requests[0]);
+    uuid::Uuid::parse_str(root_native_session)?;
+    assert_eq!(session_id(&requests[1]), root_native_session);
+    assert_ne!(session_id(&requests[2]), root_native_session);
     Ok(())
 }
 

@@ -1417,6 +1417,38 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         .await
         .expect("fork from rollout path");
     assert_ne!(forked.thread_id, resumed.thread_id);
+    assert_ne!(
+        forked.session_configured.session_id, resumed_from_path.session_configured.session_id,
+        "fork history without SessionMeta keeps the fresh-session fallback"
+    );
+
+    let resumed_control = &resumed_from_path.thread.session.services.agent_control;
+    let forked_control = &forked.thread.session.services.agent_control;
+    resumed_control.register_session_root(
+        resumed_from_path.thread_id,
+        /*current_parent_thread_id*/ None,
+    );
+    forked_control.register_session_root(forked.thread_id, /*current_parent_thread_id*/ None);
+    assert!(
+        resumed_control
+            .get_agent_metadata(resumed_from_path.thread_id)
+            .is_some()
+    );
+    assert!(
+        forked_control
+            .get_agent_metadata(forked.thread_id)
+            .is_some()
+    );
+    assert!(
+        resumed_control
+            .get_agent_metadata(forked.thread_id)
+            .is_none()
+    );
+    assert!(
+        forked_control
+            .get_agent_metadata(resumed_from_path.thread_id)
+            .is_none()
+    );
 
     let calls = in_memory_store.calls().await;
     assert_eq!(calls.read_thread_by_rollout_path, 2);
