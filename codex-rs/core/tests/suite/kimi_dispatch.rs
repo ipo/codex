@@ -162,6 +162,17 @@ async fn completion(test: &TestCodex) -> Result<()> {
     .await
 }
 
+async fn failed_turn_completed(test: &TestCodex) -> Result<()> {
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnComplete(event) => Some(match &event.error {
+            Some(_) => Ok(()),
+            None => Err(anyhow::anyhow!("failed turn completed successfully")),
+        }),
+        _ => None,
+    })
+    .await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn managed_profiles_post_complete_native_requests() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -428,6 +439,7 @@ async fn terminal_gate_and_discarding_outcomes_do_not_commit_or_continue() -> Re
         assert!(error.to_string().contains(expected));
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
         if finish_reason == "length" {
+            failed_turn_completed(&test).await?;
             submit(&test, "after exhaustion", None).await?;
             completion(&test).await?;
             let requests = server.received_requests().await.expect("requests");
@@ -578,6 +590,7 @@ async fn nonretryable_failures_and_overflow_preserve_stable_history() -> Result<
     {
         submit(&test, prompt, None).await?;
         completion(&test).await.expect_err("nonretryable failure");
+        failed_turn_completed(&test).await?;
         assert_eq!(
             server.received_requests().await.expect("requests").len(),
             index + 1
@@ -596,6 +609,92 @@ async fn nonretryable_failures_and_overflow_preserve_stable_history() -> Result<
     let retry: Value = requests[7].body_json()?;
     assert!(retry.to_string().contains("short stable summary"));
     assert!(!retry.to_string().contains("provider summary"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn missing_and_null_finish_do_not_retry_or_poison_the_thread() -> Result<()> {
+    for (name, finish_reason) in [("missing", None), ("null", Some(Value::Null))] {
+        let server = responses::start_mock_server().await;
+        let mut failure = json!({
+            "id": format!("{name}-finish"),
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": format!("{name} partial output"),
+                    "reasoning_content": format!("{name} partial reasoning"),
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": format!("{name}-call"),
+                        "type": "function",
+                        "function": {
+                            "name": "exec_command",
+                            "arguments": format!("{{\"cmd\":\"printf {name}-strict-tool-result\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}}")
+                        }
+                    }]
+                }
+            }]
+        });
+        if let Some(finish_reason) = finish_reason {
+            failure["choices"][0]["finish_reason"] = finish_reason;
+        }
+        mount_native(
+            &server,
+            vec![
+                format!("data: {failure}\n\ndata: [DONE]\n\n"),
+                text_terminal("later", "valid later response", "stop"),
+            ],
+        )
+        .await;
+        let test = native_retry_limit(native_builder(&server, "kimi/k3"), 3)
+            .build_with_auto_env(&server)
+            .await?;
+
+        submit(&test, &format!("{name} strict failure"), None).await?;
+        let error = completion(&test).await.expect_err("strict finish failure");
+        assert!(error.to_string().contains("finish reason"));
+        wait_for_event_match(&test.codex, |event| match event {
+            EventMsg::ExecCommandBegin(event) => Some(Err(anyhow::anyhow!(
+                "strict failure executed {}",
+                event.call_id
+            ))),
+            EventMsg::TurnComplete(event) => Some(match &event.error {
+                Some(error) if error.message.contains("finish reason") => Ok(()),
+                Some(error) => Err(anyhow::anyhow!(error.message.clone())),
+                None => Err(anyhow::anyhow!("strict failure completed successfully")),
+            }),
+            _ => None,
+        })
+        .await?;
+        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+
+        submit(&test, "later stable turn", None).await?;
+        completion(&test).await?;
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 2);
+        let later: Value = requests[1].body_json()?;
+        assert_eq!(
+            later["messages"],
+            json!([
+                {"role": "system", "content": "Kimi system"},
+                {"role": "user", "content": format!("{name} strict failure")},
+                {"role": "user", "content": "later stable turn"},
+            ])
+        );
+        let later_text = later.to_string();
+        for leaked in [
+            format!("{name} partial output"),
+            format!("{name} partial reasoning"),
+            format!("{name}-call"),
+            format!("printf {name}-strict-tool-result"),
+            format!("{name}-strict-tool-result"),
+        ] {
+            assert!(
+                !later_text.contains(&leaked),
+                "later history leaked {leaked}"
+            );
+        }
+    }
     Ok(())
 }
 

@@ -8,6 +8,7 @@ use codex_api::HttpTransport;
 use codex_api::Provider;
 use codex_api::ResponseEvent;
 use codex_api::RetryConfig;
+use codex_chat_completions::DecodeError;
 use codex_client::Request;
 use codex_client::Response;
 use codex_client::StreamResponse;
@@ -262,6 +263,26 @@ async fn terminal_and_transport_failures_remain_typed() {
     assert!(
         matches!(stream.next().await, Some(Err(KimiStreamError::Transport(message))) if message.contains("closed"))
     );
+}
+
+#[tokio::test]
+async fn missing_and_null_finish_after_done_are_nonretryable_decode_errors() {
+    let missing_finish = "data: {\"id\":\"chat-61\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\ndata: [DONE]\n\n";
+    let null_finish = "data: {\"id\":\"chat-61\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n";
+
+    let missing = stream_result(missing_finish).await;
+    assert!(matches!(
+        missing.last(),
+        Some(Err(KimiStreamError::Decode(
+            DecodeError::MissingFinishReason
+        )))
+    ));
+
+    let null = stream_result(null_finish).await;
+    assert!(matches!(
+        null.last(),
+        Some(Err(KimiStreamError::Decode(DecodeError::NullFinishReason)))
+    ));
 }
 
 #[tokio::test]

@@ -139,6 +139,7 @@ impl<T: HttpTransport> KimiHttpAdapter<T> {
                 }
             });
             let mut bytes = response.bytes;
+            let mut reached_done = false;
             loop {
                 let next = tokio::select! {
                     _ = cancellation.cancelled() => {
@@ -154,10 +155,13 @@ impl<T: HttpTransport> KimiHttpAdapter<T> {
                     }
                     Ok(Some(Ok(chunk))) => {
                         if let Err(error) = decoder.feed(&chunk) {
-                            let _ = tx.send(Err(classify_decode_error(error)));
+                            let _ = tx.send(Err(classify_decode_error(
+                                error, /*reached_done*/ false,
+                            )));
                             return;
                         }
                         if decoder.is_complete() {
+                            reached_done = true;
                             break;
                         }
                     }
@@ -173,7 +177,7 @@ impl<T: HttpTransport> KimiHttpAdapter<T> {
                     Err(KimiStreamError::ThinkingOnlyStop)
                 }
                 Ok(decoded) => canonical_events(dialect.as_ref(), decoded, &mut presentation),
-                Err(error) => Err(classify_decode_error(error)),
+                Err(error) => Err(classify_decode_error(error, reached_done)),
             };
             match result {
                 Ok(events) => {
@@ -201,15 +205,18 @@ fn is_thinking_only_stop(decoded: &DecodedStream) -> bool {
         })
 }
 
-fn classify_decode_error(error: DecodeError) -> KimiStreamError {
+fn classify_decode_error(error: DecodeError, reached_done: bool) -> KimiStreamError {
     match error {
         error @ (DecodeError::EmptyStream
         | DecodeError::InvalidUtf8
         | DecodeError::MalformedFraming(_)
         | DecodeError::MalformedChunk(_)
-        | DecodeError::MissingFinishReason
-        | DecodeError::NullFinishReason
         | DecodeError::PrematureEof { .. }) => KimiStreamError::RetryableStream(error.to_string()),
+        error @ (DecodeError::MissingFinishReason | DecodeError::NullFinishReason)
+            if !reached_done =>
+        {
+            KimiStreamError::RetryableStream(error.to_string())
+        }
         DecodeError::InvalidTransition(message)
             if message == "successful terminal had no content" =>
         {
