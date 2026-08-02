@@ -213,6 +213,11 @@ pub struct StartThreadOptions {
     pub supports_openai_form_elicitation: bool,
 }
 
+enum AgentControlSource {
+    Fresh,
+    Inherited(AgentControl),
+}
+
 impl StartThreadOptions {
     pub fn new(config: Config) -> Self {
         Self {
@@ -771,13 +776,19 @@ impl ThreadManager {
     }
 
     pub async fn start_thread(&self, options: StartThreadOptions) -> CodexResult<NewThread> {
-        Box::pin(self.start_thread_inner(options, /*forked_from_thread_id*/ None)).await
+        Box::pin(self.start_thread_inner(
+            options,
+            /*forked_from_thread_id*/ None,
+            AgentControlSource::Fresh,
+        ))
+        .await
     }
 
     async fn start_thread_inner(
         &self,
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
+        agent_control_source: AgentControlSource,
     ) -> CodexResult<NewThread> {
         let environments = options.environments.unwrap_or_else(|| {
             default_thread_environment_selections(
@@ -786,7 +797,10 @@ impl ThreadManager {
                 &options.config.workspace_roots,
             )
         });
-        let agent_control = self.agent_control_for_config(&options.config);
+        let agent_control = match agent_control_source {
+            AgentControlSource::Fresh => self.agent_control_for_config(&options.config),
+            AgentControlSource::Inherited(agent_control) => agent_control,
+        };
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
             .get_resumed_session_sources()
@@ -826,6 +840,7 @@ impl ThreadManager {
         mut options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
         let fork_source = self.get_thread(forked_from_thread_id).await?;
+        let agent_control = fork_source.session.services.agent_control.clone();
         // Persist queued rollout updates before reading the fork snapshot.
         fork_source.ensure_rollout_materialized().await;
         fork_source.flush_rollout().await?;
@@ -851,8 +866,12 @@ impl ThreadManager {
                 inherited_multi_agent_version,
             ),
         );
-        self.start_thread_inner(options, Some(forked_from_thread_id))
-            .await
+        self.start_thread_inner(
+            options,
+            Some(forked_from_thread_id),
+            AgentControlSource::Inherited(agent_control),
+        )
+        .await
     }
 
     pub async fn resume_thread_from_rollout(
