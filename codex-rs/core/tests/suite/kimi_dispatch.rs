@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_core::ForkSnapshot;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderWireRoute;
 use codex_model_provider_info::WireApi;
@@ -16,6 +17,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
@@ -160,6 +162,32 @@ async fn completion(test: &TestCodex) -> Result<()> {
         _ => None,
     })
     .await
+}
+
+async fn submit_thread_and_complete(thread: &codex_core::CodexThread, prompt: &str) -> Result<()> {
+    thread
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    loop {
+        match wait_for_event(thread, |_| true).await {
+            EventMsg::Error(error) => return Err(anyhow::anyhow!(error.message)),
+            EventMsg::TurnComplete(event) => {
+                return event
+                    .error
+                    .map_or_else(|| Ok(()), |error| Err(anyhow::anyhow!(error.message)));
+            }
+            _ => {}
+        }
+    }
 }
 
 async fn failed_turn_completed(test: &TestCodex) -> Result<()> {
@@ -414,6 +442,80 @@ async fn parallel_tools_continue_with_stable_native_identity() -> Result<()> {
             .iter()
             .all(|request| request.headers["x-test-route"] == "kimi-native")
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_fork_preserves_resumable_session_and_kimi_prompt_cache_key() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    mount_native(
+        &server,
+        vec![
+            text_terminal("root", "root complete", "stop"),
+            text_terminal("branch", "branch complete", "stop"),
+            text_terminal("distinct", "distinct complete", "stop"),
+        ],
+    )
+    .await;
+
+    let root = native_builder(&server, "kimi/k3")
+        .build_with_auto_env(&server)
+        .await?;
+    submit_thread_and_complete(&root.codex, "root turn").await?;
+    let root_session_id = root.session_configured.session_id;
+    let root_thread_id = root.session_configured.thread_id;
+    let home = root.home.clone();
+    let rollout_path = root.codex.rollout_path().expect("root rollout path");
+    root.codex.shutdown_and_wait().await?;
+
+    let resumed = native_builder(&server, "kimi/k3")
+        .resume_with_auto_env(&server, home, rollout_path.clone())
+        .await?;
+    assert_eq!(resumed.session_configured.thread_id, root_thread_id);
+    assert_eq!(resumed.session_configured.session_id, root_session_id);
+
+    let branch = resumed
+        .thread_manager
+        .fork_thread(
+            ForkSnapshot::Interrupted,
+            resumed.config.clone(),
+            rollout_path,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+        )
+        .await?;
+    assert_ne!(branch.thread_id, root_thread_id);
+    assert_eq!(branch.session_configured.session_id, root_session_id);
+    submit_thread_and_complete(&branch.thread, "branch turn").await?;
+
+    let distinct = native_builder(&server, "kimi/k3")
+        .build_with_auto_env(&server)
+        .await?;
+    assert_ne!(distinct.session_configured.session_id, root_session_id);
+    submit_thread_and_complete(&distinct.codex, "distinct root turn").await?;
+
+    let requests = server.received_requests().await.expect("native requests");
+    assert_eq!(requests.len(), 3);
+    let bodies = requests
+        .iter()
+        .map(Request::body_json::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(requests.iter().all(|request| {
+        request.url.path() == "/v1/kimi/chat/completions"
+            && request.headers["x-test-route"] == "kimi-native"
+    }));
+    assert!(bodies.iter().all(|body| body["model"] == "k3"));
+    assert_eq!(
+        bodies[0]["prompt_cache_key"],
+        Value::String(root_session_id.to_string())
+    );
+    assert_eq!(bodies[1]["prompt_cache_key"], bodies[0]["prompt_cache_key"]);
+    assert_eq!(
+        bodies[2]["prompt_cache_key"],
+        Value::String(distinct.session_configured.session_id.to_string())
+    );
+    assert_ne!(bodies[2]["prompt_cache_key"], bodies[0]["prompt_cache_key"]);
     Ok(())
 }
 

@@ -555,21 +555,25 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
-        let resumed_session_id = match &initial_history {
-            InitialHistory::Resumed(resumed) => {
-                resumed.history.iter().find_map(|item| match item {
-                    RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.session_id),
-                    _ => None,
-                })
-            }
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
+        let persisted_session_meta = match &initial_history {
+            InitialHistory::Resumed(resumed) => resumed.history.as_slice(),
+            InitialHistory::Forked(items) => items.as_slice(),
+            InitialHistory::New | InitialHistory::Cleared => &[],
         };
-        // Legacy subagent rollouts synthesize session_id from their own thread id.
-        let resumed_session_id = resumed_session_id.filter(|session_id| {
-            !session_configuration.session_source.is_non_root_agent()
-                || *session_id != SessionId::from(thread_id)
+        let persisted_session_meta = persisted_session_meta.iter().find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) => {
+                Some((meta_line.meta.session_id, meta_line.meta.id))
+            }
+            _ => None,
         });
-        let session_id = resumed_session_id.unwrap_or_else(|| {
+        // Legacy subagent rollouts synthesize session_id from their own thread id.
+        let restored_session_id = persisted_session_meta
+            .filter(|(session_id, persisted_thread_id)| {
+                !session_configuration.session_source.is_non_root_agent()
+                    || *session_id != SessionId::from(*persisted_thread_id)
+            })
+            .map(|(session_id, _)| session_id);
+        let session_id = restored_session_id.unwrap_or_else(|| {
             if session_configuration.session_source.is_non_root_agent() {
                 agent_control.session_id()
             } else {

@@ -14,6 +14,7 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
 use codex_protocol::user_input::UserInput;
+use codex_thread_store::PreparedFork;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::sse;
@@ -222,10 +223,12 @@ async fn assert_copied_fork_persists_inherited_history(history_mode: ThreadHisto
     let source_meta = codex_rollout::read_session_meta_line(source_path.as_path())
         .await
         .expect("read source session metadata");
+    let source_session_id = source_meta.meta.session_id;
     let mut supplied_history = vec![RolloutItem::SessionMeta(source_meta)];
     supplied_history.extend(source_items.iter().cloned());
     let NewThread {
         thread: forked_thread,
+        session_configured: forked_session_configured,
         ..
     } = thread_manager
         .fork_thread_from_history(
@@ -233,7 +236,7 @@ async fn assert_copied_fork_persists_inherited_history(history_mode: ThreadHisto
             test.config.clone(),
             InitialHistory::Resumed(ResumedHistory {
                 conversation_id: test.session_configured.thread_id,
-                history: Arc::new(supplied_history),
+                history: Arc::new(supplied_history.clone()),
                 rollout_path: None,
             }),
             /*thread_source*/ None,
@@ -242,6 +245,37 @@ async fn assert_copied_fork_persists_inherited_history(history_mode: ThreadHisto
         )
         .await
         .expect("fork from stored history");
+
+    assert_ne!(
+        forked_session_configured.thread_id,
+        test.session_configured.thread_id
+    );
+    assert_eq!(forked_session_configured.session_id, source_session_id);
+
+    let prepared = PreparedFork::new(
+        test.session_configured.thread_id,
+        /*history_base*/ None,
+        Arc::new(supplied_history),
+        (),
+    );
+    let reference_backed = thread_manager
+        .fork_prepared_thread(
+            test.config.clone(),
+            prepared,
+            /*thread_source*/ None,
+            /*parent_trace*/ None,
+            /*supports_openai_form_elicitation*/ false,
+        )
+        .await
+        .expect("fork prepared stored history");
+    assert_ne!(
+        reference_backed.thread_id,
+        test.session_configured.thread_id
+    );
+    assert_eq!(
+        reference_backed.session_configured.session_id,
+        source_session_id
+    );
 
     let forked_path = forked_thread.rollout_path().expect("forked rollout path");
     let forked_items = read_rollout_items(&forked_path);
