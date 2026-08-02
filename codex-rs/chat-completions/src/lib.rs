@@ -18,6 +18,7 @@ pub use encoder::EncodeError;
 pub use encoder::EncodeRequest;
 pub use encoder::encode_request;
 pub use stream::DecodeStream;
+pub use stream::IncrementalDecoder;
 pub use stream::decode_stream;
 pub use stream_error::DecodeError;
 pub use stream_types::ChatCompletionChunk;

@@ -3,6 +3,7 @@
 mod request;
 mod response;
 mod schema;
+mod transport;
 
 pub use request::KimiDialect;
 pub use request::KimiEncodeRequest;
@@ -15,6 +16,9 @@ pub use response::KimiResponseError;
 pub use response::response_items;
 pub use schema::SchemaError;
 pub use schema::normalize_schema;
+pub use transport::KimiHttpAdapter;
+pub use transport::KimiResponseStream;
+pub use transport::KimiStreamError;
 
 #[cfg(test)]
 #[path = "request_tests.rs"]
@@ -23,3 +27,7 @@ mod tests;
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod transport_tests;

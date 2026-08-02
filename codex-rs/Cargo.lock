@@ -3340,14 +3340,20 @@ dependencies = [
 name = "codex-kimi-code"
 version = "0.146.0"
 dependencies = [
+ "bytes",
  "codex-api",
  "codex-chat-completions",
+ "codex-client",
  "codex-protocol",
  "codex-tools",
+ "futures",
+ "http 1.4.0",
  "insta",
  "pretty_assertions",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
