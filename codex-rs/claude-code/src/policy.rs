@@ -237,25 +237,18 @@ fn encode_tools(specs: &[ToolSpec]) -> Result<Vec<Tool>, AssembleError> {
         .iter()
         .enumerate()
         .map(|(index, spec)| match spec {
-            ToolSpec::Function(tool) if tool.output_schema.is_none() => {
-                serde_json::to_value(&tool.parameters)
-                    .map(|input_schema| Tool {
-                        name: tool.name.clone(),
-                        description: tool.description.clone(),
-                        input_schema,
-                        cache_control: None,
-                    })
-                    .map_err(|error| AssembleError::InvalidToolSchema {
-                        index,
-                        name: tool.name.clone(),
-                        message: error.to_string(),
-                    })
-            }
-            ToolSpec::Function(tool) => Err(AssembleError::UnsupportedTool {
-                index,
-                kind: "structured-output function",
-                name: tool.name.clone(),
-            }),
+            ToolSpec::Function(tool) => serde_json::to_value(&tool.parameters)
+                .map(|input_schema| Tool {
+                    name: tool.name.clone(),
+                    description: tool.description.clone(),
+                    input_schema,
+                    cache_control: None,
+                })
+                .map_err(|error| AssembleError::InvalidToolSchema {
+                    index,
+                    name: tool.name.clone(),
+                    message: error.to_string(),
+                }),
             ToolSpec::Namespace(tool) => Err(AssembleError::UnsupportedTool {
                 index,
                 kind: "namespace",

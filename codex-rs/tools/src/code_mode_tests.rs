@@ -27,7 +27,7 @@ fn augment_tool_spec_for_code_mode_augments_function_tools() {
                 Some(vec!["order_id".to_string()]),
                 Some(AdditionalProperties::Boolean(false))
             ),
-            output_schema: Some(json!({
+            local_result_schema: Some(json!({
                 "type": "object",
                 "properties": {
                     "ok": {"type": "boolean"}
@@ -54,7 +54,7 @@ declare const tools: { lookup_order(args: { order_id: string; }): Promise<{ ok: 
                 Some(vec!["order_id".to_string()]),
                 Some(AdditionalProperties::Boolean(false))
             ),
-            output_schema: Some(json!({
+            local_result_schema: Some(json!({
                 "type": "object",
                 "properties": {
                     "ok": {"type": "boolean"}

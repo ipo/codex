@@ -160,7 +160,7 @@ fn normalizes_supported_tool_schema_without_losing_constraints() {
         defer_loading: None,
         parameters: codex_tools::parse_tool_input_schema_without_compaction(&schema)
             .expect("schema fixture"),
-        output_schema: None,
+        local_result_schema: None,
     })];
     let coding = profile("kimi-for-coding", 32_768, KimiThinkingPolicy::Required);
     let dialect = dialect(coding, 262_144, 0, KimiThinking::Enabled);

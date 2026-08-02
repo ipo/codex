@@ -54,7 +54,7 @@ pub fn create_test_sync_tool() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 

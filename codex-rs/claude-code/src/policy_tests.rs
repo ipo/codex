@@ -87,7 +87,7 @@ fn function_tool(name: &str) -> ToolSpec {
             Some(vec!["path".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -216,6 +216,49 @@ fn snapshots_cache_placement_and_complete_function_schemas() {
 }
 
 #[test]
+fn function_local_result_schema_is_not_sent_to_claude() {
+    let ToolSpec::Function(mut function) = function_tool("read") else {
+        unreachable!();
+    };
+    function.local_result_schema = Some(json!({
+        "type": "object",
+        "properties": {"contents": {"type": "string"}},
+        "required": ["contents"]
+    }));
+
+    let request = assemble(
+        &adaptive("claude-sonnet-5", true),
+        &ReasoningEffort::High,
+        &[],
+        &[system("system")],
+        &[ToolSpec::Function(function)],
+    )
+    .expect("local result metadata is not a Claude capability");
+
+    assert_eq!(
+        request.body.tools,
+        vec![Tool {
+            name: "read".to_string(),
+            description: "Run read".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "File path"
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+            cache_control: Some(CacheControl::Ephemeral {
+                ttl: CacheTtl::OneHour,
+            }),
+        }]
+    );
+}
+
+#[test]
 fn cache_placement_handles_no_tools_and_trailing_ineligible_user_content() {
     let profile = adaptive("claude-sonnet-5", true);
     let no_tools = assemble(
@@ -328,43 +371,52 @@ fn unsupported_tools_and_efforts_fail_before_assembling_a_request() {
     ));
 
     let unsupported_tools = [
-        ToolSpec::Freeform(FreeformTool {
-            name: "free".to_string(),
-            description: "freeform".to_string(),
-            format: FreeformToolFormat {
-                r#type: "grammar".to_string(),
-                syntax: "lark".to_string(),
-                definition: "start: /.+/".to_string(),
+        (
+            ToolSpec::Freeform(FreeformTool {
+                name: "free".to_string(),
+                description: "freeform".to_string(),
+                format: FreeformToolFormat {
+                    r#type: "grammar".to_string(),
+                    syntax: "lark".to_string(),
+                    definition: "start: /.+/".to_string(),
+                },
+            }),
+            "freeform",
+            "free",
+        ),
+        (
+            ToolSpec::Namespace(ResponsesApiNamespace {
+                name: "apps".to_string(),
+                description: "apps".to_string(),
+                tools: vec![],
+            }),
+            "namespace",
+            "apps",
+        ),
+        (
+            ToolSpec::ToolSearch {
+                execution: "server".to_string(),
+                description: "search".to_string(),
+                parameters: JsonSchema::default(),
             },
-        }),
-        ToolSpec::Namespace(ResponsesApiNamespace {
-            name: "apps".to_string(),
-            description: "apps".to_string(),
-            tools: vec![],
-        }),
-        ToolSpec::ToolSearch {
-            execution: "server".to_string(),
-            description: "search".to_string(),
-            parameters: JsonSchema::default(),
-        },
-        ToolSpec::WebSearch {
-            external_web_access: None,
-            indexed_web_access: None,
-            filters: None,
-            user_location: None,
-            search_context_size: None,
-            search_content_types: None,
-        },
-        ToolSpec::Function(ResponsesApiTool {
-            output_schema: Some(json!({"type": "object"})),
-            ..match function_tool("structured") {
-                ToolSpec::Function(tool) => tool,
-                _ => unreachable!(),
-            }
-        }),
+            "hosted tool search",
+            "tool_search",
+        ),
+        (
+            ToolSpec::WebSearch {
+                external_web_access: None,
+                indexed_web_access: None,
+                filters: None,
+                user_location: None,
+                search_context_size: None,
+                search_content_types: None,
+            },
+            "hosted web search",
+            "web_search",
+        ),
     ];
-    for tool in unsupported_tools {
-        assert!(matches!(
+    for (tool, kind, name) in unsupported_tools {
+        assert_eq!(
             assemble(
                 &sonnet,
                 &ReasoningEffort::High,
@@ -372,7 +424,11 @@ fn unsupported_tools_and_efforts_fail_before_assembling_a_request() {
                 &[system("system")],
                 &[tool]
             ),
-            Err(AssembleError::UnsupportedTool { .. })
-        ));
+            Err(AssembleError::UnsupportedTool {
+                index: 0,
+                kind,
+                name: name.to_string(),
+            })
+        );
     }
 }

@@ -92,27 +92,23 @@ fn encode_tools(tools: &[ToolSpec]) -> Result<Vec<FunctionTool>, EncodeError> {
         .iter()
         .enumerate()
         .map(|(index, tool)| match tool {
-            ToolSpec::Function(function)
-                if function.defer_loading.is_none() && function.output_schema.is_none() =>
-            {
-                Ok(FunctionTool {
-                    kind: FunctionToolKind::Function,
-                    function: FunctionDefinition {
-                        name: function.name.clone(),
-                        description: function.description.clone(),
-                        parameters: serde_json::to_value(&function.parameters).map_err(
-                            |error| EncodeError::ToolSchema {
-                                index,
-                                message: error.to_string(),
-                            },
-                        )?,
-                        strict: function.strict,
-                    },
-                })
-            }
+            ToolSpec::Function(function) if function.defer_loading.is_none() => Ok(FunctionTool {
+                kind: FunctionToolKind::Function,
+                function: FunctionDefinition {
+                    name: function.name.clone(),
+                    description: function.description.clone(),
+                    parameters: serde_json::to_value(&function.parameters).map_err(|error| {
+                        EncodeError::ToolSchema {
+                            index,
+                            message: error.to_string(),
+                        }
+                    })?,
+                    strict: function.strict,
+                },
+            }),
             ToolSpec::Function(_) => Err(EncodeError::UnsupportedTool {
                 index,
-                kind: "deferred function or function output schema",
+                kind: "deferred function",
             }),
             ToolSpec::Namespace(_) => Err(EncodeError::UnsupportedTool {
                 index,

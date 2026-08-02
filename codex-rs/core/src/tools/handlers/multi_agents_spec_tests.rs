@@ -82,7 +82,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     let ToolSpec::Function(ResponsesApiTool {
         description,
         parameters,
-        output_schema,
+        local_result_schema,
         ..
     }) = tool
     else {
@@ -159,7 +159,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         Some(&vec!["task_name".to_string(), "message".to_string()])
     );
     assert_eq!(
-        output_schema.expect("spawn_agent output schema")["required"],
+        local_result_schema.expect("spawn_agent local result schema")["required"],
         json!(["task_name", "nickname"])
     );
 }
@@ -473,10 +473,10 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
 }
 
 #[test]
-fn send_message_tool_requires_message_and_has_no_output_schema() {
+fn send_message_tool_requires_message_and_has_no_local_result_schema() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
-        output_schema,
+        local_result_schema,
         ..
     }) = create_send_message_tool()
     else {
@@ -510,16 +510,16 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
         parameters.required.as_ref(),
         Some(&vec!["target".to_string(), "message".to_string()])
     );
-    assert_eq!(output_schema, None);
+    assert_eq!(local_result_schema, None);
 }
 
 #[test]
-fn followup_task_tool_requires_message_and_has_no_output_schema() {
+fn followup_task_tool_requires_message_and_has_no_local_result_schema() {
     let ToolSpec::Function(ResponsesApiTool {
         name,
         description,
         parameters,
-        output_schema,
+        local_result_schema,
         ..
     }) = create_followup_task_tool()
     else {
@@ -551,7 +551,7 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         parameters.required.as_ref(),
         Some(&vec!["target".to_string(), "message".to_string()])
     );
-    assert_eq!(output_schema, None);
+    assert_eq!(local_result_schema, None);
 }
 
 #[test]
@@ -559,7 +559,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
     let ToolSpec::Function(ResponsesApiTool {
         description,
         parameters,
-        output_schema,
+        local_result_schema,
         ..
     }) = create_wait_agent_tool_v2(WaitAgentTimeoutOptions {
         default_timeout_ms: 30_000,
@@ -590,7 +590,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
     );
     assert_eq!(parameters.required.as_ref(), None);
     assert_eq!(
-        output_schema.expect("wait output schema")["properties"]["message"]["description"],
+        local_result_schema.expect("wait local result schema")["properties"]["message"]["description"],
         json!("Brief wait summary without the agent's final content.")
     );
 }
@@ -599,7 +599,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
 fn list_agents_tool_includes_path_prefix_and_agent_fields() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
-        output_schema,
+        local_result_schema,
         ..
     }) = create_list_agents_tool()
     else {
@@ -621,21 +621,25 @@ fn list_agents_tool_includes_path_prefix_and_agent_fields() {
         Some("Task-path prefix filter without a trailing slash. Omit to list all live agents.")
     );
     assert_eq!(
-        output_schema.expect("list_agents output schema")["properties"]["agents"]["items"]["required"],
+        local_result_schema.expect("list_agents local result schema")["properties"]["agents"]["items"]
+            ["required"],
         json!(["agent_name", "agent_status"])
     );
 }
 
 #[test]
 fn list_agents_tool_status_schema_includes_interrupted() {
-    let ToolSpec::Function(ResponsesApiTool { output_schema, .. }) = create_list_agents_tool()
+    let ToolSpec::Function(ResponsesApiTool {
+        local_result_schema,
+        ..
+    }) = create_list_agents_tool()
     else {
         panic!("list_agents should be a function tool");
     };
 
     assert_eq!(
-        output_schema.expect("list_agents output schema")["properties"]["agents"]["items"]["properties"]
-            ["agent_status"]["allOf"][0]["oneOf"][0]["enum"],
+        local_result_schema.expect("list_agents local result schema")["properties"]["agents"]["items"]
+            ["properties"]["agent_status"]["allOf"][0]["oneOf"][0]["enum"],
         json!([
             "pending_init",
             "running",

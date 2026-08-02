@@ -93,7 +93,7 @@ fn exec_command_tool_matches_expected_spec() {
                 Some(vec!["cmd".to_string()]),
                 Some(false.into())
             ),
-            output_schema: Some(unified_exec_output_schema()),
+            local_result_schema: Some(unified_exec_output_schema()),
         })
     );
 }
@@ -158,7 +158,7 @@ fn write_stdin_tool_matches_expected_spec() {
                 Some(vec!["session_id".to_string()]),
                 Some(false.into())
             ),
-            output_schema: Some(unified_exec_output_schema()),
+            local_result_schema: Some(unified_exec_output_schema()),
         })
     );
 }
@@ -197,7 +197,7 @@ fn request_permissions_tool_includes_full_permission_schema() {
                 Some(vec!["permissions".to_string()]),
                 Some(false.into())
             ),
-            output_schema: None,
+            local_result_schema: None,
         })
     );
 }
@@ -271,7 +271,7 @@ Examples of valid command strings:
                 Some(vec!["command".to_string()]),
                 Some(false.into())
             ),
-            output_schema: None,
+            local_result_schema: None,
         })
     );
 }

@@ -18,7 +18,7 @@ pub fn create_get_goal_tool() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(false.into())),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -53,7 +53,7 @@ Set token_budget only when an explicit token budget is requested. Fails if an un
             /*required*/ Some(vec!["objective".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -89,6 +89,6 @@ When marking a budgeted goal achieved with status `complete`, report the final t
             /*required*/ Some(vec!["status".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
     })
 }

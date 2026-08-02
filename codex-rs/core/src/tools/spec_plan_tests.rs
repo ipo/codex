@@ -304,7 +304,7 @@ impl ToolExecutor<ExtensionToolCall> for TestNamespaceExtensionTool {
                 strict: false,
                 defer_loading: None,
                 parameters: codex_tools::JsonSchema::default(),
-                output_schema: None,
+                local_result_schema: None,
             })],
         })
     }
@@ -337,7 +337,7 @@ impl ToolExecutor<ExtensionToolCall> for DeferredExtensionTool {
                 Some(vec!["message".to_string()]),
                 Some(false.into()),
             ),
-            output_schema: None,
+            local_result_schema: None,
         })
     }
 

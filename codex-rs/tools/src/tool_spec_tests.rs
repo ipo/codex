@@ -31,7 +31,7 @@ fn tool_spec_name_covers_all_variants() {
                 /*required*/ None,
                 /*additional_properties*/ None
             ),
-            output_schema: None,
+            local_result_schema: None,
         })
         .name(),
         "lookup_order"
@@ -126,7 +126,7 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
                 /*required*/ None,
                 /*additional_properties*/ None
             ),
-            output_schema: None,
+            local_result_schema: None,
         })])
         .expect("serialize tools"),
         vec![json!({
@@ -156,7 +156,7 @@ fn raw_tool_json_matches_value_encoding() {
             /*required*/ None,
             /*additional_properties*/ None,
         ),
-        output_schema: None,
+        local_result_schema: None,
     })];
     let expected = create_tools_json_for_responses_api(&specs).expect("serialize tools");
     let raw = create_tools_raw_json_for_responses_api(&specs).expect("serialize raw tools");
@@ -186,7 +186,7 @@ fn namespace_tool_spec_serializes_expected_wire_shape() {
                     /*required*/ None,
                     /*additional_properties*/ None,
                 ),
-                output_schema: None,
+                local_result_schema: None,
             })],
         }))
         .expect("serialize namespace tool"),

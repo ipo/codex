@@ -55,7 +55,7 @@ fn create_sleep_tool() -> ToolSpec {
                 Some(vec!["duration_ms".to_string()]),
                 /*additional_properties*/ Some(false.into()),
             ),
-            output_schema: None,
+            local_result_schema: None,
         })],
     })
 }

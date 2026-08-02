@@ -76,7 +76,7 @@ pub(crate) fn create_request_plugin_install_tool(
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(required), Some(false.into())),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -138,7 +138,7 @@ mod tests {
                         "tool_id".to_string(),
                         "suggest_reason".to_string(),
                     ]), Some(false.into())),
-                output_schema: None,
+                local_result_schema: None,
             })
         );
     }
@@ -182,7 +182,7 @@ mod tests {
                     Some(vec!["plugin_id".to_string(), "suggest_reason".to_string()]),
                     Some(false.into()),
                 ),
-                output_schema: None,
+                local_result_schema: None,
             })
         );
     }

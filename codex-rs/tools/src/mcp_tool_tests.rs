@@ -33,7 +33,7 @@ fn parse_mcp_tool_inserts_empty_properties() {
                 /*required*/ None,
                 /*additional_properties*/ None
             ),
-            output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
+            local_result_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({}))),
             defer_loading: false,
         }
     );
@@ -71,7 +71,7 @@ fn parse_mcp_tool_preserves_top_level_output_schema() {
                 /*required*/ None,
                 /*additional_properties*/ None
             ),
-            output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
+            local_result_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
                 "properties": {
                     "result": {
                         "properties": {
@@ -111,7 +111,7 @@ fn parse_mcp_tool_preserves_output_schema_without_inferred_type() {
                 /*required*/ None,
                 /*additional_properties*/ None
             ),
-            output_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
+            local_result_schema: Some(mcp_call_tool_result_output_schema(serde_json::json!({
                 "enum": ["ok", "error"]
             }))),
             defer_loading: false,

@@ -69,7 +69,7 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
                 description: WEB_RUN_DESCRIPTION.to_string(),
                 strict: false,
                 parameters,
-                output_schema: None,
+                local_result_schema: None,
                 defer_loading: None,
             })],
         })

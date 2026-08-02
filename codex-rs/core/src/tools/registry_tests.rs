@@ -82,7 +82,7 @@ fn test_spec(tool_name: &codex_tools::ToolName) -> codex_tools::ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: codex_tools::JsonSchema::default(),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 

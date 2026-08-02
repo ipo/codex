@@ -29,7 +29,7 @@ pub fn parse_mcp_tool(tool: &rmcp::model::Tool) -> Result<ToolDefinition, serde_
         name: tool.name.to_string(),
         description: tool.description.clone().map(Into::into).unwrap_or_default(),
         input_schema,
-        output_schema: Some(mcp_call_tool_result_output_schema(
+        local_result_schema: Some(mcp_call_tool_result_output_schema(
             structured_content_schema,
         )),
         defer_loading: false,

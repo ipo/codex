@@ -33,8 +33,10 @@ pub struct ResponsesApiTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub defer_loading: Option<bool>,
     pub parameters: JsonSchema,
+    /// Describes data returned by the locally executed tool. This is omitted
+    /// from provider requests and does not request structured-output enforcement.
     #[serde(skip)]
-    pub output_schema: Option<Value>,
+    pub local_result_schema: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -131,7 +133,7 @@ pub fn tool_definition_to_responses_api_tool(tool_definition: ToolDefinition) ->
         strict: false,
         defer_loading: tool_definition.defer_loading.then_some(true),
         parameters: tool_definition.input_schema,
-        output_schema: tool_definition.output_schema,
+        local_result_schema: tool_definition.local_result_schema,
     }
 }
 

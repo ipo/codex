@@ -1,7 +1,10 @@
 use super::*;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::models::ResponseItem;
+use codex_tools::FreeformTool;
+use codex_tools::FreeformToolFormat;
 use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
@@ -135,7 +138,11 @@ fn encodes_complete_ordered_request_parallel_calls_results_and_schema() {
         strict: true,
         defer_loading: None,
         parameters: serde_json::from_value::<JsonSchema>(schema.clone()).expect("nested schema"),
-        output_schema: None,
+        local_result_schema: Some(json!({
+            "type": "object",
+            "properties": {"bytes": {"type": "integer"}},
+            "required": ["bytes"]
+        })),
     })];
     let dialect = RecordingDialect(RefCell::default());
     let context = DialectContext {
@@ -213,16 +220,62 @@ fn failures_are_typed_and_return_no_partial_request() {
         assert_eq!(encode(context, &[history], &[], &dialect), Err(expected));
     }
 
-    let unsupported = [ToolSpec::ToolSearch {
-        execution: "server".into(),
-        description: "search".into(),
-        parameters: JsonSchema::default(),
-    }];
-    assert_eq!(
-        encode(context, &[], &unsupported, &dialect),
-        Err(EncodeError::UnsupportedTool {
-            index: 0,
-            kind: "tool search"
-        })
-    );
+    let unsupported = [
+        (
+            ToolSpec::Function(ResponsesApiTool {
+                name: "deferred".into(),
+                description: "Deferred function".into(),
+                strict: false,
+                defer_loading: Some(true),
+                parameters: JsonSchema::default(),
+                local_result_schema: Some(json!({"type": "object"})),
+            }),
+            "deferred function",
+        ),
+        (
+            ToolSpec::Namespace(ResponsesApiNamespace {
+                name: "apps".into(),
+                description: "Apps".into(),
+                tools: vec![],
+            }),
+            "namespace",
+        ),
+        (
+            ToolSpec::ToolSearch {
+                execution: "server".into(),
+                description: "search".into(),
+                parameters: JsonSchema::default(),
+            },
+            "tool search",
+        ),
+        (
+            ToolSpec::WebSearch {
+                external_web_access: None,
+                indexed_web_access: None,
+                filters: None,
+                user_location: None,
+                search_context_size: None,
+                search_content_types: None,
+            },
+            "web search",
+        ),
+        (
+            ToolSpec::Freeform(FreeformTool {
+                name: "free".into(),
+                description: "Freeform".into(),
+                format: FreeformToolFormat {
+                    r#type: "grammar".into(),
+                    syntax: "lark".into(),
+                    definition: "start: /.+/".into(),
+                },
+            }),
+            "freeform",
+        ),
+    ];
+    for (tool, kind) in unsupported {
+        assert_eq!(
+            encode(context, &[], &[tool], &dialect),
+            Err(EncodeError::UnsupportedTool { index: 0, kind })
+        );
+    }
 }

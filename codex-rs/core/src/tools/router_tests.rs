@@ -74,7 +74,7 @@ impl ToolExecutor<ExtensionToolCall> for ExtensionEchoExecutor {
                     "additionalProperties": false,
                 }))
                 .expect("extension schema should parse"),
-                output_schema: None,
+                local_result_schema: None,
                 defer_loading: None,
             })],
         })

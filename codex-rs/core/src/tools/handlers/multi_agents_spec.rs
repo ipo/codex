@@ -92,7 +92,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
-            output_schema: Some(spawn_agent_output_schema_v1()),
+            local_result_schema: Some(spawn_agent_output_schema_v1()),
         })],
     })
 }
@@ -137,7 +137,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
             Some(vec!["task_name".to_string()]),
             Some(false.into()),
         ),
-        output_schema: Some(spawn_agent_output_schema_v2(
+        local_result_schema: Some(spawn_agent_output_schema_v2(
             options.hide_agent_type_model_reasoning,
         )),
     })
@@ -176,7 +176,7 @@ pub fn create_send_input_tool_v1() -> ToolSpec {
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-            output_schema: Some(send_input_output_schema()),
+            local_result_schema: Some(send_input_output_schema()),
         })],
     })
 }
@@ -217,7 +217,7 @@ pub fn create_send_message_tool() -> ToolSpec {
             Some(vec!["target".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -253,7 +253,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -274,7 +274,7 @@ pub fn create_resume_agent_tool() -> ToolSpec {
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(properties, Some(vec!["id".to_string()]), Some(false.into())),
-            output_schema: Some(resume_agent_output_schema()),
+            local_result_schema: Some(resume_agent_output_schema()),
         })],
     })
 }
@@ -290,7 +290,7 @@ pub fn create_wait_agent_tool_v1(options: WaitAgentTimeoutOptions) -> ToolSpec {
             strict: false,
             defer_loading: None,
             parameters: wait_agent_tool_parameters_v1(options),
-            output_schema: Some(wait_output_schema_v1()),
+            local_result_schema: Some(wait_output_schema_v1()),
         })],
     })
 }
@@ -303,7 +303,7 @@ pub fn create_wait_agent_tool_v2(options: WaitAgentTimeoutOptions) -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: wait_agent_tool_parameters_v2(options),
-        output_schema: Some(wait_output_schema_v2()),
+        local_result_schema: Some(wait_output_schema_v2()),
     })
 }
 
@@ -324,7 +324,7 @@ pub fn create_list_agents_tool() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
-        output_schema: Some(list_agents_output_schema()),
+        local_result_schema: Some(list_agents_output_schema()),
     })
 }
 
@@ -343,7 +343,7 @@ pub fn create_close_agent_tool_v1() -> ToolSpec {
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-            output_schema: Some(agent_previous_status_output_schema(
+            local_result_schema: Some(agent_previous_status_output_schema(
                 "The agent status observed before shutdown was requested.",
             )),
         })],
@@ -364,7 +364,7 @@ pub fn create_interrupt_agent_tool_v2() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-        output_schema: Some(agent_previous_status_output_schema(
+        local_result_schema: Some(agent_previous_status_output_schema(
             "The agent status observed before the interrupt request was handled.",
         )),
     })

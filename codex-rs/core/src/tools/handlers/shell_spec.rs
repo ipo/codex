@@ -106,7 +106,7 @@ pub(crate) fn create_exec_command_tool_with_environment_id(
             Some(vec!["cmd".to_string()]),
             Some(false.into()),
         ),
-        output_schema: Some(unified_exec_output_schema()),
+        local_result_schema: Some(unified_exec_output_schema()),
     })
 }
 
@@ -150,7 +150,7 @@ pub fn create_write_stdin_tool() -> ToolSpec {
             Some(vec!["session_id".to_string()]),
             Some(false.into()),
         ),
-        output_schema: Some(unified_exec_output_schema()),
+        local_result_schema: Some(unified_exec_output_schema()),
     })
 }
 
@@ -220,7 +220,7 @@ Examples of valid command strings:
             Some(vec!["command".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -252,7 +252,7 @@ pub fn create_request_permissions_tool(description: String) -> ToolSpec {
             Some(vec!["permissions".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 

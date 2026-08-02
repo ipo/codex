@@ -87,7 +87,7 @@ pub fn create_request_user_input_tool(description: String) -> ToolSpec {
             Some(vec!["questions".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
