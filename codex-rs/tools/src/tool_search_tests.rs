@@ -25,7 +25,7 @@ fn default_search_text_uses_model_visible_namespace_metadata_once() {
         /*additional_properties*/ None,
     );
     parameters.description = Some("Automation options.".to_string());
-    let spec = ToolSpec::Namespace(crate::ResponsesApiNamespace {
+    let namespace = crate::ResponsesApiNamespace {
         name: "codex_app".to_string(),
         description: "Manage Codex automations.".to_string(),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
@@ -34,15 +34,23 @@ fn default_search_text_uses_model_visible_namespace_metadata_once() {
             strict: false,
             defer_loading: None,
             parameters,
-            output_schema: None,
+            local_result_schema: Some(serde_json::json!({"type": "object"})),
         })],
-    });
+    };
+    let mut expected_namespace = namespace.clone();
+    let ResponsesApiNamespaceTool::Function(expected_tool) = &mut expected_namespace.tools[0];
+    expected_tool.defer_loading = Some(true);
 
-    let search_info = ToolSearchInfo::from_tool_spec(spec, /*source_info*/ None)
-        .expect("namespace should be searchable");
+    let search_info =
+        ToolSearchInfo::from_tool_spec(ToolSpec::Namespace(namespace), /*source_info*/ None)
+            .expect("namespace should be searchable");
 
     assert_eq!(
         search_info.entry.search_text,
         "codex_app Manage Codex automations. automation_update automation update Create or update automations. Automation options. mode Update mode. schedule Schedule settings. timezone IANA timezone."
+    );
+    assert_eq!(
+        search_info.entry.output,
+        LoadableToolSpec::Namespace(expected_namespace)
     );
 }

@@ -12,7 +12,7 @@ fn tool_definition() -> ToolDefinition {
             /*required*/ None,
             /*additional_properties*/ None,
         ),
-        output_schema: Some(serde_json::json!({
+        local_result_schema: Some(serde_json::json!({
             "type": "object",
         })),
         defer_loading: false,
@@ -31,11 +31,10 @@ fn renamed_overrides_name_only() {
 }
 
 #[test]
-fn into_deferred_drops_output_schema_and_sets_defer_loading() {
+fn into_deferred_preserves_local_result_schema_and_sets_defer_loading() {
     assert_eq!(
         tool_definition().into_deferred(),
         ToolDefinition {
-            output_schema: None,
             defer_loading: true,
             ..tool_definition()
         }

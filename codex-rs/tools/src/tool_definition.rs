@@ -8,7 +8,9 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub input_schema: JsonSchema,
-    pub output_schema: Option<JsonValue>,
+    /// Describes data returned by the locally executed tool. This does not
+    /// request provider-side structured-output enforcement.
+    pub local_result_schema: Option<JsonValue>,
     pub defer_loading: bool,
 }
 
@@ -19,7 +21,6 @@ impl ToolDefinition {
     }
 
     pub fn into_deferred(mut self) -> Self {
-        self.output_schema = None;
         self.defer_loading = true;
         self
     }

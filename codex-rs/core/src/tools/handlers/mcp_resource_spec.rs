@@ -26,7 +26,7 @@ pub fn create_list_mcp_resources_tool() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -54,7 +54,7 @@ pub fn create_list_mcp_resource_templates_tool() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -88,7 +88,7 @@ pub fn create_read_mcp_resource_tool() -> ToolSpec {
             Some(vec!["server".to_string(), "uri".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 

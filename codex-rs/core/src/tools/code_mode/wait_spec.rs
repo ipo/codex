@@ -42,7 +42,7 @@ pub(crate) fn create_wait_tool() -> ToolSpec {
             Some(vec!["cell_id".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
         defer_loading: None,
     })
 }
@@ -98,7 +98,7 @@ mod tests {
                     Some(vec!["cell_id".to_string()]),
                     Some(false.into()),
                 ),
-                output_schema: None,
+                local_result_schema: None,
             })
         );
     }

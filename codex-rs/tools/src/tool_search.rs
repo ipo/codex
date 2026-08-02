@@ -35,7 +35,6 @@ impl ToolSearchInfo {
         let output = match spec {
             ToolSpec::Function(mut tool) => {
                 tool.defer_loading = Some(true);
-                tool.output_schema = None;
                 LoadableToolSpec::Function(tool)
             }
             ToolSpec::Namespace(mut namespace) => {
@@ -45,7 +44,6 @@ impl ToolSearchInfo {
                 for tool in &mut namespace.tools {
                     let ResponsesApiNamespaceTool::Function(tool) = tool;
                     tool.defer_loading = Some(true);
-                    tool.output_schema = None;
                 }
                 LoadableToolSpec::Namespace(namespace)
             }

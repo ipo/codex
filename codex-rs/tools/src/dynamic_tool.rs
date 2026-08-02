@@ -9,7 +9,7 @@ pub fn parse_dynamic_tool(
         name: tool.name.clone(),
         description: tool.description.clone(),
         input_schema: parse_tool_input_schema(&tool.input_schema)?,
-        output_schema: None,
+        local_result_schema: None,
         defer_loading: tool.defer_loading,
     })
 }

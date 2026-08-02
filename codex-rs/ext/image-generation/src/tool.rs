@@ -486,7 +486,7 @@ fn imagegen_tool_spec() -> ToolSpec {
             strict: false,
             parameters: parse_tool_input_schema(&Value::Object(input_schema))
                 .unwrap_or_else(|err| panic!("imagegen input schema should parse: {err}")),
-            output_schema: None,
+            local_result_schema: None,
             defer_loading: None,
         })],
     })

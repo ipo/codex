@@ -53,6 +53,6 @@ At most one step can be in_progress at a time.
             Some(vec!["plan".to_string()]),
             Some(false.into()),
         ),
-        output_schema: None,
+        local_result_schema: None,
     })
 }

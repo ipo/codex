@@ -58,7 +58,7 @@ fn test_sync_tool_matches_expected_spec() {
                         )),
                     ),
                 ]), /*required*/ None, Some(false.into())),
-            output_schema: None,
+            local_result_schema: None,
         })
     );
 }

@@ -15,7 +15,7 @@ pub(crate) fn create_list_available_plugins_to_install_tool() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(Default::default(), Some(Vec::new()), Some(false.into())),
-        output_schema: None,
+        local_result_schema: None,
     })
 }
 
@@ -38,7 +38,7 @@ mod tests {
                     Some(Vec::new()),
                     Some(false.into()),
                 ),
-                output_schema: None,
+                local_result_schema: None,
             })
         );
     }

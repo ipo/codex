@@ -222,7 +222,7 @@ mod tests {
                     "additionalProperties": false,
                 }))
                 .expect("extension schema should parse"),
-                output_schema: None,
+                local_result_schema: None,
                 defer_loading: None,
             })
         }
@@ -252,7 +252,7 @@ mod tests {
                 description: "Captures arguments.".to_string(),
                 strict: false,
                 parameters: codex_tools::JsonSchema::default(),
-                output_schema: None,
+                local_result_schema: None,
                 defer_loading: None,
             })
         }

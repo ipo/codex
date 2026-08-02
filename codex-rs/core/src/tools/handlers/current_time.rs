@@ -66,7 +66,7 @@ impl ToolExecutor<ToolInvocation> for CurrentTimeHandler {
                     /*required*/ None,
                     /*additional_properties*/ Some(false.into()),
                 ),
-                output_schema: Some(json!({
+                local_result_schema: Some(json!({
                     "type": "object",
                     "properties": {
                         "current_time": {

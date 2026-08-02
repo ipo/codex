@@ -30,7 +30,7 @@ fn parse_dynamic_tool_sanitizes_input_schema() {
                 /*required*/ None,
                 /*additional_properties*/ None
             ),
-            output_schema: None,
+            local_result_schema: None,
             defer_loading: false,
         }
     );
@@ -58,7 +58,7 @@ fn parse_dynamic_tool_preserves_defer_loading() {
                 /*required*/ None,
                 /*additional_properties*/ None
             ),
-            output_schema: None,
+            local_result_schema: None,
             defer_loading: true,
         }
     );

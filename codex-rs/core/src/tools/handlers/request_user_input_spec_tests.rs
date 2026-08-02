@@ -108,7 +108,7 @@ fn request_user_input_tool_includes_questions_schema() {
                     ),
                 ),
             ]), Some(vec!["questions".to_string()]), Some(false.into())),
-            output_schema: None,
+            local_result_schema: None,
         })
     );
 }

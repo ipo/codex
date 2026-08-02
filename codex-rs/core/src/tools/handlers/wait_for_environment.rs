@@ -99,7 +99,7 @@ impl ToolExecutor<ToolInvocation> for WaitForEnvironmentHandler {
                 /*required*/ Some(vec!["environment_id".to_string()]),
                 /*additional_properties*/ Some(false.into()),
             ),
-            output_schema: None,
+            local_result_schema: None,
         })
     }
 

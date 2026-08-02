@@ -12,6 +12,6 @@ pub fn create_new_context_window_tool() -> ToolSpec {
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(BTreeMap::new(), /*required*/ None, Some(false.into())),
-        output_schema: None,
+        local_result_schema: None,
     })
 }

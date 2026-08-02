@@ -27,7 +27,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
                 Some(vec!["order_id".to_string()]),
                 Some(false.into())
             ),
-            output_schema: Some(json!({"type": "object"})),
+            local_result_schema: Some(json!({"type": "object"})),
             defer_loading: false,
         }),
         ResponsesApiTool {
@@ -43,7 +43,7 @@ fn tool_definition_to_responses_api_tool_omits_false_defer_loading() {
                 Some(vec!["order_id".to_string()]),
                 Some(false.into())
             ),
-            output_schema: Some(json!({"type": "object"})),
+            local_result_schema: Some(json!({"type": "object"})),
         }
     );
 }
@@ -79,13 +79,13 @@ fn dynamic_tool_to_responses_api_tool_preserves_defer_loading() {
                 Some(vec!["order_id".to_string()]),
                 Some(false.into())
             ),
-            output_schema: None,
+            local_result_schema: None,
         }
     );
 }
 
 #[test]
-fn mcp_tool_to_deferred_responses_api_tool_sets_defer_loading() {
+fn mcp_tool_to_deferred_responses_api_tool_preserves_local_result_schema() {
     let tool = rmcp::model::Tool::new(
         "lookup_order",
         "Look up an order",
@@ -118,7 +118,7 @@ fn mcp_tool_to_deferred_responses_api_tool_sets_defer_loading() {
                 Some(vec!["order_id".to_string()]),
                 Some(false.into())
             ),
-            output_schema: None,
+            local_result_schema: Some(crate::mcp_call_tool_result_output_schema(json!({}))),
         }
     );
 }
@@ -138,7 +138,7 @@ fn loadable_tool_spec_namespace_serializes_with_deferred_child_tools() {
                 /*required*/ None,
                 /*additional_properties*/ None,
             ),
-            output_schema: None,
+            local_result_schema: None,
         })],
     });
 
@@ -163,6 +163,42 @@ fn loadable_tool_spec_namespace_serializes_with_deferred_child_tools() {
                     }
                 }
             ]
+        })
+    );
+}
+
+#[test]
+fn local_result_schema_does_not_change_responses_serialization() {
+    let tool = ResponsesApiTool {
+        name: "lookup_order".to_string(),
+        description: "Look up an order".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::new(),
+            /*required*/ None,
+            /*additional_properties*/ None,
+        ),
+        local_result_schema: None,
+    };
+    let without_local_schema = serde_json::to_value(&tool).expect("serialize tool");
+    let with_local_schema = serde_json::to_value(ResponsesApiTool {
+        local_result_schema: Some(json!({"type": "object"})),
+        ..tool
+    })
+    .expect("serialize tool with local result schema");
+
+    assert_eq!(with_local_schema, without_local_schema);
+    assert_eq!(
+        with_local_schema,
+        json!({
+            "name": "lookup_order",
+            "description": "Look up an order",
+            "strict": false,
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
         })
     );
 }

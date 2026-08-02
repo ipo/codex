@@ -337,7 +337,7 @@ fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
                 /*required*/ None,
                 /*additional_properties*/ None,
             ),
-            output_schema: None,
+            local_result_schema: None,
         })],
     }
     .to_response_item("search-1", &payload);
