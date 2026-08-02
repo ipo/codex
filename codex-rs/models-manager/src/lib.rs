@@ -17,7 +17,11 @@ pub use model_catalog_overlay::ResolvedModelCatalogOverlay;
 pub fn bundled_models_response()
 -> std::result::Result<codex_protocol::openai_models::ModelsResponse, serde_json::Error> {
     let catalog = serde_json::from_str(include_str!("../models.json"))?;
-    ModelCatalogOverlay::from_json(include_str!("../claude_models.json"))
+    let catalog = ModelCatalogOverlay::from_json(include_str!("../claude_models.json"))
+        .map_err(bundled_catalog_error)?
+        .apply(catalog)
+        .map_err(bundled_catalog_error)?;
+    ModelCatalogOverlay::from_json(include_str!("../kimi_models.json"))
         .map_err(bundled_catalog_error)?
         .apply(catalog)
         .map_err(bundled_catalog_error)

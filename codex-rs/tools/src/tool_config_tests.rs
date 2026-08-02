@@ -15,6 +15,7 @@ fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
         aliases: Vec::new(),
         display_name: "Test Model".to_string(),
         description: None,
+        inference: None,
         default_reasoning_level: None,
         supported_reasoning_levels: Vec::new(),
         shell_type,

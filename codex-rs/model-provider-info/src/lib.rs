@@ -15,6 +15,7 @@ use codex_protocol::error::EnvVarError;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::model_inference::AnthropicThinkingPolicy;
 use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::KimiInferenceConfig;
 use codex_protocol::model_inference::ModelInferenceConfig;
 pub use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ModelInfo;
@@ -101,7 +102,7 @@ pub enum ResolvedInferencePlan {
         route: ResolvedWireRoute,
     },
     Kimi {
-        wire_model: String,
+        config: KimiInferenceConfig,
         route: ResolvedWireRoute,
     },
 }
@@ -330,8 +331,8 @@ impl ModelProviderInfo {
                 supports_disabled_thinking: *supports_disabled_thinking,
                 route,
             },
-            ModelInferenceConfig::Kimi { wire_model, .. } => ResolvedInferencePlan::Kimi {
-                wire_model: wire_model.clone(),
+            ModelInferenceConfig::Kimi(config) => ResolvedInferencePlan::Kimi {
+                config: config.clone(),
                 route,
             },
         })

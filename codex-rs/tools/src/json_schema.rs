@@ -8,6 +8,12 @@ use std::collections::BTreeSet;
 const DEFINITION_TABLE_KEYS: [&str; 2] = ["$defs", "definitions"];
 const SCHEMA_CHILD_KEYS: [&str; 4] = ["items", "anyOf", "oneOf", "allOf"];
 const COMPOSITION_SCHEMA_KEYS: [&str; 3] = ["anyOf", "oneOf", "allOf"];
+const PRESERVED_SCHEMA_KEYS: &str = "$ref type description encrypted enum items properties required additionalProperties anyOf oneOf allOf $defs definitions additionalItems contains contentEncoding contentMediaType contentSchema dependencies dependentRequired dependentSchemas else exclusiveMaximum exclusiveMinimum format if maximum maxContains maxItems maxLength maxProperties minimum minContains minItems minLength minProperties multipleOf not pattern patternProperties prefixItems propertyNames then unevaluatedItems unevaluatedProperties uniqueItems";
+const OBJECT_STRUCTURE_KEYS: &str = "additionalProperties dependencies dependentRequired dependentSchemas maxProperties minProperties patternProperties properties propertyNames required unevaluatedProperties";
+const ARRAY_STRUCTURE_KEYS: &str = "additionalItems contains items maxContains maxItems minContains minItems prefixItems unevaluatedItems uniqueItems";
+const STRING_STRUCTURE_KEYS: &str =
+    "contentEncoding contentMediaType contentSchema enum format maxLength minLength pattern";
+const NUMERIC_STRUCTURE_KEYS: &str = "exclusiveMaximum exclusiveMinimum maximum minimum multipleOf";
 
 /// Primitive JSON Schema type names we support in tool definitions.
 ///
@@ -71,6 +77,8 @@ pub struct JsonSchema {
     pub defs: Option<BTreeMap<String, JsonSchema>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definitions: Option<BTreeMap<String, JsonSchema>>,
+    #[serde(flatten)]
+    pub extensions: BTreeMap<String, JsonValue>,
 }
 
 impl JsonSchema {
@@ -505,6 +513,11 @@ fn sanitize_json_schema(value: &mut JsonValue) {
             if let Some(const_value) = map.remove("const") {
                 map.insert("enum".to_string(), JsonValue::Array(vec![const_value]));
             }
+            map.retain(|key, _| {
+                PRESERVED_SCHEMA_KEYS
+                    .split_ascii_whitespace()
+                    .any(|candidate| key == candidate)
+            });
 
             let mut schema_types = normalized_schema_types(map);
 
@@ -514,21 +527,13 @@ fn sanitize_json_schema(value: &mut JsonValue) {
             }
 
             if schema_types.is_empty() {
-                if map.contains_key("properties")
-                    || map.contains_key("required")
-                    || map.contains_key("additionalProperties")
-                {
+                if has_any_schema_keyword(map, OBJECT_STRUCTURE_KEYS) {
                     schema_types.push(JsonSchemaPrimitiveType::Object);
-                } else if map.contains_key("items") || map.contains_key("prefixItems") {
+                } else if has_any_schema_keyword(map, ARRAY_STRUCTURE_KEYS) {
                     schema_types.push(JsonSchemaPrimitiveType::Array);
-                } else if map.contains_key("enum") || map.contains_key("format") {
+                } else if has_any_schema_keyword(map, STRING_STRUCTURE_KEYS) {
                     schema_types.push(JsonSchemaPrimitiveType::String);
-                } else if map.contains_key("minimum")
-                    || map.contains_key("maximum")
-                    || map.contains_key("exclusiveMinimum")
-                    || map.contains_key("exclusiveMaximum")
-                    || map.contains_key("multipleOf")
-                {
+                } else if has_any_schema_keyword(map, NUMERIC_STRUCTURE_KEYS) {
                     schema_types.push(JsonSchemaPrimitiveType::Number);
                 } else {
                     map.clear();
@@ -541,6 +546,11 @@ fn sanitize_json_schema(value: &mut JsonValue) {
         }
         _ => {}
     }
+}
+
+fn has_any_schema_keyword(map: &serde_json::Map<String, JsonValue>, keys: &str) -> bool {
+    keys.split_ascii_whitespace()
+        .any(|key| map.contains_key(key))
 }
 
 /// Sanitize a schema definition table before deserializing into `JsonSchema`.

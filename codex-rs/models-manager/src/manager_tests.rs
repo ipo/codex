@@ -1452,11 +1452,59 @@ fn bundled_models_json_roundtrips() {
 #[test]
 fn inference_metadata_is_not_inherited_by_model_name_prefixes() {
     let catalog = bundled_models_response().expect("bundled catalog should parse");
-    let model = construct_model_info_from_candidates(
-        "anthropic/claude-sonnet-5-custom",
-        &catalog.models,
-        &ModelsManagerConfig::default(),
-    );
+    for selector in ["anthropic/claude-sonnet-5-custom", "kimi/k3-custom"] {
+        let model = construct_model_info_from_candidates(
+            selector,
+            &catalog.models,
+            &ModelsManagerConfig::default(),
+        );
+        assert_eq!(model.inference, None, "{selector}");
+    }
+}
 
-    assert_eq!(model.inference, None);
+#[test]
+fn bundled_kimi_profiles_resolve_exact_request_contracts() {
+    let catalog = bundled_models_response().expect("bundled catalog should parse");
+    let actual = catalog
+        .models
+        .iter()
+        .filter(|model| model.history_compatibility_group.as_deref() == Some("kimi"))
+        .map(|model| {
+            json!({
+                "slug": model.slug,
+                "aliases": model.aliases,
+                "context_window": model.context_window,
+                "max_context_window": model.max_context_window,
+                "default_reasoning_level": model.default_reasoning_level,
+                "supported_reasoning_levels": model.supported_reasoning_levels,
+                "input_modalities": model.input_modalities,
+                "inference": model.inference,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            json!({"slug":"kimi/k3","aliases":["k3"],"context_window":1048576,"max_context_window":1048576,
+            "default_reasoning_level":"high","supported_reasoning_levels":[
+                {"effort":"low","description":"Lower thinking effort"},{"effort":"high","description":"Higher thinking effort"},
+                {"effort":"max","description":"Maximum thinking effort"}],"input_modalities":["text","image"],"inference":{
+                "family":"kimi","wire_api":"chat_completions","dialect":"kimi","route":"kimi_code","wire_model":"k3",
+                "max_output_tokens":131072,"thinking":"required_with_effort"}}),
+            json!({"slug":"kimi/k3-256k","aliases":["k3-256k"],"context_window":262144,"max_context_window":262144,
+            "default_reasoning_level":"high","supported_reasoning_levels":[
+                {"effort":"low","description":"Lower thinking effort"},{"effort":"high","description":"Higher thinking effort"},
+                {"effort":"max","description":"Maximum thinking effort"}],"input_modalities":["text","image"],"inference":{
+                "family":"kimi","wire_api":"chat_completions","dialect":"kimi","route":"kimi_code","wire_model":"k3-256k",
+                "max_output_tokens":131072,"thinking":"required_with_effort"}}),
+            json!({"slug":"kimi/kimi-for-coding","aliases":["kimi-for-coding"],"context_window":262144,"max_context_window":262144,
+            "default_reasoning_level":null,"supported_reasoning_levels":[],"input_modalities":["text","image"],"inference":{
+                "family":"kimi","wire_api":"chat_completions","dialect":"kimi","route":"kimi_code","wire_model":"kimi-for-coding",
+                "max_output_tokens":32768,"thinking":"required"}}),
+            json!({"slug":"kimi/kimi-for-coding-highspeed","aliases":["kimi-for-coding-highspeed"],"context_window":262144,"max_context_window":262144,
+            "default_reasoning_level":null,"supported_reasoning_levels":[],"input_modalities":["text","image"],"inference":{
+                "family":"kimi","wire_api":"chat_completions","dialect":"kimi","route":"kimi_code","wire_model":"kimi-for-coding-highspeed",
+                "max_output_tokens":32768,"thinking":"required"}}),
+        ]
+    );
 }

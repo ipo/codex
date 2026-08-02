@@ -64,11 +64,15 @@ fn model_family_controls_supported_wire_and_dialect_contracts() {
         thinking: AnthropicThinkingPolicy::Adaptive,
         supports_disabled_thinking: true,
     };
-    let kimi = |wire_api| ModelInferenceConfig::Kimi {
-        wire_api,
-        dialect: InferenceDialect::Kimi,
-        route: "route".to_string(),
-        wire_model: "model".to_string(),
+    let kimi = |wire_api| {
+        ModelInferenceConfig::Kimi(KimiInferenceConfig {
+            wire_api,
+            dialect: InferenceDialect::Kimi,
+            route: "route".to_string(),
+            wire_model: "model".to_string(),
+            max_output_tokens: 1,
+            thinking: KimiThinkingPolicy::Required,
+        })
     };
 
     assert_eq!(
