@@ -12,6 +12,8 @@ use crate::hook_runtime::run_pre_compact_hooks;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
+use crate::sampling_retry::RetryScheduler;
+use crate::sampling_retry::SamplingRetryPolicy;
 #[cfg(test)]
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
@@ -19,7 +21,6 @@ use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::state::AutoCompactWindowIds;
-use crate::util::backoff;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -255,7 +256,13 @@ async fn run_compact_task_inner_impl(
         turn_context.model_info.truncation_policy.into(),
     );
 
-    let max_retries = turn_context.provider.info().stream_max_retries();
+    let retry_policy =
+        SamplingRetryPolicy::resolve(turn_context.provider.info(), &turn_context.model_info)?;
+    let retry_scheduler = RetryScheduler::production();
+    let max_retries = match retry_policy {
+        SamplingRetryPolicy::Responses { max_retries }
+        | SamplingRetryPolicy::NativeKimi { max_retries } => max_retries,
+    };
     let mut retries = 0;
     let mut client_session = sess.services.model_client.new_session();
     // Reuse one client session so turn-scoped state (sticky routing, websocket incremental
@@ -321,9 +328,16 @@ async fn run_compact_task_inner_impl(
                 return Err(e);
             }
             Err(e) => {
-                if retries < max_retries {
+                let retryable = matches!(retry_policy, SamplingRetryPolicy::Responses { .. })
+                    || retry_policy.is_retryable(&e);
+                if retryable && retries < max_retries {
                     retries += 1;
-                    let delay = backoff(retries);
+                    let delay = match retry_policy {
+                        SamplingRetryPolicy::Responses { .. } => crate::util::backoff(retries),
+                        SamplingRetryPolicy::NativeKimi { .. } => {
+                            retry_scheduler.delay(&e, retries)
+                        }
+                    };
                     sess.notify_stream_error(
                         turn_context.as_ref(),
                         format!("Reconnecting... {retries}/{max_retries}"),

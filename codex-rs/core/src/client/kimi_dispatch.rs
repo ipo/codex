@@ -2,18 +2,17 @@ use super::*;
 use codex_kimi_code::KimiDialect;
 use codex_kimi_code::KimiEncodeRequest;
 use codex_kimi_code::KimiHttpAdapter;
+use codex_kimi_code::KimiInputEstimate;
 use codex_kimi_code::KimiRequestSettings;
-use codex_kimi_code::KimiStreamError;
 use codex_kimi_code::KimiThinking;
 use codex_kimi_code::KimiThinkingEffort;
 use codex_kimi_code::encode_request;
 use codex_model_provider_info::ResolvedWireRoute;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::KimiInferenceConfig;
-use codex_utils_output_truncation::approx_token_count;
 use futures::TryStreamExt;
 
-use crate::context_manager::estimate_item_token_count;
+use crate::sampling_retry::classify_kimi_error;
 
 const KIMI_CHAT_ENDPOINT: &str = "/chat/completions";
 
@@ -41,22 +40,13 @@ impl ModelClientSession {
             ));
         }
         let (system, history) = native_system_and_history(prompt)?;
-        let context_window = model_info
-            .resolved_context_window()
-            .and_then(|tokens| u64::try_from(tokens).ok())
-            .filter(|tokens| *tokens > 0)
-            .ok_or_else(|| {
-                CodexErr::InvalidRequest(format!(
-                    "native Kimi model `{}` requires a positive context window",
-                    model_info.slug
-                ))
-            })?;
+        let context_window = context_window(model_info)?;
         let dialect = Arc::new(
             KimiDialect::new(
                 plan.config,
                 KimiRequestSettings {
                     context_window,
-                    estimated_input_tokens: estimated_input_tokens(prompt),
+                    input_estimate: KimiInputEstimate::FinalSerialized,
                     prompt_cache_key: self.client.prompt_cache_key(responses_metadata),
                     thinking: thinking(
                         effort.or_else(|| model_info.default_reasoning_level.clone()),
@@ -99,10 +89,10 @@ impl ModelClientSession {
             .with_telemetry(Some(request_telemetry))
             .stream_request(request, dialect, cancellation.clone())
             .await
-            .map_err(classify_error)
+            .map_err(classify_kimi_error)
             .map_err(|error| self.client.state.provider.map_api_error(error))?;
         let trace_id = stream.metadata.trace_id.clone();
-        let stream = stream.map_err(classify_error);
+        let stream = stream.map_err(classify_kimi_error);
         Ok(map_response_events_with_cancellation(
             trace_id,
             stream,
@@ -164,12 +154,60 @@ fn native_system_and_history(prompt: &Prompt) -> Result<(Option<String>, Vec<Res
     Ok(((!system.is_empty()).then(|| system.join("\n\n")), history))
 }
 
-fn estimated_input_tokens(prompt: &Prompt) -> u64 {
-    let system =
-        u64::try_from(approx_token_count(&prompt.base_instructions.text)).unwrap_or(u64::MAX);
-    prompt.input.iter().fold(system, |total, item| {
-        total.saturating_add(u64::try_from(estimate_item_token_count(item)).unwrap_or_default())
-    })
+pub(crate) fn estimated_input_tokens(prompt: &Prompt, model_info: &ModelInfo) -> Result<u64> {
+    let Some(codex_protocol::model_inference::ModelInferenceConfig::Kimi(config)) =
+        model_info.inference.clone()
+    else {
+        return Err(CodexErr::InvalidRequest(
+            "missing Kimi inference metadata".to_string(),
+        ));
+    };
+    let context_window = context_window(model_info)?;
+    let (system, history) = native_system_and_history(prompt)?;
+    let dialect = KimiDialect::new(
+        config,
+        KimiRequestSettings {
+            context_window,
+            input_estimate: KimiInputEstimate::FinalSerialized,
+            prompt_cache_key: "context-estimate".to_string(),
+            thinking: thinking(model_info.default_reasoning_level.clone())?,
+        },
+    )
+    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+    let request = encode_request(
+        &dialect,
+        KimiEncodeRequest {
+            system: system.as_deref(),
+            history: &history,
+            tools: &prompt.tools,
+        },
+    )
+    .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
+    Ok(codex_kimi_code::estimated_input_tokens(&request))
+}
+
+pub(crate) fn should_compact(model_info: &ModelInfo, estimated_input_tokens: u64) -> bool {
+    let Ok(context_window) = context_window(model_info) else {
+        return false;
+    };
+    at_least_85_percent(context_window, estimated_input_tokens)
+        || under_50k_remaining(context_window, estimated_input_tokens)
+}
+
+fn context_window(model_info: &ModelInfo) -> Result<u64> {
+    model_info
+        .resolved_context_window()
+        .and_then(|tokens| u64::try_from(tokens).ok())
+        .filter(|tokens| *tokens > 0)
+        .ok_or_else(|| CodexErr::InvalidRequest("invalid Kimi context window".to_string()))
+}
+
+pub(super) fn at_least_85_percent(context_window: u64, estimated_input_tokens: u64) -> bool {
+    estimated_input_tokens.saturating_mul(100) >= context_window.saturating_mul(85)
+}
+
+pub(super) fn under_50k_remaining(context_window: u64, estimated_input_tokens: u64) -> bool {
+    context_window.saturating_sub(estimated_input_tokens) < 50_000
 }
 
 fn validate_route(route: &ResolvedWireRoute) -> Result<()> {
@@ -194,13 +232,4 @@ fn provider_for_route(mut provider: ApiProvider, route: &ResolvedWireRoute) -> R
     provider.retry.max_attempts = 0;
     provider.stream_idle_timeout = route.stream_idle_timeout;
     Ok(provider)
-}
-
-fn classify_error(error: KimiStreamError) -> ApiError {
-    match error {
-        KimiStreamError::Request(error) => error,
-        error => ApiError::InvalidRequest {
-            message: error.to_string(),
-        },
-    }
 }

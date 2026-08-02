@@ -50,12 +50,16 @@ pub enum KimiStreamError {
     Transport(String),
     #[error(transparent)]
     Decode(#[from] DecodeError),
+    #[error("retryable native Kimi stream failure: {0}")]
+    RetryableStream(String),
     #[error(transparent)]
     Response(#[from] KimiResponseError),
     #[error("invalid native Kimi request: {0}")]
     InvalidRequest(String),
     #[error("native Kimi usage exceeded canonical integer bounds")]
     UsageOverflow,
+    #[error("native Kimi stop contained thinking but no user-visible output")]
+    ThinkingOnlyStop,
 }
 
 pub struct KimiResponseStream {
@@ -150,7 +154,7 @@ impl<T: HttpTransport> KimiHttpAdapter<T> {
                     }
                     Ok(Some(Ok(chunk))) => {
                         if let Err(error) = decoder.feed(&chunk) {
-                            let _ = tx.send(Err(error.into()));
+                            let _ = tx.send(Err(classify_decode_error(error)));
                             return;
                         }
                         if decoder.is_complete() {
@@ -165,8 +169,11 @@ impl<T: HttpTransport> KimiHttpAdapter<T> {
                 }
             }
             let result = match decoder.finish() {
+                Ok(decoded) if is_thinking_only_stop(&decoded) => {
+                    Err(KimiStreamError::ThinkingOnlyStop)
+                }
                 Ok(decoded) => canonical_events(dialect.as_ref(), decoded, &mut presentation),
-                Err(error) => Err(error.into()),
+                Err(error) => Err(classify_decode_error(error)),
             };
             match result {
                 Ok(events) => {
@@ -182,6 +189,33 @@ impl<T: HttpTransport> KimiHttpAdapter<T> {
             }
         });
         Ok(KimiResponseStream { rx, metadata })
+    }
+}
+
+fn is_thinking_only_stop(decoded: &DecodedStream) -> bool {
+    decoded.terminal_outcome == codex_api::TerminalOutcome::Completed
+        && decoded.pending.as_ref().is_some_and(|pending| {
+            pending.content.is_empty()
+                && !pending.reasoning.is_empty()
+                && pending.tool_calls.is_empty()
+        })
+}
+
+fn classify_decode_error(error: DecodeError) -> KimiStreamError {
+    match error {
+        error @ (DecodeError::EmptyStream
+        | DecodeError::InvalidUtf8
+        | DecodeError::MalformedFraming(_)
+        | DecodeError::MalformedChunk(_)
+        | DecodeError::MissingFinishReason
+        | DecodeError::NullFinishReason
+        | DecodeError::PrematureEof { .. }) => KimiStreamError::RetryableStream(error.to_string()),
+        DecodeError::InvalidTransition(message)
+            if message == "successful terminal had no content" =>
+        {
+            KimiStreamError::RetryableStream("native Kimi stop contained no output".to_string())
+        }
+        error => KimiStreamError::Decode(error),
     }
 }
 

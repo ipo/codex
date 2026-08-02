@@ -34,7 +34,7 @@ fn dialect_result(model: &str) -> Result<KimiDialect, KimiError> {
         },
         KimiRequestSettings {
             context_window: 262_144,
-            estimated_input_tokens: 1,
+            input_estimate: KimiInputEstimate::Fixed(1),
             prompt_cache_key: "stable-affinity".to_string(),
             thinking: KimiThinking::Effort(KimiThinkingEffort::High),
         },
@@ -219,7 +219,7 @@ fn exact_model_and_dialect_boundaries_discard_native_reasoning_marker() {
                 },
                 KimiRequestSettings {
                     context_window: 1,
-                    estimated_input_tokens: 0,
+                    input_estimate: KimiInputEstimate::Fixed(0),
                     prompt_cache_key: "key".into(),
                     thinking: KimiThinking::Effort(KimiThinkingEffort::High)
                 }

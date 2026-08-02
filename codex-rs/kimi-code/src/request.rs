@@ -55,9 +55,15 @@ pub enum KimiThinking {
 
 pub struct KimiRequestSettings {
     pub context_window: u64,
-    pub estimated_input_tokens: u64,
+    pub input_estimate: KimiInputEstimate,
     pub prompt_cache_key: String,
     pub thinking: KimiThinking,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KimiInputEstimate {
+    FinalSerialized,
+    Fixed(u64),
 }
 
 pub struct KimiEncodeRequest<'a> {
@@ -166,7 +172,21 @@ pub fn encode_request(
             .map_err(|source| KimiError::ToolSchema { index, source })?;
     }
     normalize_messages(&mut request.messages)?;
+    if dialect.settings.input_estimate == KimiInputEstimate::FinalSerialized {
+        request.extensions.insert(
+            "max_completion_tokens".to_string(),
+            dialect
+                .max_completion_tokens(estimated_input_tokens(&request))
+                .into(),
+        );
+    }
     Ok(request)
+}
+
+pub fn estimated_input_tokens(request: &ChatCompletionsRequest) -> u64 {
+    serde_json::to_vec(&(&request.messages, &request.tools))
+        .map(|input| u64::try_from(input.len()).unwrap_or(u64::MAX).div_ceil(4))
+        .unwrap_or(u64::MAX)
 }
 
 fn normalize_messages(messages: &mut [ChatMessage]) -> Result<(), KimiError> {
@@ -245,11 +265,11 @@ impl DialectHooks for KimiDialect {
         context: DialectContext<'_>,
     ) -> Result<BTreeMap<String, Value>, DialectError> {
         self.validate_context(context)?;
-        let remaining = self
-            .settings
-            .context_window
-            .saturating_sub(self.settings.estimated_input_tokens);
-        let max_completion_tokens = u64::from(self.profile.max_output_tokens).min(remaining.max(1));
+        let estimated_input_tokens = match self.settings.input_estimate {
+            KimiInputEstimate::FinalSerialized => 0,
+            KimiInputEstimate::Fixed(estimated_input_tokens) => estimated_input_tokens,
+        };
+        let max_completion_tokens = self.max_completion_tokens(estimated_input_tokens);
         let mut thinking = json!({"type": "enabled", "keep": "all"});
         if let KimiThinking::Effort(effort) = self.settings.thinking {
             thinking["effort"] = effort.as_str().into();
@@ -310,5 +330,15 @@ impl DialectHooks for KimiDialect {
     ) -> Result<UsageDetails, DialectError> {
         self.validate_context(context)?;
         crate::response::usage_details(usage)
+    }
+}
+
+impl KimiDialect {
+    fn max_completion_tokens(&self, estimated_input_tokens: u64) -> u64 {
+        let remaining = self
+            .settings
+            .context_window
+            .saturating_sub(estimated_input_tokens);
+        u64::from(self.profile.max_output_tokens).min(remaining.max(1))
     }
 }

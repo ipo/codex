@@ -178,35 +178,8 @@ expression: outcomes
                 content_index: 0,
             },
         ),
-        Ok(
-            OutputItemDone(
-                Reasoning {
-                    id: Some(
-                        ResponseItemId(
-                            "rs_kimi",
-                        ),
-                    ),
-                    summary: [],
-                    content: Some(
-                        [
-                            ReasoningText {
-                                text: "thought",
-                            },
-                        ],
-                    ),
-                    encrypted_content: Some(
-                        "codex:kimi-chat-reasoning:{\"dialect\":\"kimi_chat\",\"key\":\"reasoning_content\",\"model\":\"k3\",\"version\":1}",
-                    ),
-                    internal_chat_message_metadata_passthrough: None,
-                },
-            ),
-        ),
-        Ok(
-            Completed {
-                response_id: "chat-57",
-                token_usage: None,
-                terminal_outcome: Completed,
-            },
+        Err(
+            ThinkingOnlyStop,
         ),
     ],
     [
