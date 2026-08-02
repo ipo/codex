@@ -536,6 +536,37 @@ fn test_built_in_model_providers_include_amazon_bedrock() {
     );
 }
 
+#[test]
+fn built_in_claudeflare_provider_has_managed_kimi_route() {
+    let provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove(CLAUDEFLARE_PROVIDER_ID)
+        .expect("Claudeflare provider should be built in");
+
+    assert_eq!(
+        provider,
+        ModelProviderInfo {
+            name: "Claudeflare".to_string(),
+            base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
+            wire_api: WireApi::Responses,
+            wire_routes: HashMap::from([(
+                "kimi_code".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    base_url: CLAUDEFLARE_KIMI_BASE_URL.to_string(),
+                    request_path: "chat/completions".to_string(),
+                    query_params: None,
+                    request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            )]),
+            stream_max_retries: Some(10),
+            supports_websockets: false,
+            ..ModelProviderInfo::default()
+        }
+    );
+}
 
 #[test]
 fn test_merge_configured_model_providers_adds_custom_provider() {

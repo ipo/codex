@@ -40,6 +40,9 @@ const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const OPENAI_ACTOR_AUTHORIZATION_HEADER: &str = "x-openai-actor-authorization";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+pub const CLAUDEFLARE_PROVIDER_ID: &str = "claudeflare";
+pub const CLAUDEFLARE_RESPONSES_BASE_URL: &str = "http://127.0.0.1:8080/v1/ccflare/openai";
+pub const CLAUDEFLARE_KIMI_BASE_URL: &str = "http://127.0.0.1:8080/v1/kimi";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
@@ -310,9 +313,7 @@ impl ModelProviderInfo {
             },
             ModelInferenceConfig::Kimi(config) => ResolvedInferencePlan::Kimi {
                 config: config.clone(),
-                // Native Kimi dispatch is intentionally deferred to #41. Keep the typed profile
-                // while routing current turns through the provider's legacy Responses endpoint.
-                route: self.resolve_legacy_route(),
+                route: self.resolve_named_route(model, inference)?,
             },
         })
     }
@@ -618,6 +619,28 @@ pub fn built_in_model_providers(
     use ModelProviderInfo as P;
     let openai_provider = P::create_openai_provider(openai_base_url);
     let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
+    let claudeflare_provider = ModelProviderInfo {
+        name: "Claudeflare".to_string(),
+        base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
+        wire_api: WireApi::Responses,
+        wire_routes: HashMap::from([(
+            "kimi_code".to_string(),
+            ModelProviderWireRoute {
+                wire_api: WireApi::ChatCompletions,
+                dialect: InferenceDialect::Kimi,
+                base_url: CLAUDEFLARE_KIMI_BASE_URL.to_string(),
+                request_path: "chat/completions".to_string(),
+                query_params: None,
+                request_max_retries: None,
+                stream_max_retries: Some(10),
+                stream_idle_timeout_ms: None,
+            },
+        )]),
+        stream_max_retries: Some(10),
+        supports_websockets: false,
+        ..ModelProviderInfo::default()
+    };
+
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
     // open source ("oss") providers by default. Users are encouraged to add to
@@ -625,6 +648,7 @@ pub fn built_in_model_providers(
     [
         (OPENAI_PROVIDER_ID, openai_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
+        (CLAUDEFLARE_PROVIDER_ID, claudeflare_provider),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),

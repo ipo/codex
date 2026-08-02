@@ -1,0 +1,306 @@
+---
+source: core/tests/suite/kimi_dispatch.rs
+expression: "serde_json::to_string_pretty(&json!({\"profiles\":profiles,\"common\":common}))?"
+---
+{
+  "common": {
+    "messages": [
+      {
+        "content": "Kimi system",
+        "role": "system"
+      },
+      {
+        "content": "profile prompt",
+        "role": "user"
+      }
+    ],
+    "prompt_cache_key": "<session>",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "tools": [
+      {
+        "function": {
+          "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+          "name": "exec_command",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "cmd": {
+                "description": "Shell command to execute.",
+                "type": "string"
+              },
+              "justification": {
+                "description": "User-facing approval question for `require_escalated`; omit otherwise.",
+                "type": "string"
+              },
+              "login": {
+                "description": "True runs the shell with -l/-i semantics; false disables them. Defaults to true.",
+                "type": "boolean"
+              },
+              "max_output_tokens": {
+                "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.",
+                "type": "number"
+              },
+              "prefix_rule": {
+                "description": "Reusable approval prefix for `cmd`, only with `sandbox_permissions: \"require_escalated\"`; for example [\"git\", \"pull\"].",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sandbox_permissions": {
+                "description": "Per-command sandbox override. Defaults to `use_default`; use `require_escalated` for unsandboxed execution.",
+                "enum": [
+                  "use_default",
+                  "require_escalated"
+                ],
+                "type": "string"
+              },
+              "shell": {
+                "description": "Shell binary to launch. Defaults to the user's default shell.",
+                "type": "string"
+              },
+              "tty": {
+                "description": "True allocates a PTY for the command; false or omitted uses plain pipes.",
+                "type": "boolean"
+              },
+              "workdir": {
+                "description": "Working directory for the command. Defaults to the turn cwd.",
+                "type": "string"
+              },
+              "yield_time_ms": {
+                "description": "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "cmd"
+            ],
+            "type": "object"
+          },
+          "strict": false
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "Writes characters to an existing unified exec session and returns recent output.",
+          "name": "write_stdin",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "chars": {
+                "description": "Bytes to write to stdin. Defaults to empty, which polls without writing.",
+                "type": "string"
+              },
+              "max_output_tokens": {
+                "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.",
+                "type": "number"
+              },
+              "session_id": {
+                "description": "Identifier of the running unified exec session.",
+                "type": "number"
+              },
+              "yield_time_ms": {
+                "description": "Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait 5000-300000 ms by default.",
+                "type": "number"
+              }
+            },
+            "required": [
+              "session_id"
+            ],
+            "type": "object"
+          },
+          "strict": false
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.\n",
+          "name": "update_plan",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "explanation": {
+                "description": "Optional explanation for this plan update.",
+                "type": "string"
+              },
+              "plan": {
+                "description": "The list of steps",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "status": {
+                      "description": "Step status.",
+                      "enum": [
+                        "pending",
+                        "in_progress",
+                        "completed"
+                      ],
+                      "type": "string"
+                    },
+                    "step": {
+                      "description": "Task step text.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "step",
+                    "status"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "plan"
+            ],
+            "type": "object"
+          },
+          "strict": false
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "Request user input for one to three short questions and wait for the response. Set autoResolutionMs, from 60000 to 240000 milliseconds, only when the question is useful but non-blocking and continuing with best judgment is acceptable if the user does not answer; omit it when explicit user input is required. This tool is only available in Plan mode.",
+          "name": "request_user_input",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "autoResolutionMs": {
+                "description": "Optional auto-resolution window in milliseconds, from 60000 to 240000. Include this only when the question is useful but non-blocking and continuing with best judgment is acceptable if the user does not answer; omit it when explicit user input is required before continuing. Use 60000 for lightly helpful context and up to 240000 when the answer would materially unblock better work.",
+                "type": "number"
+              },
+              "questions": {
+                "description": "Questions to show the user. Prefer 1 and do not exceed 3",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "header": {
+                      "description": "Short header label shown in the UI (12 or fewer chars).",
+                      "type": "string"
+                    },
+                    "id": {
+                      "description": "Stable identifier for mapping answers (snake_case).",
+                      "type": "string"
+                    },
+                    "options": {
+                      "description": "Provide 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with \"(Recommended)\". Do not include an \"Other\" option in this list; the client will add a free-form \"Other\" option automatically.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "description": {
+                            "description": "One short sentence explaining impact/tradeoff if selected.",
+                            "type": "string"
+                          },
+                          "label": {
+                            "description": "User-facing label (1-5 words).",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label",
+                          "description"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "question": {
+                      "description": "Single-sentence prompt shown to the user.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "header",
+                    "question",
+                    "options"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "questions"
+            ],
+            "type": "object"
+          },
+          "strict": false
+        },
+        "type": "function"
+      },
+      {
+        "function": {
+          "description": "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.",
+          "name": "view_image",
+          "parameters": {
+            "additionalProperties": false,
+            "properties": {
+              "detail": {
+                "description": "Image detail level. Defaults to `high`; use `original` to preserve exact resolution.",
+                "enum": [
+                  "high",
+                  "original"
+                ],
+                "type": "string"
+              },
+              "path": {
+                "description": "Local filesystem path to an image file.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          },
+          "strict": false
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "profiles": [
+    {
+      "max_completion_tokens": 131072,
+      "model": "k3",
+      "thinking": {
+        "effort": "high",
+        "keep": "all",
+        "type": "enabled"
+      }
+    },
+    {
+      "max_completion_tokens": 131072,
+      "model": "k3-256k",
+      "thinking": {
+        "effort": "high",
+        "keep": "all",
+        "type": "enabled"
+      }
+    },
+    {
+      "max_completion_tokens": 32768,
+      "model": "kimi-for-coding",
+      "thinking": {
+        "keep": "all",
+        "type": "enabled"
+      }
+    },
+    {
+      "max_completion_tokens": 32768,
+      "model": "kimi-for-coding-highspeed",
+      "thinking": {
+        "keep": "all",
+        "type": "enabled"
+      }
+    }
+  ]
+}
