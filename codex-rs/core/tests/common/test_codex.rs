@@ -547,6 +547,24 @@ impl TestCodexBuilder {
         .await
     }
 
+    pub async fn resume_with_auto_env(
+        &mut self,
+        server: &wiremock::MockServer,
+        home: Arc<TempDir>,
+        rollout_path: PathBuf,
+    ) -> anyhow::Result<TestCodex> {
+        let base_url = format!("{}/v1", server.uri());
+        let test_env = test_env().await?;
+        Box::pin(self.build_with_home_and_base_url(
+            base_url,
+            home,
+            Some(rollout_path),
+            test_env,
+            /*include_local_environment*/ false,
+        ))
+        .await
+    }
+
     async fn build_with_home_and_base_url(
         &mut self,
         base_url: String,
