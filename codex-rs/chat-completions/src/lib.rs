@@ -11,6 +11,8 @@ pub use dialect::AssistantReasoningReplay;
 pub use dialect::DialectContext;
 pub use dialect::DialectError;
 pub use dialect::DialectHooks;
+pub use dialect::OpaqueReasoning;
+pub use dialect::ReasoningDelta;
 pub use dialect::UsageDetails;
 pub use encoder::EncodeError;
 pub use encoder::EncodeRequest;

@@ -31,6 +31,7 @@ struct Decoder<'a, F> {
     response_id: Option<String>,
     content: String,
     reasoning: String,
+    reasoning_provenance: Option<String>,
     tools: Vec<PendingTool>,
     usage: Option<ChunkUsage>,
     terminal: Option<(FinishReason, TerminalOutcome)>,
@@ -48,7 +49,7 @@ where
     F: FnMut(PresentationDelta),
 {
     let mut decoder = Decoder {
-        params, sink, response_id: None, content: String::new(), reasoning: String::new(), tools: Vec::new(), usage: None,
+        params, sink, response_id: None, content: String::new(), reasoning: String::new(), reasoning_provenance: None, tools: Vec::new(), usage: None,
         terminal: None, recognized: false, saw_finish_field: false, saw_null_finish: false, done: false,
     };
     let mut framing = Framing::default();
@@ -182,8 +183,9 @@ impl<F: FnMut(PresentationDelta)> Decoder<'_, F> {
             .dialect
             .reasoning_delta(self.params.context, &delta.extensions)?
         {
-            self.reasoning.push_str(&reasoning);
-            (self.sink)(PresentationDelta::Reasoning(reasoning));
+            self.reasoning.push_str(&reasoning.text);
+            self.reasoning_provenance = Some(reasoning.provenance);
+            (self.sink)(PresentationDelta::Reasoning(reasoning.text));
         }
         for fragment in delta.tool_calls {
             self.tool_fragment(fragment)?;
@@ -296,6 +298,7 @@ impl<F: FnMut(PresentationDelta)> Decoder<'_, F> {
             | TerminalOutcome::Continue => Some(PendingResult {
                 content: self.content,
                 reasoning: self.reasoning,
+                reasoning_provenance: self.reasoning_provenance,
                 tool_calls: tools,
             }),
             TerminalOutcome::OutputExhausted | TerminalOutcome::Refusal => None,

@@ -97,6 +97,7 @@ pub struct ResponseMetadata {
 pub struct PendingResult {
     pub content: String,
     pub reasoning: String,
+    pub reasoning_provenance: Option<String>,
     pub tool_calls: Vec<ToolCall>,
 }
 

@@ -18,11 +18,25 @@ pub struct DialectContext<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct AssistantReasoningReplay<'a> {
     pub visible: &'a [String],
-    pub opaque: Option<&'a str>,
+    pub opaque: OpaqueReasoning<'a>,
+}
+
+/// Provider provenance for opaque canonical reasoning material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpaqueReasoning<'a> {
+    None,
+    Other(&'a str),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasoningDelta {
+    pub text: String,
+    pub provenance: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UsageDetails {
+    pub cached_prompt_tokens: u64,
     pub reasoning_tokens: u64,
 }
 
@@ -56,7 +70,7 @@ pub trait DialectHooks {
         &self,
         context: DialectContext<'_>,
         extensions: &BTreeMap<String, Value>,
-    ) -> Result<Option<String>, DialectError> {
+    ) -> Result<Option<ReasoningDelta>, DialectError> {
         response_hook_unavailable(context, extensions)
     }
 
