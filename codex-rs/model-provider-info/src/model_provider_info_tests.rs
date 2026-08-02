@@ -536,6 +536,7 @@ fn test_built_in_model_providers_include_amazon_bedrock() {
     );
 }
 
+
 #[test]
 fn test_merge_configured_model_providers_adds_custom_provider() {
     let custom_provider = ModelProviderInfo {

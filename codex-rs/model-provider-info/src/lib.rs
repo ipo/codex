@@ -303,15 +303,16 @@ impl ModelProviderInfo {
                 inference.family()
             )));
         }
-        let route = self.resolve_named_route(model, inference)?;
         Ok(match inference {
             ModelInferenceConfig::OpenAi { wire_model, .. } => ResolvedInferencePlan::OpenAi {
                 wire_model: wire_model.clone(),
-                route,
+                route: self.resolve_named_route(model, inference)?,
             },
             ModelInferenceConfig::Kimi(config) => ResolvedInferencePlan::Kimi {
                 config: config.clone(),
-                route,
+                // Native Kimi dispatch is intentionally deferred to #41. Keep the typed profile
+                // while routing current turns through the provider's legacy Responses endpoint.
+                route: self.resolve_legacy_route(),
             },
         })
     }
@@ -617,7 +618,6 @@ pub fn built_in_model_providers(
     use ModelProviderInfo as P;
     let openai_provider = P::create_openai_provider(openai_base_url);
     let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
-
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
     // open source ("oss") providers by default. Users are encouraged to add to
