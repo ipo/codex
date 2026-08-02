@@ -44,6 +44,7 @@ pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex"
 pub const CLAUDEFLARE_PROVIDER_ID: &str = "claudeflare";
 pub const CLAUDEFLARE_RESPONSES_BASE_URL: &str = "http://127.0.0.1:8080/v1/ccflare/openai";
 pub const CLAUDEFLARE_CLAUDE_BASE_URL: &str = "http://127.0.0.1:8080/v1/claude-code";
+pub const CLAUDEFLARE_KIMI_BASE_URL: &str = "http://127.0.0.1:8080/v1/kimi";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
@@ -335,9 +336,7 @@ impl ModelProviderInfo {
             },
             ModelInferenceConfig::Kimi(config) => ResolvedInferencePlan::Kimi {
                 config: config.clone(),
-                // Native Kimi dispatch is intentionally deferred to #41. Keep the typed profile
-                // while routing current turns through the provider's legacy Responses endpoint.
-                route: self.resolve_legacy_route(),
+                route: self.resolve_named_route(model, inference)?,
             },
         })
     }
@@ -648,19 +647,34 @@ pub fn built_in_model_providers(
         name: "Claudeflare".to_string(),
         base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
         wire_api: WireApi::Responses,
-        wire_routes: HashMap::from([(
-            "claude_code".to_string(),
-            ModelProviderWireRoute {
-                wire_api: WireApi::AnthropicMessages,
-                dialect: InferenceDialect::ClaudeCode,
-                base_url: CLAUDEFLARE_CLAUDE_BASE_URL.to_string(),
-                request_path: "v1/messages".to_string(),
-                query_params: Some(HashMap::from([("beta".to_string(), "true".to_string())])),
-                request_max_retries: None,
-                stream_max_retries: Some(10),
-                stream_idle_timeout_ms: None,
-            },
-        )]),
+        wire_routes: HashMap::from([
+            (
+                "claude_code".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::AnthropicMessages,
+                    dialect: InferenceDialect::ClaudeCode,
+                    base_url: CLAUDEFLARE_CLAUDE_BASE_URL.to_string(),
+                    request_path: "v1/messages".to_string(),
+                    query_params: Some(HashMap::from([("beta".to_string(), "true".to_string())])),
+                    request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "kimi_code".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    base_url: CLAUDEFLARE_KIMI_BASE_URL.to_string(),
+                    request_path: "chat/completions".to_string(),
+                    query_params: None,
+                    request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+        ]),
         stream_max_retries: Some(10),
         supports_websockets: false,
         ..ModelProviderInfo::default()

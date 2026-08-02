@@ -2705,6 +2705,7 @@ dependencies = [
  "codex-http-client",
  "codex-image-generation-extension",
  "codex-install-context",
+ "codex-kimi-code",
  "codex-login",
  "codex-mcp",
  "codex-memories-read",

@@ -540,7 +540,7 @@ fn test_built_in_model_providers_include_amazon_bedrock() {
 }
 
 #[test]
-fn built_in_claudeflare_provider_has_managed_native_claude_route() {
+fn built_in_claudeflare_provider_has_managed_native_routes() {
     let provider = built_in_model_providers(/*openai_base_url*/ None)
         .remove(CLAUDEFLARE_PROVIDER_ID)
         .expect("Claudeflare provider should be built in");
@@ -551,19 +551,37 @@ fn built_in_claudeflare_provider_has_managed_native_claude_route() {
             name: "Claudeflare".to_string(),
             base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
             wire_api: WireApi::Responses,
-            wire_routes: HashMap::from([(
-                "claude_code".to_string(),
-                ModelProviderWireRoute {
-                    wire_api: WireApi::AnthropicMessages,
-                    dialect: InferenceDialect::ClaudeCode,
-                    base_url: CLAUDEFLARE_CLAUDE_BASE_URL.to_string(),
-                    request_path: "v1/messages".to_string(),
-                    query_params: Some(HashMap::from([("beta".to_string(), "true".to_string())])),
-                    request_max_retries: None,
-                    stream_max_retries: Some(10),
-                    stream_idle_timeout_ms: None,
-                },
-            )]),
+            wire_routes: HashMap::from([
+                (
+                    "claude_code".to_string(),
+                    ModelProviderWireRoute {
+                        wire_api: WireApi::AnthropicMessages,
+                        dialect: InferenceDialect::ClaudeCode,
+                        base_url: CLAUDEFLARE_CLAUDE_BASE_URL.to_string(),
+                        request_path: "v1/messages".to_string(),
+                        query_params: Some(HashMap::from([(
+                            "beta".to_string(),
+                            "true".to_string(),
+                        )])),
+                        request_max_retries: None,
+                        stream_max_retries: Some(10),
+                        stream_idle_timeout_ms: None,
+                    },
+                ),
+                (
+                    "kimi_code".to_string(),
+                    ModelProviderWireRoute {
+                        wire_api: WireApi::ChatCompletions,
+                        dialect: InferenceDialect::Kimi,
+                        base_url: CLAUDEFLARE_KIMI_BASE_URL.to_string(),
+                        request_path: "chat/completions".to_string(),
+                        query_params: None,
+                        request_max_retries: None,
+                        stream_max_retries: Some(10),
+                        stream_idle_timeout_ms: None,
+                    },
+                ),
+            ]),
             stream_max_retries: Some(10),
             supports_websockets: false,
             ..ModelProviderInfo::default()

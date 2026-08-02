@@ -522,7 +522,7 @@ fn normalize_responses_body(value: Value, home_path: &str) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_bodies_and_metadata_free_resolution_match_established_fixtures() -> Result<()> {
+async fn openai_and_metadata_free_responses_bodies_match_established_fixture() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let home = Arc::new(TempDir::new()?);
     let openai_server = responses::start_mock_server().await;
@@ -536,13 +536,5 @@ async fn responses_bodies_and_metadata_free_resolution_match_established_fixture
         serde_json::to_string_pretty(&openai)?
     );
 
-    let kimi_server = responses::start_mock_server().await;
-    let kimi =
-        captured_responses_body(&kimi_server, Arc::new(TempDir::new()?), "kimi/k3", false).await?;
-    assert_eq!(kimi["model"], "kimi/k3");
-    insta::assert_snapshot!(
-        "claude_conformance_kimi_responses_body",
-        serde_json::to_string_pretty(&kimi)?
-    );
     Ok(())
 }
