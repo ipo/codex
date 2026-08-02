@@ -77,6 +77,7 @@ mod item_presentation_lifecycle;
 mod items;
 mod json_result;
 mod kimi_dispatch;
+mod kimi_native_conformance;
 mod live_cli;
 mod mcp_auth_elicitation;
 mod mcp_auth_refresh;

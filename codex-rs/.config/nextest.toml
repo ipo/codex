@@ -25,6 +25,9 @@ max-threads = 4
 [test-groups.core_apply_patch_cli_integration]
 max-threads = 1
 
+[test-groups.core_kimi_native_conformance]
+max-threads = 1
+
 [test-groups.windows_sandbox_legacy_sessions]
 max-threads = 1
 
@@ -49,6 +52,11 @@ test-group = 'app_server_protocol_codegen'
 # Keep the library unit tests parallel.
 filter = 'package(codex-app-server) & kind(test)'
 test-group = 'app_server_integration'
+
+[[profile.default.overrides]]
+# These full-turn real-loop tests contend when they run concurrently.
+filter = 'package(codex-core) & test(suite::kimi_native_conformance::)'
+test-group = 'core_kimi_native_conformance'
 
 [[profile.local.overrides]]
 # Use up to four app-server subprocesses locally. The global nextest pool still
