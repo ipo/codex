@@ -32,7 +32,7 @@ pub(super) fn dialect(
         profile,
         KimiRequestSettings {
             context_window: context,
-            estimated_input_tokens: input,
+            input_estimate: KimiInputEstimate::Fixed(input),
             prompt_cache_key: "stable-session-affinity".to_string(),
             thinking,
         },
@@ -78,7 +78,7 @@ fn rejects_disabled_or_profile_incompatible_thinking_before_encoding() {
     let coding = profile("kimi-for-coding", 32_768, KimiThinkingPolicy::Required);
     let settings = |thinking| KimiRequestSettings {
         context_window: 262_144,
-        estimated_input_tokens: 0,
+        input_estimate: KimiInputEstimate::Fixed(0),
         prompt_cache_key: "affinity".to_string(),
         thinking,
     };

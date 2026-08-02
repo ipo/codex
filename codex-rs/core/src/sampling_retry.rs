@@ -8,6 +8,7 @@ use codex_api::ApiError;
 use codex_api::TransportError;
 use codex_claude_code::DecodeError;
 use codex_claude_code::NativeStreamError;
+use codex_kimi_code::KimiStreamError;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::ResolvedInferencePlan;
 use codex_protocol::error::CodexErr;
@@ -50,6 +51,7 @@ impl RetryScheduler {
 pub(crate) enum SamplingRetryPolicy {
     Responses { max_retries: u64 },
     NativeClaude { max_retries: u64 },
+    NativeKimi { max_retries: u64 },
 }
 
 impl SamplingRetryPolicy {
@@ -64,19 +66,97 @@ impl SamplingRetryPolicy {
             ResolvedInferencePlan::Anthropic { route, .. } => Self::NativeClaude {
                 max_retries: route.stream_max_retries,
             },
-            ResolvedInferencePlan::Legacy { .. }
-            | ResolvedInferencePlan::OpenAi { .. }
-            | ResolvedInferencePlan::Kimi { .. } => Self::Responses {
-                max_retries: provider.stream_max_retries(),
+            ResolvedInferencePlan::Kimi { route, .. } => Self::NativeKimi {
+                max_retries: route.stream_max_retries,
             },
+            ResolvedInferencePlan::Legacy { .. } | ResolvedInferencePlan::OpenAi { .. } => {
+                Self::Responses {
+                    max_retries: provider.stream_max_retries(),
+                }
+            }
         })
     }
 
     pub(crate) fn is_retryable(self, error: &CodexErr) -> bool {
         match self {
             Self::Responses { .. } => error.is_retryable(),
-            Self::NativeClaude { .. } => matches!(error.details(), CodexErrorDetails::Stream(_)),
+            Self::NativeClaude { .. } | Self::NativeKimi { .. } => {
+                matches!(error.details(), CodexErrorDetails::Stream(_))
+            }
         }
+    }
+}
+
+pub(crate) fn classify_kimi_error(error: KimiStreamError) -> ApiError {
+    classify_kimi_error_with_scheduler(error, &RetryScheduler::production())
+}
+
+fn classify_kimi_error_with_scheduler(
+    error: KimiStreamError,
+    scheduler: &RetryScheduler,
+) -> ApiError {
+    match error {
+        KimiStreamError::Request(ApiError::Transport(transport)) => {
+            classify_kimi_transport_error(transport, (scheduler.now)())
+        }
+        KimiStreamError::Request(ApiError::ServerOverloaded) => {
+            retryable("server overloaded", None)
+        }
+        KimiStreamError::Request(ApiError::RateLimit(message)) => retryable(message, None),
+        KimiStreamError::Request(error) => error,
+        KimiStreamError::IdleTimeout => retryable("native Kimi stream idle timeout", None),
+        KimiStreamError::Transport(message) => retryable(message, None),
+        KimiStreamError::ThinkingOnlyStop => {
+            retryable("native Kimi stop contained only thinking", None)
+        }
+        KimiStreamError::RetryableStream(message) => retryable(message, None),
+        KimiStreamError::Decode(error) => ApiError::InvalidRequest {
+            message: error.to_string(),
+        },
+        KimiStreamError::Cancelled => ApiError::InvalidRequest {
+            message: "native Kimi stream was cancelled".to_string(),
+        },
+        KimiStreamError::Response(error) => ApiError::InvalidRequest {
+            message: error.to_string(),
+        },
+        KimiStreamError::InvalidRequest(message) => ApiError::InvalidRequest { message },
+        KimiStreamError::UsageOverflow => ApiError::InvalidRequest {
+            message: "native Kimi usage exceeded canonical integer bounds".to_string(),
+        },
+    }
+}
+
+fn classify_kimi_transport_error(error: TransportError, now: DateTime<Utc>) -> ApiError {
+    match error {
+        TransportError::Http {
+            status,
+            url,
+            headers,
+            body,
+        } => {
+            let body_text = body.as_deref().unwrap_or_default();
+            if is_context_overflow(body_text) {
+                ApiError::ContextWindowExceeded
+            } else if is_quota_exhaustion(body_text) {
+                ApiError::QuotaExceeded
+            } else if matches!(status.as_u16(), 408 | 409 | 429 | 529) || status.is_server_error() {
+                retryable(
+                    format!("native Kimi request failed with HTTP {status}"),
+                    headers
+                        .as_ref()
+                        .and_then(|headers| retry_header_delay(headers, now)),
+                )
+            } else {
+                ApiError::Transport(TransportError::Http {
+                    status,
+                    url,
+                    headers,
+                    body,
+                })
+            }
+        }
+        TransportError::Timeout | TransportError::Network(_) => retryable(error.to_string(), None),
+        TransportError::RetryLimit | TransportError::Build(_) => ApiError::Transport(error),
     }
 }
 

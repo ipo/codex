@@ -3,18 +3,14 @@ source: kimi-code/src/transport_tests.rs
 expression: failures
 ---
 [
-    Decode(
-        EmptyStream,
+    RetryableStream(
+        "Chat Completions stream was empty",
     ),
-    Decode(
-        PrematureEof {
-            expected: "a recognized chunk",
-        },
+    RetryableStream(
+        "Chat Completions stream ended before a recognized chunk",
     ),
-    Decode(
-        MalformedChunk(
-            "key must be a string at line 1 column 2",
-        ),
+    RetryableStream(
+        "malformed Chat Completions chunk: key must be a string at line 1 column 2",
     ),
     Decode(
         InvalidToolJson {
@@ -22,12 +18,10 @@ expression: failures
             arguments: "{",
         },
     ),
-    Decode(
-        MissingFinishReason,
+    RetryableStream(
+        "Chat Completions finish reason was missing",
     ),
-    Decode(
-        PrematureEof {
-            expected: "[DONE]",
-        },
+    RetryableStream(
+        "Chat Completions stream ended before [DONE]",
     ),
 ]

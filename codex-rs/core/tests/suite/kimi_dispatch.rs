@@ -1,5 +1,6 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::Result;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
@@ -19,6 +20,7 @@ use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use tokio::net::TcpListener;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -69,14 +71,17 @@ impl Respond for Sequence {
 }
 
 async fn mount_native(server: &MockServer, bodies: Vec<String>) {
-    let responses = bodies
-        .into_iter()
-        .map(|body| {
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "text/event-stream")
-                .set_body_string(body)
-        })
-        .collect::<Vec<_>>();
+    let responses = bodies.into_iter().map(native_response).collect::<Vec<_>>();
+    mount_native_responses(server, responses).await;
+}
+
+fn native_response(body: String) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_string(body)
+}
+
+async fn mount_native_responses(server: &MockServer, responses: Vec<ResponseTemplate>) {
     let count = responses.len() as u64;
     Mock::given(method("POST"))
         .and(path("/v1/kimi/chat/completions"))
@@ -87,6 +92,18 @@ async fn mount_native(server: &MockServer, bodies: Vec<String>) {
         .up_to_n_times(count)
         .mount(server)
         .await;
+}
+
+fn native_retry_limit(builder: TestCodexBuilder, limit: u64) -> TestCodexBuilder {
+    builder.with_config(move |config| {
+        config.model_provider.stream_max_retries = Some(0);
+        config
+            .model_provider
+            .wire_routes
+            .get_mut("kimi_code")
+            .expect("Kimi route")
+            .stream_max_retries = Some(limit);
+    })
 }
 
 fn native_builder(server: &MockServer, model: &str) -> TestCodexBuilder {
@@ -394,31 +411,39 @@ async fn terminal_gate_and_discarding_outcomes_do_not_commit_or_continue() -> Re
     skip_if_no_network!(Ok(()));
     for (finish_reason, expected) in [
         ("length", "model output limit reached"),
+        ("max_tokens", "model output limit reached"),
         ("content_filter", "model refused"),
     ] {
         let server = responses::start_mock_server().await;
-        mount_native(
-            &server,
-            vec![text_terminal("discard", "discard me", finish_reason)],
-        )
-        .await;
+        let mut bodies = vec![text_terminal("discard", "discard me", finish_reason)];
+        if finish_reason == "length" {
+            bodies.push(text_terminal("recovered", "done", "stop"));
+        }
+        mount_native(&server, bodies).await;
         let test = native_builder(&server, "kimi/k3")
             .build_with_auto_env(&server)
             .await?;
         submit(&test, finish_reason, None).await?;
-        assert!(
-            completion(&test)
-                .await
-                .expect_err("discarding terminal")
-                .to_string()
-                .contains(expected)
-        );
+        let error = completion(&test).await.expect_err("discarding terminal");
+        assert!(error.to_string().contains(expected));
         assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+        if finish_reason == "length" {
+            submit(&test, "after exhaustion", None).await?;
+            completion(&test).await?;
+            let requests = server.received_requests().await.expect("requests");
+            assert_eq!(requests.len(), 2);
+            assert!(
+                !requests[1]
+                    .body_json::<Value>()?
+                    .to_string()
+                    .contains("discard me")
+            );
+        }
     }
 
     let server = responses::start_mock_server().await;
     mount_native(&server, vec![chunk("not-done", json!({"tool_calls":[{"index":0,"id":"call-never","type":"function","function":{"name":"exec_command","arguments":"{\"cmd\":\"pwd\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}"}}]}), Some("tool_calls"))]).await;
-    let test = native_builder(&server, "kimi/k3")
+    let test = native_retry_limit(native_builder(&server, "kimi/k3"), 0)
         .build_with_auto_env(&server)
         .await?;
     submit(&test, "never execute", None).await?;
@@ -431,4 +456,333 @@ async fn terminal_gate_and_discarding_outcomes_do_not_commit_or_continue() -> Re
     );
     assert_eq!(server.received_requests().await.expect("requests").len(), 1);
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retryable_failures_use_route_limit_and_keep_attempt_history_isolated() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let partial = [
+        chunk("failed-message", json!({"reasoning_content":"failed reasoning"}), None),
+        chunk("failed-message", json!({"tool_calls":[{"index":0,"id":"failed-call","type":"function","function":{"name":"exec_command","arguments":"{\"cmd\":\"printf failed-tool-executed\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}"}}]}), None),
+    ]
+    .concat();
+    let thinking_only = format!(
+        "{}data: [DONE]\n\n",
+        chunk(
+            "thinking-only",
+            json!({"reasoning_content":"discarded thinking"}),
+            Some("stop"),
+        )
+    );
+    let mut retry_responses = vec![
+        native_response(partial),
+        native_response("data: {not-json}\n\n".to_string()),
+        native_response(thinking_only),
+        native_response(text_terminal("empty", "", "stop")),
+    ];
+    retry_responses.extend(
+        [408, 409, 429, 500, 502, 503, 504, 529]
+            .map(|status| ResponseTemplate::new(status).insert_header("retry-after-ms", "0")),
+    );
+    retry_responses.push(native_response(text_terminal("success", "done", "stop")));
+    mount_native_responses(&server, retry_responses).await;
+    let test = native_retry_limit(native_builder(&server, "kimi/k3"), 12)
+        .build_with_auto_env(&server)
+        .await?;
+    submit(&test, "retry cleanly", None).await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandBegin(event) if event.call_id == "failed-call" => {
+            Some(Err(anyhow::anyhow!("failed-attempt tool executed")))
+        }
+        EventMsg::Error(error) => Some(Err(anyhow::anyhow!(error.message.clone()))),
+        EventMsg::TurnComplete(event) => Some(match &event.error {
+            Some(error) => Err(anyhow::anyhow!(error.message.clone())),
+            None => Ok(()),
+        }),
+        _ => None,
+    })
+    .await?;
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 13);
+    for request in &requests[1..] {
+        let body = request.body_json::<Value>()?.to_string();
+        for failed in [
+            "failed-message",
+            "failed reasoning",
+            "failed-call",
+            "failed-tool-executed",
+            "discarded thinking",
+            "tool_result",
+        ] {
+            assert!(!body.contains(failed), "retry retained {failed}");
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = format!("http://{}", listener.local_addr()?);
+    let connections = tokio::spawn(async move {
+        for _ in 0..2 {
+            drop(listener.accept().await?.0);
+        }
+        std::io::Result::Ok(())
+    });
+    let server = responses::start_mock_server().await;
+    let test = native_retry_limit(native_builder(&server, "kimi/k3"), 1)
+        .with_config(move |config| {
+            config
+                .model_provider
+                .wire_routes
+                .get_mut("kimi_code")
+                .expect("Kimi route")
+                .base_url = format!("{base_url}/v1/kimi");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    submit(&test, "exhaust connection limit", None).await?;
+    completion(&test).await.expect_err("connection limit");
+    tokio::time::timeout(Duration::from_secs(5), connections).await???;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn nonretryable_failures_and_overflow_preserve_stable_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    mount_native_responses(&server, vec![
+        ResponseTemplate::new(400).set_body_string("invalid request"),
+        ResponseTemplate::new(401).set_body_string("authentication_error"),
+        ResponseTemplate::new(429).set_body_string(
+            r#"{"error":{"type":"billing_error","message":"credit balance is too low"}}"#,
+        ),
+        native_response(format!(
+            "{}data: [DONE]\n\n",
+            chunk("unknown", json!({"content":"discard"}), Some("future_reason"))
+        )),
+        native_response(format!(
+            "{}data: [DONE]\n\n",
+            chunk("invalid-tool", json!({"tool_calls":[{"index":0,"id":"bad-call","type":"function","function":{"name":"exec_command","arguments":"{"}}]}), Some("tool_calls"))
+        )),
+        ResponseTemplate::new(400).set_body_string(
+            r#"{"error":{"type":"invalid_request_error","message":"maximum context length exceeded"}}"#,
+        ),
+        native_response(text_terminal("summary", "short stable summary", "stop")),
+        native_response(text_terminal("success", "done", "stop")),
+    ]).await;
+    let test = native_retry_limit(native_builder(&server, "kimi/k3"), 3)
+        .build_with_auto_env(&server)
+        .await?;
+    for (index, prompt) in ["invalid", "auth", "quota", "unknown", "invalid tool"]
+        .into_iter()
+        .enumerate()
+    {
+        submit(&test, prompt, None).await?;
+        completion(&test).await.expect_err("nonretryable failure");
+        assert_eq!(
+            server.received_requests().await.expect("requests").len(),
+            index + 1
+        );
+    }
+    submit(&test, "overflow me", None).await?;
+    completion(&test).await?;
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 8);
+    let compact: Value = requests[6].body_json()?;
+    assert!(
+        compact
+            .to_string()
+            .contains("CONTEXT CHECKPOINT COMPACTION")
+    );
+    let retry: Value = requests[7].body_json()?;
+    assert!(retry.to_string().contains("short stable summary"));
+    assert!(!retry.to_string().contains("provider summary"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancellation_does_not_enter_kimi_retry_policy() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    mount_native_responses(
+        &server,
+        vec![
+            native_response(text_terminal("cancelled", "never", "stop"))
+                .set_delay(Duration::from_secs(30)),
+        ],
+    )
+    .await;
+    let test = native_retry_limit(native_builder(&server, "kimi/k3"), 3)
+        .build_with_auto_env(&server)
+        .await?;
+    submit(&test, "cancel", None).await?;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnStarted(_)).then_some(())
+    })
+    .await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if server
+                .received_requests()
+                .await
+                .is_some_and(|requests| requests.len() == 1)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event_match(&test.codex, |event| {
+        matches!(event, EventMsg::TurnAborted(_)).then_some(())
+    })
+    .await;
+    assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+    Ok(())
+}
+
+fn serialized_input_tokens(body: &Value) -> u64 {
+    let input = serde_json::to_vec(&(&body["messages"], &body["tools"]))
+        .expect("serializable captured Kimi input");
+    u64::try_from(input.len()).unwrap_or(u64::MAX).div_ceil(4)
+}
+
+fn assert_completion_budget(body: &Value, context: u64, hard_cap: u64) {
+    let expected = hard_cap.min(context.saturating_sub(serialized_input_tokens(body)).max(1));
+    assert_eq!(body["max_completion_tokens"], expected);
+}
+
+fn set_first_user_prompt(body: &mut Value, prompt: &str) {
+    body["messages"][1]["content"] = prompt.into();
+}
+
+fn user_prompt_for_exact_tokens(template: &Value, target: u64) -> String {
+    let mut body = template.clone();
+    set_first_user_prompt(&mut body, "");
+    let fixed_bytes = serde_json::to_vec(&(&body["messages"], &body["tools"]))
+        .expect("serializable captured Kimi input")
+        .len();
+    let target_bytes = usize::try_from(target.saturating_mul(4)).expect("bounded target");
+    "x".repeat(target_bytes - fixed_bytes)
+}
+
+async fn capture_context_requests(
+    model: &str,
+    prompts: Vec<String>,
+    outputs: Vec<&str>,
+) -> Result<Vec<Value>> {
+    let server = responses::start_mock_server().await;
+    let bodies = outputs
+        .into_iter()
+        .map(|text| text_terminal("context", text, "stop"))
+        .collect();
+    mount_native(&server, bodies).await;
+    let test = native_builder(&server, model)
+        .build_with_auto_env(&server)
+        .await?;
+    for prompt in prompts {
+        submit(&test, &prompt, None).await?;
+        completion(&test).await?;
+    }
+    let requests = server.received_requests().await.expect("requests");
+    requests
+        .iter()
+        .map(|request| request.body_json().map_err(Into::into))
+        .collect()
+}
+
+async fn assert_context_policy(model: &str, context: u64, hard_cap: u64) -> Result<()> {
+    let calibration_pending = "pending-stage";
+    let requests = capture_context_requests(
+        model,
+        vec!["seed".to_string(), calibration_pending.to_string()],
+        vec!["stable", "done"],
+    )
+    .await?;
+    assert_eq!(requests.len(), 2);
+    let near_empty = &requests[0];
+    let two_turn_template = &requests[1];
+    assert_completion_budget(near_empty, context, hard_cap);
+    assert_completion_budget(two_turn_template, context, hard_cap);
+
+    let (neighbor, crossing) = if context == 1_048_576 {
+        let exact_85_percent = context.saturating_mul(85).div_ceil(100);
+        (exact_85_percent - 1, exact_85_percent)
+    } else {
+        (context - 50_000, context - 49_999)
+    };
+
+    let requests = capture_context_requests(
+        model,
+        vec![user_prompt_for_exact_tokens(near_empty, neighbor)],
+        vec!["done"],
+    )
+    .await?;
+    assert_eq!(requests.len(), 1);
+    let neighboring = &requests[0];
+    assert_eq!(serialized_input_tokens(neighboring), neighbor);
+    assert_completion_budget(neighboring, context, hard_cap);
+
+    let seed = user_prompt_for_exact_tokens(two_turn_template, crossing);
+    let mut staged_request = two_turn_template.clone();
+    set_first_user_prompt(&mut staged_request, &seed);
+    let requests = capture_context_requests(
+        model,
+        vec![seed, calibration_pending.to_string()],
+        vec!["stable", "boundary summary", "done"],
+    )
+    .await?;
+    let [seed_request, compact, sampled] = requests.as_slice() else {
+        unreachable!("request count asserted")
+    };
+    assert_eq!(serialized_input_tokens(&staged_request), crossing);
+    staged_request["messages"]
+        .as_array_mut()
+        .expect("messages")
+        .pop();
+    assert!(serialized_input_tokens(&staged_request) < crossing);
+    assert!(
+        compact
+            .to_string()
+            .contains("CONTEXT CHECKPOINT COMPACTION")
+    );
+    assert!(compact.to_string().contains(calibration_pending));
+    assert!(sampled.to_string().contains("boundary summary"));
+    for body in [&seed_request, &compact, &sampled] {
+        assert_completion_budget(body, context, hard_cap);
+    }
+
+    let requests = capture_context_requests(
+        model,
+        vec![user_prompt_for_exact_tokens(near_empty, context + 10_000)],
+        vec!["near-full summary", "done"],
+    )
+    .await?;
+    assert_eq!(requests.len(), 2);
+    let compact = &requests[0];
+    let sampled = &requests[1];
+    assert_completion_budget(compact, context, hard_cap);
+    assert_completion_budget(sampled, context, hard_cap);
+    assert_eq!(compact["max_completion_tokens"], 1);
+    assert_ne!(
+        sampled["max_completion_tokens"],
+        compact["max_completion_tokens"]
+    );
+    Ok(())
+}
+
+macro_rules! context_policy_tests {
+    ($($name:ident: ($model:literal, $context:literal, $cap:literal)),*) => {$(
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn $name() -> Result<()> {
+            skip_if_no_network!(Ok(()));
+            assert_context_policy($model, $context, $cap).await
+        }
+    )*};
+}
+
+context_policy_tests! {
+    k3_post_staging_context_policy: ("kimi/k3", 1_048_576, 131_072),
+    k3_256k_post_staging_context_policy: ("kimi/k3-256k", 262_144, 131_072),
+    coding_post_staging_context_policy: ("kimi/kimi-for-coding", 262_144, 32_768)
 }

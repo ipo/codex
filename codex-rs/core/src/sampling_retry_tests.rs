@@ -2,6 +2,7 @@ use super::*;
 use crate::session::tests::make_session_and_context;
 use chrono::TimeZone;
 use codex_api::TransportError;
+use codex_kimi_code::KimiStreamError;
 use http::HeaderValue;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
@@ -52,18 +53,30 @@ async fn live_native_retry_handler_uses_injected_headers_backoff_and_sleep() {
         ));
         retry!(&mut 0, error);
     }
+    let mut headers = HeaderMap::new();
+    headers.insert("retry-after-ms", HeaderValue::from_static("2750"));
+    let kimi_error = codex_api::map_api_error(classify_kimi_error_with_scheduler(
+        KimiStreamError::Request(ApiError::Transport(TransportError::Http {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            url: None,
+            headers: Some(headers),
+            body: Some("rate limited".to_string()),
+        })),
+        &scheduler,
+    ));
+    retry!(&mut 0, kimi_error);
     let mut retries = 0;
     for _ in 0..20 {
         retry!(&mut retries, CodexErr::Stream("temporary".into()));
     }
     let delays = delays.lock().expect("delays");
     assert_eq!(
-        delays[..3],
-        [1_250, 3_000, 5_000].map(Duration::from_millis)
+        delays[..4],
+        [1_250, 3_000, 5_000, 2_750].map(Duration::from_millis)
     );
     assert_eq!(
-        delays[3..9],
+        delays[4..10],
         [500, 1_000, 2_000, 4_000, 8_000, 16_000].map(Duration::from_millis)
     );
-    assert_eq!(delays[9..], [Duration::from_secs(32); 14]);
+    assert_eq!(delays[10..], [Duration::from_secs(32); 14]);
 }

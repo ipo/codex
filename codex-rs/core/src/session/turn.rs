@@ -1255,6 +1255,34 @@ async fn run_sampling_request(
             turn_context.as_ref(),
             base_instructions.clone(),
         );
+        if matches!(retry_policy, SamplingRetryPolicy::NativeKimi { .. })
+            && !boundary_compacted
+            && crate::client::kimi_dispatch::should_compact(
+                &turn_context.model_info,
+                crate::client::kimi_dispatch::estimated_input_tokens(
+                    &prompt,
+                    &turn_context.model_info,
+                )?,
+            )
+        {
+            run_auto_compact(
+                &sess,
+                Arc::clone(&step_context),
+                /*fallback_step_context*/ None,
+                client_session,
+                InitialContextInjection::BeforeLastUserMessage {
+                    world_state: Arc::clone(&world_state),
+                    step_context: Arc::clone(&step_context),
+                },
+                CompactionReason::ContextLimit,
+                CompactionPhase::PreTurn,
+            )
+            .await?;
+            boundary_compacted = true;
+            retries = 0;
+            initial_input = None;
+            continue;
+        }
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
@@ -1273,8 +1301,11 @@ async fn run_sampling_request(
             }
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
-                    if matches!(retry_policy, SamplingRetryPolicy::NativeClaude { .. })
-                        && !overflow_compacted
+                    if matches!(
+                        retry_policy,
+                        SamplingRetryPolicy::NativeClaude { .. }
+                            | SamplingRetryPolicy::NativeKimi { .. }
+                    ) && !overflow_compacted
                     {
                         run_auto_compact(
                             &sess,
@@ -1328,7 +1359,8 @@ async fn run_sampling_request(
                 )
                 .await?;
             }
-            SamplingRetryPolicy::NativeClaude { max_retries } => {
+            SamplingRetryPolicy::NativeClaude { max_retries }
+            | SamplingRetryPolicy::NativeKimi { max_retries } => {
                 handle_native_sampling_retry(
                     max_retries,
                     &mut retries,
