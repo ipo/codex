@@ -37,12 +37,17 @@ impl DialectHooks for RecordingDialect {
         replay: AssistantReasoningReplay<'_>,
     ) -> Result<Extensions, DialectError> {
         self.record(context);
-        if replay.opaque == Some("malformed") {
+        if replay.opaque == OpaqueReasoning::Other("malformed") {
             return Err(DialectError::MalformedReplay("invalid fixture".into()));
         }
+        let opaque = match replay.opaque {
+            OpaqueReasoning::None => None,
+            OpaqueReasoning::AnthropicThinking => None,
+            OpaqueReasoning::Other(opaque) => Some(opaque),
+        };
         Ok(BTreeMap::from([(
             "reasoning_content".into(),
-            json!({"visible": replay.visible, "opaque": replay.opaque}),
+            json!({"visible": replay.visible, "opaque": opaque}),
         )]))
     }
 
@@ -50,7 +55,7 @@ impl DialectHooks for RecordingDialect {
         &self,
         context: DialectContext<'_>,
         _extensions: &Extensions,
-    ) -> Result<Option<String>, DialectError> {
+    ) -> Result<Option<ReasoningDelta>, DialectError> {
         self.record(context);
         Ok(None)
     }

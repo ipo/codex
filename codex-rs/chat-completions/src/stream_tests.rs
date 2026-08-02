@@ -23,9 +23,9 @@ impl TestDialect {
 impl DialectHooks for TestDialect {
     fn request_extensions(&self, _context: DialectContext<'_>) -> Result<BTreeMap<String, Value>, DialectError> { unreachable!() }
     fn assistant_reasoning(&self, _context: DialectContext<'_>, _replay: AssistantReasoningReplay<'_>) -> Result<BTreeMap<String, Value>, DialectError> { unreachable!() }
-    fn reasoning_delta(&self, context: DialectContext<'_>, extensions: &BTreeMap<String, Value>) -> Result<Option<String>, DialectError> {
+    fn reasoning_delta(&self, context: DialectContext<'_>, extensions: &BTreeMap<String, Value>) -> Result<Option<ReasoningDelta>, DialectError> {
         self.record(context, "reasoning");
-        Ok(extensions.get("reasoning_content").and_then(Value::as_str).map(str::to_string))
+        Ok(extensions.get("reasoning_content").and_then(Value::as_str).map(|text| ReasoningDelta { text:text.to_string(), provenance:"reasoning_content".into() }))
     }
     fn finish_reason(&self, context: DialectContext<'_>, reason: FinishReason) -> Result<TerminalOutcome, DialectError> {
         self.record(context, "finish");
@@ -39,7 +39,7 @@ impl DialectHooks for TestDialect {
     fn usage_details(&self, context: DialectContext<'_>, usage: &ChunkUsage) -> Result<UsageDetails, DialectError> {
         self.record(context, "usage");
         let reasoning_tokens = usage.details.get("completion_tokens_details").and_then(|value| value.get("reasoning_tokens")).and_then(Value::as_u64).unwrap_or(0);
-        Ok(UsageDetails { reasoning_tokens })
+        Ok(UsageDetails { cached_prompt_tokens:0, reasoning_tokens })
     }
 }
 
@@ -86,10 +86,10 @@ fn reconstructs_fragmented_interleaved_reasoning_content_parallel_tools_and_meta
     let (decoded, presentation) = decode(&body, &dialect);
     assert_eq!(decoded, Ok(DecodedStream {
         response_id:"chat-1".into(), terminal_outcome:TerminalOutcome::ToolsReady,
-        pending:Some(PendingResult { content:"hello ".into(), reasoning:"th🧠ink carefully".into(), tool_calls:vec![
+        pending:Some(PendingResult { content:"hello ".into(), reasoning:"th🧠ink carefully".into(), reasoning_provenance:Some("reasoning_content".into()), tool_calls:vec![
             ToolCall { id:"call-b".into(), kind:ToolCallKind::Function, function:ToolCallFunction { name:"beta".into(), arguments:"{\"b\":2}".into() } },
             ToolCall { id:"call-a".into(), kind:ToolCallKind::Function, function:ToolCallFunction { name:"alpha".into(), arguments:"{\"a\":1}".into() } },
-        ]}), usage:Some(serde_json::from_value(usage).unwrap()), usage_details:UsageDetails { reasoning_tokens:3 }, metadata:ResponseMetadata { trace_id:Some("trace-7".into()) },
+        ]}), usage:Some(serde_json::from_value(usage).unwrap()), usage_details:UsageDetails { cached_prompt_tokens:0, reasoning_tokens:3 }, metadata:ResponseMetadata { trace_id:Some("trace-7".into()) },
     }));
     assert_eq!(presentation, vec![
         PresentationDelta::Reasoning("th🧠ink ".into()), PresentationDelta::ToolArguments { index:4, delta:"{\"b\":".into() },

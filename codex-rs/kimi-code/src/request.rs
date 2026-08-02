@@ -1,13 +1,19 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use codex_api::TerminalOutcome;
 use codex_chat_completions::AssistantReasoningReplay;
 use codex_chat_completions::ChatCompletionsRequest;
 use codex_chat_completions::ChatMessage;
+use codex_chat_completions::ChunkUsage;
 use codex_chat_completions::DialectContext;
 use codex_chat_completions::DialectError;
 use codex_chat_completions::DialectHooks;
 use codex_chat_completions::EncodeError;
+use codex_chat_completions::FinishReason;
+use codex_chat_completions::OpaqueReasoning;
+use codex_chat_completions::ReasoningDelta;
+use codex_chat_completions::UsageDetails;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::KimiInferenceConfig;
 use codex_protocol::model_inference::KimiThinkingPolicy;
@@ -98,6 +104,11 @@ impl KimiDialect {
         if profile.wire_model.is_empty() || profile.wire_model.len() > MAX_PROFILE_FIELD_LEN {
             return Err(KimiError::InvalidProfile("invalid wire model"));
         }
+        if !crate::response::marker_is_bounded(&profile.wire_model) {
+            return Err(KimiError::InvalidProfile(
+                "wire model cannot fit the bounded replay marker",
+            ));
+        }
         if profile.max_output_tokens == 0 || settings.context_window == 0 {
             return Err(KimiError::InvalidProfile("invalid token budget"));
         }
@@ -172,13 +183,30 @@ fn normalize_messages(messages: &mut [ChatMessage]) -> Result<(), KimiError> {
             }
         }
     }
+    let reasoning_key = messages
+        .iter()
+        .filter_map(|message| match message {
+            ChatMessage::Assistant(assistant) => assistant.reasoning.keys().find(|key| {
+                matches!(
+                    key.as_str(),
+                    "reasoning_content" | "reasoning" | "reasoning_details"
+                )
+            }),
+            ChatMessage::System { .. } | ChatMessage::User { .. } | ChatMessage::Tool { .. } => {
+                None
+            }
+        })
+        .next_back()
+        .cloned()
+        .unwrap_or_else(|| "reasoning_content".to_string());
     for message in messages {
         match message {
             ChatMessage::Assistant(assistant) => {
-                assistant
-                    .reasoning
-                    .entry("reasoning_content".to_string())
-                    .or_insert_with(|| Value::String(String::new()));
+                let reasoning = ["reasoning_content", "reasoning", "reasoning_details"]
+                    .into_iter()
+                    .find_map(|key| assistant.reasoning.remove(key))
+                    .unwrap_or_else(|| Value::String(String::new()));
+                assistant.reasoning.insert(reasoning_key.clone(), reasoning);
                 for call in &mut assistant.tool_calls {
                     call.id = ids[&call.id].clone();
                 }
@@ -244,9 +272,44 @@ impl DialectHooks for KimiDialect {
         replay: AssistantReasoningReplay<'_>,
     ) -> Result<BTreeMap<String, Value>, DialectError> {
         self.validate_context(context)?;
+        let opaque = match replay.opaque {
+            OpaqueReasoning::None => None,
+            OpaqueReasoning::AnthropicThinking => return Ok(BTreeMap::new()),
+            OpaqueReasoning::Other(opaque) => Some(opaque),
+        };
+        let Some(field) = crate::response::replay_field(context, opaque)? else {
+            return Ok(BTreeMap::new());
+        };
         Ok(BTreeMap::from([(
-            "reasoning_content".to_string(),
+            field.to_string(),
             replay.visible.concat().into(),
         )]))
+    }
+
+    fn reasoning_delta(
+        &self,
+        context: DialectContext<'_>,
+        extensions: &BTreeMap<String, Value>,
+    ) -> Result<Option<ReasoningDelta>, DialectError> {
+        self.validate_context(context)?;
+        crate::response::reasoning_delta(extensions)
+    }
+
+    fn finish_reason(
+        &self,
+        context: DialectContext<'_>,
+        reason: FinishReason,
+    ) -> Result<TerminalOutcome, DialectError> {
+        self.validate_context(context)?;
+        Ok(crate::response::finish_reason(reason))
+    }
+
+    fn usage_details(
+        &self,
+        context: DialectContext<'_>,
+        usage: &ChunkUsage,
+    ) -> Result<UsageDetails, DialectError> {
+        self.validate_context(context)?;
+        crate::response::usage_details(usage)
     }
 }

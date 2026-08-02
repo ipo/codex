@@ -22,6 +22,7 @@ use crate::FunctionDefinition;
 use crate::FunctionTool;
 use crate::ImageUrl;
 use crate::MessageContent;
+use crate::OpaqueReasoning;
 use crate::ToolCall;
 use crate::ToolCallFunction;
 use crate::types::FunctionToolKind;
@@ -164,7 +165,7 @@ fn encode_history(
                     params.context,
                     AssistantReasoningReplay {
                         visible: &visible,
-                        opaque: encrypted_content.as_deref(),
+                        opaque: classify_opaque_reasoning(encrypted_content.as_deref()),
                     },
                 )?;
                 reject_reserved(&reasoning, &["role", "content", "tool_calls"], "assistant")?;
@@ -222,6 +223,18 @@ fn encode_history(
         }
     }
     Ok(())
+}
+
+fn classify_opaque_reasoning(opaque: Option<&str>) -> OpaqueReasoning<'_> {
+    const ANTHROPIC_THINKING_PREFIX: &str = "codex:anthropic-thinking:";
+
+    match opaque {
+        None => OpaqueReasoning::None,
+        Some(opaque) if opaque.starts_with(ANTHROPIC_THINKING_PREFIX) => {
+            OpaqueReasoning::AnthropicThinking
+        }
+        Some(opaque) => OpaqueReasoning::Other(opaque),
+    }
 }
 
 fn assistant(messages: &mut Vec<ChatMessage>) -> &mut AssistantMessage {
