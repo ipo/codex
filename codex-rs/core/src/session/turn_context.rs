@@ -9,6 +9,7 @@ use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::ErrorEvent;
@@ -218,12 +219,19 @@ impl TurnContext {
     }
 
     pub(crate) fn model_context_window(&self) -> Option<i64> {
-        let effective_context_window_percent = self.model_info.effective_context_window_percent;
-        self.model_info
-            .resolved_context_window()
-            .map(|context_window| {
-                context_window.saturating_mul(effective_context_window_percent) / 100
-            })
+        let model = &self.model_info;
+        let reserved_output = match model.inference.as_ref() {
+            Some(ModelInferenceConfig::Anthropic {
+                max_output_tokens, ..
+            }) => i64::from(*max_output_tokens),
+            Some(ModelInferenceConfig::OpenAi { .. })
+            | Some(ModelInferenceConfig::Kimi(_))
+            | None => 0,
+        };
+        model.resolved_context_window().map(|window| {
+            (window.saturating_mul(model.effective_context_window_percent) / 100)
+                .saturating_sub(reserved_output)
+        })
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {

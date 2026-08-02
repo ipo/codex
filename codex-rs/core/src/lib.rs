@@ -15,6 +15,7 @@ mod realtime_conversation;
 mod realtime_prompt;
 mod responses_metadata;
 mod responses_retry;
+mod sampling_retry;
 pub(crate) mod session;
 pub use responses_metadata::CodexResponsesMetadata;
 pub use session::SteerInputError;

@@ -2,7 +2,6 @@ use super::*;
 use codex_claude_code::CanonicalOutputSchema;
 use codex_claude_code::ClaudeHttpAdapter;
 use codex_claude_code::EncodeRequest;
-use codex_claude_code::NativeStreamError;
 use codex_claude_code::SystemBlock;
 use codex_claude_code::encode_request;
 use codex_model_provider_info::ResolvedWireRoute;
@@ -10,6 +9,8 @@ use codex_protocol::model_inference::AnthropicThinkingPolicy;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use futures::TryStreamExt;
+
+use crate::sampling_retry::classify_native_error;
 
 const CLAUDE_MESSAGES_ENDPOINT: &str = "/v1/messages";
 
@@ -94,10 +95,10 @@ impl ModelClientSession {
             .with_telemetry(Some(request_telemetry))
             .stream_request(request, cancellation.clone())
             .await
-            .map_err(map_native_error)
+            .map_err(classify_native_error)
             .map_err(|error| self.client.state.provider.map_api_error(error))?;
         let upstream_request_id = stream.upstream_request_id.clone();
-        let stream = stream.map_err(map_native_error);
+        let stream = stream.map_err(classify_native_error);
         Ok(map_response_events_with_cancellation(
             upstream_request_id,
             stream,
@@ -168,20 +169,8 @@ fn provider_for_route(mut provider: ApiProvider, route: &ResolvedWireRoute) -> R
         CodexErr::InvalidRequest("native Claude route requires a base URL".to_string())
     })?;
     provider.query_params = None;
-    provider.retry.max_attempts = route.request_max_retries;
+    // Native request and stream failures share one route-scoped retry budget in the turn loop.
+    provider.retry.max_attempts = 0;
     provider.stream_idle_timeout = route.stream_idle_timeout;
     Ok(provider)
-}
-
-fn map_native_error(error: NativeStreamError) -> ApiError {
-    match error {
-        NativeStreamError::Request(error) => error,
-        NativeStreamError::InvalidRequest(message) => ApiError::InvalidRequest { message },
-        NativeStreamError::Cancelled => ApiError::Stream("native Claude stream cancelled".into()),
-        NativeStreamError::IdleTimeout => {
-            ApiError::Stream("native Claude stream idle timeout".into())
-        }
-        NativeStreamError::Transport(message) => ApiError::Stream(message),
-        NativeStreamError::Decode(error) => ApiError::Stream(error.to_string()),
-    }
 }

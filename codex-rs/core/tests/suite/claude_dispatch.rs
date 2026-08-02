@@ -1,5 +1,6 @@
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::Result;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
@@ -15,6 +16,7 @@ use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use tokio::net::TcpListener;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
@@ -28,16 +30,36 @@ fn event(name: &str, data: Value) -> String {
     format!("event: {name}\ndata: {data}\n\n")
 }
 
+fn native_sse(body: String) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_string(body)
+}
+
 fn start(id: &str, model: &str) -> String {
+    start_with_input_tokens(id, model, /*input_tokens*/ 3)
+}
+
+fn start_with_input_tokens(id: &str, model: &str, input_tokens: i64) -> String {
     event(
         "message_start",
-        json!({"type":"message_start","message":{"id":id,"type":"message","role":"assistant","model":model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":0}}}),
+        json!({"type":"message_start","message":{"id":id,"type":"message","role":"assistant","model":model,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":input_tokens,"output_tokens":0}}}),
     )
 }
 
 fn text_terminal(id: &str, model: &str, text: &str, reason: &str) -> String {
+    text_terminal_with_input_tokens(id, model, text, reason, /*input_tokens*/ 3)
+}
+
+fn text_terminal_with_input_tokens(
+    id: &str,
+    model: &str,
+    text: &str,
+    reason: &str,
+    input_tokens: i64,
+) -> String {
     [
-        start(id, model),
+        start_with_input_tokens(id, model, input_tokens),
         event("content_block_start", json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})),
         event("content_block_delta", json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":text}})),
         event("content_block_stop", json!({"type":"content_block_stop","index":0})),
@@ -64,30 +86,45 @@ fn parallel_exec_commands(model: &str) -> String {
 
 struct Sequence {
     next: AtomicUsize,
-    bodies: Vec<String>,
+    responses: Vec<ResponseTemplate>,
 }
 
 impl Respond for Sequence {
     fn respond(&self, _: &Request) -> ResponseTemplate {
         let index = self.next.fetch_add(1, Ordering::SeqCst);
-        ResponseTemplate::new(200)
-            .insert_header("content-type", "text/event-stream")
-            .set_body_string(self.bodies[index].clone())
+        self.responses[index].clone()
     }
 }
 
 async fn mount_native(server: &MockServer, bodies: Vec<String>) {
-    let count = bodies.len() as u64;
+    let responses = bodies.into_iter().map(native_sse).collect();
+    mount_native_responses(server, responses).await;
+}
+
+async fn mount_native_responses(server: &MockServer, responses: Vec<ResponseTemplate>) {
+    let count = responses.len() as u64;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .and(query_param("beta", "true"))
         .respond_with(Sequence {
             next: AtomicUsize::new(0),
-            bodies,
+            responses,
         })
         .up_to_n_times(count)
         .mount(server)
         .await;
+}
+
+fn native_retry_limit(builder: TestCodexBuilder, limit: u64) -> TestCodexBuilder {
+    builder.with_config(move |config| {
+        config.model_provider.stream_max_retries = Some(0);
+        config
+            .model_provider
+            .wire_routes
+            .get_mut("claude_code")
+            .expect("Claude route")
+            .stream_max_retries = Some(limit);
+    })
 }
 
 fn native_builder(server: &MockServer, model: &str) -> TestCodexBuilder {
@@ -114,6 +151,11 @@ async fn submit_and_expect_completion(
     test: &core_test_support::test_codex::TestCodex,
     text: &str,
 ) -> Result<()> {
+    submit(test, text).await?;
+    wait_for_completion(test).await
+}
+
+async fn submit(test: &core_test_support::test_codex::TestCodex, text: &str) -> Result<()> {
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -126,8 +168,7 @@ async fn submit_and_expect_completion(
             thread_settings: Default::default(),
         })
         .await?;
-
-    wait_for_completion(test).await
+    Ok(())
 }
 
 async fn wait_for_completion(test: &core_test_support::test_codex::TestCodex) -> Result<()> {
@@ -143,14 +184,14 @@ async fn wait_for_completion(test: &core_test_support::test_codex::TestCodex) ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_haiku_and_adaptive_requests_capture_exact_route_policy_and_identity() -> Result<()>
-{
+async fn native_profiles_capture_route_policy_and_compact_at_reserved_boundary() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    for (model, wire_model, max_tokens, thinking, output_config) in [
+    for (model, wire_model, max_tokens, prior_input_tokens, thinking, output_config) in [
         (
             "anthropic/claude-haiku-4-5-20251001",
             "claude-haiku-4-5-20251001",
             32_000,
+            157_500,
             json!({"type":"enabled","budget_tokens":31999,"display":"omitted"}),
             Value::Null,
         ),
@@ -158,6 +199,7 @@ async fn native_haiku_and_adaptive_requests_capture_exact_route_policy_and_ident
             "anthropic/claude-sonnet-5",
             "claude-sonnet-5",
             64_000,
+            885_500,
             json!({"type":"adaptive","display":"omitted"}),
             json!({"effort":"high"}),
         ),
@@ -165,7 +207,17 @@ async fn native_haiku_and_adaptive_requests_capture_exact_route_policy_and_ident
         let server = responses::start_mock_server().await;
         mount_native(
             &server,
-            vec![text_terminal("msg-ok", wire_model, "done", "end_turn")],
+            vec![
+                text_terminal_with_input_tokens(
+                    "seed",
+                    wire_model,
+                    "seeded",
+                    "end_turn",
+                    prior_input_tokens,
+                ),
+                text_terminal("compact", wire_model, "boundary summary", "end_turn"),
+                text_terminal("success", wire_model, "done", "end_turn"),
+            ],
         )
         .await;
         let test = native_builder(&server, model)
@@ -211,6 +263,23 @@ async fn native_haiku_and_adaptive_requests_capture_exact_route_policy_and_ident
         }
         assert!(request.headers.contains_key("anthropic-beta"));
         assert!(request.headers.contains_key("x-claude-code-session-id"));
+        let pending = format!("boundary input {}", "x".repeat(4_000));
+        test.submit_turn_with_environments(&pending, Some(Vec::new()))
+            .await?;
+
+        let requests = server.received_requests().await.expect("requests");
+        assert_eq!(requests.len(), 3);
+        let compact: Value = requests[1].body_json()?;
+        assert_eq!(compact["max_tokens"], max_tokens);
+        assert!(
+            compact
+                .to_string()
+                .contains("CONTEXT CHECKPOINT COMPACTION")
+        );
+        assert!(compact.to_string().contains(&pending));
+        let sampling: Value = requests[2].body_json()?;
+        assert!(sampling.to_string().contains("boundary summary"));
+        assert!(sampling.to_string().contains(&pending));
     }
     Ok(())
 }
@@ -348,33 +417,174 @@ async fn discarding_and_protocol_terminals_leave_native_history_stable() -> Resu
             text_terminal("msg-refused", model, "discard refusal", "refusal"),
             text_terminal("msg-after-refusal", model, "recovered again", "end_turn"),
             unknown,
-            text_terminal("msg-after-protocol", model, "protocol retry", "end_turn"),
         ],
     )
     .await;
-    let test = native_builder(&server, "anthropic/claude-sonnet-5")
-        .with_config(|config| config.model_provider.stream_max_retries = Some(1))
+    let test = native_retry_limit(native_builder(&server, "anthropic/claude-sonnet-5"), 3)
         .build_with_auto_env(&server)
         .await?;
-    for prompt in [
-        "exhaust",
-        "after exhaustion",
-        "refuse",
-        "after refusal",
-        "protocol",
-    ] {
+    for prompt in ["exhaust", "after exhaustion", "refuse", "after refusal"] {
         test.submit_turn_with_environments(prompt, Some(Vec::new()))
             .await?;
     }
+    let error = submit_and_expect_completion(&test, "protocol")
+        .await
+        .expect_err("strict protocol failure should not retry");
+    assert!(
+        error
+            .to_string()
+            .contains("unknown native Claude stop reason")
+    );
     let requests = server.received_requests().await.expect("requests");
-    assert_eq!(requests.len(), 6);
+    assert_eq!(requests.len(), 5);
     let bodies = requests
         .iter()
         .map(|request| request.body_json::<Value>().expect("body").to_string())
         .collect::<Vec<_>>();
     assert!(!bodies[1].contains("discard exhausted"));
     assert!(!bodies[3].contains("discard refusal"));
-    assert!(!bodies[5].contains("future_reason"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_route_retry_limit_covers_http_sse_and_stable_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let model = "claude-sonnet-5";
+    let partial = [
+        start("failed-message", model),
+        event("content_block_start", json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}})),
+        event("content_block_delta", json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"failed reasoning"}})),
+        event("content_block_delta", json!({"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"failed-signature"}})),
+        event("content_block_stop", json!({"type":"content_block_stop","index":0})),
+        event("content_block_start", json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"failed-call","name":"exec_command","input":{}}})),
+        event("content_block_delta", json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"cmd\":\"printf failed-tool-executed\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}"}})),
+        event("content_block_stop", json!({"type":"content_block_stop","index":1})),
+    ].concat();
+    let mut retry_responses = vec![
+        native_sse(partial),
+        native_sse(event(
+            "error",
+            json!({"type":"error","error":{"type":"overloaded_error","message":"busy"}}),
+        )),
+    ];
+    retry_responses.extend(
+        [408, 409, 429, 500, 502, 503, 504, 529]
+            .map(|status| ResponseTemplate::new(status).insert_header("retry-after-ms", "0")),
+    );
+    retry_responses.push(native_sse(text_terminal(
+        "success", model, "done", "end_turn",
+    )));
+    mount_native_responses(&server, retry_responses).await;
+    let test = native_retry_limit(native_builder(&server, "anthropic/claude-sonnet-5"), 10)
+        .build_with_auto_env(&server)
+        .await?;
+    submit(&test, "retry cleanly").await?;
+    wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ExecCommandBegin(event) if event.call_id == "failed-call" => {
+            Some(Err(anyhow::anyhow!("failed-attempt tool executed")))
+        }
+        EventMsg::Error(error) => Some(Err(anyhow::anyhow!(error.message.clone()))),
+        EventMsg::TurnComplete(event) => Some(match &event.error {
+            Some(error) => Err(anyhow::anyhow!(error.message.clone())),
+            None => Ok(()),
+        }),
+        _ => None,
+    })
+    .await?;
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 11);
+    for request in &requests[1..] {
+        let body = request.body_json::<Value>()?.to_string();
+        for failed in [
+            "failed-message",
+            "failed reasoning",
+            "failed-signature",
+            "failed-call",
+            "failed-tool-executed",
+            "tool_result",
+        ] {
+            assert!(!body.contains(failed), "retry retained {failed}");
+        }
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = format!("http://{}", listener.local_addr()?);
+    let connections = tokio::spawn(async move {
+        for _ in 0..2 {
+            drop(listener.accept().await?.0);
+        }
+        std::io::Result::Ok(())
+    });
+    let server = responses::start_mock_server().await;
+    let test = native_retry_limit(native_builder(&server, "anthropic/claude-sonnet-5"), 1)
+        .with_config(move |config| {
+            config
+                .model_provider
+                .wire_routes
+                .get_mut("claude_code")
+                .expect("Claude route")
+                .base_url = base_url;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    submit_and_expect_completion(&test, "exhaust connection limit")
+        .await
+        .expect_err("limit");
+    tokio::time::timeout(Duration::from_secs(5), connections).await???;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_invalid_auth_and_quota_fail_without_retry() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    for response in [
+        ResponseTemplate::new(400).set_body_string("invalid request"),
+        ResponseTemplate::new(401).set_body_string("authentication_error"),
+        ResponseTemplate::new(429).set_body_string(
+            r#"{"error":{"type":"billing_error","message":"credit balance is too low"}}"#,
+        ),
+    ] {
+        let server = responses::start_mock_server().await;
+        mount_native_responses(&server, vec![response]).await;
+        let test = native_retry_limit(native_builder(&server, "anthropic/claude-sonnet-5"), 3)
+            .build_with_auto_env(&server)
+            .await?;
+        submit_and_expect_completion(&test, "nonretryable")
+            .await
+            .expect_err("nonretryable native failure");
+        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_context_overflow_compacts_locally_then_retries() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let model = "claude-sonnet-5";
+    mount_native_responses(&server, vec![
+        ResponseTemplate::new(400).set_body_string(r#"{"error":{"type":"invalid_request_error","message":"prompt is too long for the context window"}}"#),
+        ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(text_terminal("summary", model, "short stable summary", "end_turn")),
+        ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(text_terminal("success", model, "done", "end_turn")),
+    ]).await;
+    let test = native_retry_limit(native_builder(&server, "anthropic/claude-sonnet-5"), 1)
+        .build_with_auto_env(&server)
+        .await?;
+    submit_and_expect_completion(&test, "overflow me").await?;
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 3);
+    let retry: Value = requests[2].body_json()?;
+    let summary_message = retry["messages"]
+        .as_array()
+        .and_then(|messages| {
+            messages
+                .iter()
+                .find(|message| message.to_string().contains("short stable summary"))
+        })
+        .expect("plaintext summary in compacted history");
+    assert_eq!(summary_message["role"], "user");
+    assert!(!retry.to_string().contains("failed-message"));
     Ok(())
 }
 
@@ -382,12 +592,18 @@ async fn discarding_and_protocol_terminals_leave_native_history_stable() -> Resu
 async fn current_kimi_profile_stays_on_responses() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
-    let response = responses::mount_sse_once(
+    let response = responses::mount_sse_sequence(
         &server,
-        responses::sse(vec![
-            responses::ev_assistant_message("msg", "done"),
-            responses::ev_completed("response"),
-        ]),
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "seeded"),
+                responses::ev_completed_with_tokens("response-1", /*total_tokens*/ 200_000),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-2", "done"),
+                responses::ev_completed("response-2"),
+            ]),
+        ],
     )
     .await;
     let test = test_codex()
@@ -395,8 +611,19 @@ async fn current_kimi_profile_stays_on_responses() -> Result<()> {
         .build_with_auto_env(&server)
         .await?;
     test.submit_turn("hello kimi").await?;
-    let request = response.single_request();
-    assert_eq!(request.path(), "/v1/responses");
-    assert_eq!(request.body_json()["model"], "kimi/k3");
+    test.submit_turn(&format!("boundary input {}", "x".repeat(4_000)))
+        .await?;
+    let requests = response.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.path() == "/v1/responses")
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.body_json()["model"] == "kimi/k3")
+    );
     Ok(())
 }

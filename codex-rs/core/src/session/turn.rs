@@ -16,6 +16,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
+use crate::context::world_state::WorldState;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
 use crate::hook_runtime::inspect_pending_input;
@@ -39,6 +40,9 @@ use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::sampling_retry::RetryScheduler;
+use crate::sampling_retry::SamplingRetryPolicy;
+use crate::sampling_retry::handle_native_sampling_retry;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::presentation_lifecycle::PresentationItem;
@@ -317,6 +321,7 @@ pub(crate) async fn run_turn(
                 &mut client_session,
                 &responses_metadata,
                 sampling_request_input,
+                Arc::clone(&world_state),
                 cancellation_token.child_token(),
             )
             .await
@@ -1180,6 +1185,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
     input: Vec<ResponseItem>,
+    world_state: Arc<WorldState>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
     let turn_context = Arc::clone(&step_context.turn);
@@ -1199,11 +1205,43 @@ async fn run_sampling_request(
         Arc::clone(&router),
         Arc::clone(&turn_diff_tracker),
     );
-    let max_retries = turn_context.provider.info().stream_max_retries();
+    let retry_policy =
+        SamplingRetryPolicy::resolve(turn_context.provider.info(), &turn_context.model_info)?;
+    let retry_scheduler = RetryScheduler::production();
     let mut retries = 0;
+    let mut overflow_compacted = false;
+    let mut boundary_compacted = false;
     let mut initial_input = Some(input);
     let mut original_input = None;
     loop {
+        // Unlike the earlier pre-turn check, this boundary sees the context injections and user
+        // input already staged after the last server-reported usage.
+        if matches!(retry_policy, SamplingRetryPolicy::NativeClaude { .. }) && !boundary_compacted {
+            let token_status = super::context_window::context_window_token_status(
+                sess.as_ref(),
+                turn_context.as_ref(),
+            )
+            .await;
+            if token_status.full_context_window_limit_reached {
+                run_auto_compact(
+                    &sess,
+                    Arc::clone(&step_context),
+                    /*fallback_step_context*/ None,
+                    client_session,
+                    InitialContextInjection::BeforeLastUserMessage {
+                        world_state: Arc::clone(&world_state),
+                        step_context: Arc::clone(&step_context),
+                    },
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::PreTurn,
+                )
+                .await?;
+                boundary_compacted = true;
+                retries = 0;
+                initial_input = None;
+                continue;
+            }
+        }
         let prompt_input = if let Some(input) = initial_input.take() {
             input
         } else {
@@ -1235,6 +1273,26 @@ async fn run_sampling_request(
             }
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
+                    if matches!(retry_policy, SamplingRetryPolicy::NativeClaude { .. })
+                        && !overflow_compacted
+                    {
+                        run_auto_compact(
+                            &sess,
+                            Arc::clone(&step_context),
+                            /*fallback_step_context*/ None,
+                            client_session,
+                            InitialContextInjection::BeforeLastUserMessage {
+                                world_state: Arc::clone(&world_state),
+                                step_context: Arc::clone(&step_context),
+                            },
+                            CompactionReason::ContextLimit,
+                            CompactionPhase::MidTurn,
+                        )
+                        .await?;
+                        overflow_compacted = true;
+                        retries = 0;
+                        continue;
+                    }
                     sess.set_total_tokens_full(&turn_context).await;
                     return Err(err);
                 }
@@ -1253,20 +1311,35 @@ async fn run_sampling_request(
             original_input = Some(prompt.input);
         }
 
-        if !err.is_retryable() {
+        if !retry_policy.is_retryable(&err) {
             return Err(err);
         }
 
-        handle_retryable_response_stream_error(
-            &mut retries,
-            max_retries,
-            err,
-            client_session,
-            &sess,
-            &turn_context,
-            ResponsesStreamRequest::Sampling,
-        )
-        .await?;
+        match retry_policy {
+            SamplingRetryPolicy::Responses { max_retries } => {
+                handle_retryable_response_stream_error(
+                    &mut retries,
+                    max_retries,
+                    err,
+                    client_session,
+                    &sess,
+                    &turn_context,
+                    ResponsesStreamRequest::Sampling,
+                )
+                .await?;
+            }
+            SamplingRetryPolicy::NativeClaude { max_retries } => {
+                handle_native_sampling_retry(
+                    max_retries,
+                    &mut retries,
+                    err,
+                    &sess,
+                    &turn_context,
+                    &retry_scheduler,
+                )
+                .await?;
+            }
+        }
         turn_context.turn_timing_state.record_sampling_retry();
     }
 }
