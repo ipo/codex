@@ -1937,12 +1937,14 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             set_web_search_mode(turn, WebSearchMode::Live);
             turn.model_info.use_responses_lite = false;
             turn.model_info.input_modalities = vec![InputModality::Image];
-            turn.model_info.inference = Some(ModelInferenceConfig::Kimi {
+            turn.model_info.inference = Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
                 wire_api: WireApi::ChatCompletions,
                 dialect: InferenceDialect::Kimi,
                 route: "kimi_code".to_string(),
                 wire_model: "k3".to_string(),
-            });
+                max_output_tokens: 32_768,
+                thinking: KimiThinkingPolicy::Required,
+            }));
         },
         ToolPlanInputs {
             extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {

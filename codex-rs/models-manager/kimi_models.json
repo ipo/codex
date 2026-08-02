@@ -1,0 +1,102 @@
+{
+  "models": [
+    {
+      "slug": "kimi/k3",
+      "inherits": "gpt-5.6-sol",
+      "display_name": "Kimi K3",
+      "description": "Kimi's long-context coding model.",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Lower thinking effort" },
+        { "effort": "high", "description": "Higher thinking effort" },
+        { "effort": "max", "description": "Maximum thinking effort" }
+      ],
+      "priority": 30,
+      "context_window": 1048576,
+      "max_context_window": 1048576,
+      "auto_compact_token_limit": null,
+      "input_modalities": ["text", "image"],
+      "visibility": "none",
+      "support_verbosity": false,
+      "default_verbosity": null,
+      "apply_patch_tool_type": null,
+      "supports_parallel_tool_calls": true,
+      "requires_nonempty_assistant_messages": false,
+      "comp_hash": null,
+      "experimental_supported_tools": [],
+      "supports_search_tool": false,
+      "use_responses_lite": false,
+      "tool_mode": "direct",
+      "aliases": ["k3"],
+      "history_compatibility_group": "kimi",
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "kimi",
+        "wire_api": "chat_completions",
+        "dialect": "kimi",
+        "route": "kimi_code",
+        "wire_model": "k3",
+        "max_output_tokens": 131072,
+        "thinking": "required_with_effort"
+      }
+    },
+    {
+      "slug": "kimi/k3-256k",
+      "inherits": "kimi/k3",
+      "display_name": "Kimi K3 256K",
+      "description": "Kimi's 256K-context coding model.",
+      "priority": 31,
+      "context_window": 262144,
+      "max_context_window": 262144,
+      "aliases": ["k3-256k"],
+      "history_compatibility_group": "kimi",
+      "inference": {
+        "family": "kimi",
+        "wire_api": "chat_completions",
+        "dialect": "kimi",
+        "route": "kimi_code",
+        "wire_model": "k3-256k",
+        "max_output_tokens": 131072,
+        "thinking": "required_with_effort"
+      }
+    },
+    {
+      "slug": "kimi/kimi-for-coding",
+      "inherits": "kimi/k3-256k",
+      "display_name": "Kimi for Coding",
+      "description": "Kimi's coding-specialized model.",
+      "default_reasoning_level": null,
+      "supported_reasoning_levels": [],
+      "priority": 32,
+      "aliases": ["kimi-for-coding"],
+      "history_compatibility_group": "kimi",
+      "inference": {
+        "family": "kimi",
+        "wire_api": "chat_completions",
+        "dialect": "kimi",
+        "route": "kimi_code",
+        "wire_model": "kimi-for-coding",
+        "max_output_tokens": 32768,
+        "thinking": "required"
+      }
+    },
+    {
+      "slug": "kimi/kimi-for-coding-highspeed",
+      "inherits": "kimi/kimi-for-coding",
+      "display_name": "Kimi for Coding Highspeed",
+      "description": "Kimi's low-latency coding-specialized model.",
+      "priority": 33,
+      "aliases": ["kimi-for-coding-highspeed"],
+      "history_compatibility_group": "kimi",
+      "inference": {
+        "family": "kimi",
+        "wire_api": "chat_completions",
+        "dialect": "kimi",
+        "route": "kimi_code",
+        "wire_model": "kimi-for-coding-highspeed",
+        "max_output_tokens": 32768,
+        "thinking": "required"
+      }
+    }
+  ]
+}

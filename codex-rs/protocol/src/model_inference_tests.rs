@@ -5,12 +5,14 @@ use super::*;
 
 #[test]
 fn inference_metadata_serializes_family_wire_dialect_and_route_independently() {
-    let config = ModelInferenceConfig::Kimi {
+    let config = ModelInferenceConfig::Kimi(KimiInferenceConfig {
         wire_api: WireApi::ChatCompletions,
         dialect: InferenceDialect::Kimi,
         route: "kimi_code".to_string(),
         wire_model: "k3".to_string(),
-    };
+        max_output_tokens: 32_768,
+        thinking: KimiThinkingPolicy::Required,
+    });
 
     assert_eq!(
         serde_json::to_value(config).expect("serialize inference config"),
@@ -19,7 +21,9 @@ fn inference_metadata_serializes_family_wire_dialect_and_route_independently() {
             "wire_api": "chat_completions",
             "dialect": "kimi",
             "route": "kimi_code",
-            "wire_model": "k3"
+            "wire_model": "k3",
+            "max_output_tokens": 32768,
+            "thinking": "required"
         })
     );
 }
@@ -43,11 +47,15 @@ fn model_family_controls_supported_wire_and_dialect_contracts() {
         route: "route".to_string(),
         wire_model: "model".to_string(),
     };
-    let kimi = |wire_api| ModelInferenceConfig::Kimi {
-        wire_api,
-        dialect: InferenceDialect::Kimi,
-        route: "route".to_string(),
-        wire_model: "model".to_string(),
+    let kimi = |wire_api| {
+        ModelInferenceConfig::Kimi(KimiInferenceConfig {
+            wire_api,
+            dialect: InferenceDialect::Kimi,
+            route: "route".to_string(),
+            wire_model: "model".to_string(),
+            max_output_tokens: 1,
+            thinking: KimiThinkingPolicy::Required,
+        })
     };
 
     assert_eq!(

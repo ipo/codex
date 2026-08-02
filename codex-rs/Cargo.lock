@@ -3337,6 +3337,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-kimi-code"
+version = "0.146.0"
+dependencies = [
+ "codex-api",
+ "codex-chat-completions",
+ "codex-protocol",
+ "codex-tools",
+ "insta",
+ "pretty_assertions",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "codex-linux-sandbox"
 version = "0.0.0"
 dependencies = [

@@ -25,6 +25,8 @@ use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::KimiInferenceConfig;
+use codex_protocol::model_inference::KimiThinkingPolicy;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -480,12 +482,14 @@ async fn kimi_model_never_preconnects_responses_websocket() {
     let mut harness = websocket_harness(&server).await;
     let responses_metadata = websocket_connection_metadata(&harness);
 
-    harness.model_info.inference = Some(ModelInferenceConfig::Kimi {
+    harness.model_info.inference = Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
         wire_api: WireApi::ChatCompletions,
         dialect: InferenceDialect::Kimi,
         route: "kimi_code".to_string(),
         wire_model: "k3".to_string(),
-    });
+        max_output_tokens: 32_768,
+        thinking: KimiThinkingPolicy::Required,
+    }));
     let mut client_session = harness.client.new_session();
 
     client_session

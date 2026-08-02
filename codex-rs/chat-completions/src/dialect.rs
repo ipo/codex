@@ -56,17 +56,29 @@ pub trait DialectHooks {
         &self,
         context: DialectContext<'_>,
         extensions: &BTreeMap<String, Value>,
-    ) -> Result<Option<String>, DialectError>;
+    ) -> Result<Option<String>, DialectError> {
+        response_hook_unavailable(context, extensions)
+    }
 
     fn finish_reason(
         &self,
         context: DialectContext<'_>,
         reason: FinishReason,
-    ) -> Result<TerminalOutcome, DialectError>;
+    ) -> Result<TerminalOutcome, DialectError> {
+        response_hook_unavailable(context, reason)
+    }
 
     fn usage_details(
         &self,
         context: DialectContext<'_>,
         usage: &ChunkUsage,
-    ) -> Result<UsageDetails, DialectError>;
+    ) -> Result<UsageDetails, DialectError> {
+        response_hook_unavailable(context, usage)
+    }
+}
+
+fn response_hook_unavailable<T, U, V>(_: T, _: U) -> Result<V, DialectError> {
+    Err(DialectError::InvalidResponseExtension(
+        "response hook is not implemented".to_string(),
+    ))
 }

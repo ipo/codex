@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::model_inference::KimiThinkingPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use pretty_assertions::assert_eq;
@@ -146,12 +147,14 @@ stream_max_retries = 10
 "#,
     )
     .expect("provider route should deserialize");
-    let inference = ModelInferenceConfig::Kimi {
+    let inference = ModelInferenceConfig::Kimi(KimiInferenceConfig {
         wire_api: WireApi::ChatCompletions,
         dialect: InferenceDialect::Kimi,
         route: "kimi_code".to_string(),
         wire_model: "k3".to_string(),
-    };
+        max_output_tokens: 32_768,
+        thinking: KimiThinkingPolicy::Required,
+    });
 
     let plan = provider
         .resolve_inference_contract("kimi/k3", Some(&inference))
@@ -160,7 +163,14 @@ stream_max_retries = 10
     assert_eq!(
         plan,
         ResolvedInferencePlan::Kimi {
-            wire_model: "k3".to_string(),
+            config: KimiInferenceConfig {
+                wire_api: WireApi::ChatCompletions,
+                dialect: InferenceDialect::Kimi,
+                route: "kimi_code".to_string(),
+                wire_model: "k3".to_string(),
+                max_output_tokens: 32_768,
+                thinking: KimiThinkingPolicy::Required,
+            },
             route: ResolvedWireRoute {
                 name: Some("kimi_code".to_string()),
                 wire_api: WireApi::ChatCompletions,
@@ -178,12 +188,14 @@ stream_max_retries = 10
 
 #[test]
 fn missing_and_incompatible_routes_are_actionable_before_sampling() {
-    let inference = ModelInferenceConfig::Kimi {
+    let inference = ModelInferenceConfig::Kimi(KimiInferenceConfig {
         wire_api: WireApi::ChatCompletions,
         dialect: InferenceDialect::Kimi,
         route: "kimi_code".to_string(),
         wire_model: "k3".to_string(),
-    };
+        max_output_tokens: 32_768,
+        thinking: KimiThinkingPolicy::Required,
+    });
     let missing = ModelProviderInfo::default()
         .resolve_inference_contract("kimi/k3", Some(&inference))
         .expect_err("missing route should fail");
@@ -219,12 +231,14 @@ fn missing_and_incompatible_routes_are_actionable_before_sampling() {
 
 #[test]
 fn family_incompatible_profile_is_rejected_even_when_named_route_matches() {
-    let inference = ModelInferenceConfig::Kimi {
+    let inference = ModelInferenceConfig::Kimi(KimiInferenceConfig {
         wire_api: WireApi::Responses,
         dialect: InferenceDialect::OpenAi,
         route: "kimi_code".to_string(),
         wire_model: "k3".to_string(),
-    };
+        max_output_tokens: 32_768,
+        thinking: KimiThinkingPolicy::Required,
+    });
     let provider = ModelProviderInfo {
         wire_routes: HashMap::from([(
             "kimi_code".to_string(),

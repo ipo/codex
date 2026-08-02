@@ -16,7 +16,15 @@ pub use model_catalog_overlay::ResolvedModelCatalogOverlay;
 /// Load the bundled model catalog shipped with `codex-models-manager`.
 pub fn bundled_models_response()
 -> std::result::Result<codex_protocol::openai_models::ModelsResponse, serde_json::Error> {
-    serde_json::from_str(include_str!("../models.json"))
+    let catalog = serde_json::from_str(include_str!("../models.json"))?;
+    ModelCatalogOverlay::from_json(include_str!("../kimi_models.json"))
+        .map_err(bundled_catalog_error)?
+        .apply(catalog)
+        .map_err(bundled_catalog_error)
+}
+
+fn bundled_catalog_error(error: ModelCatalogOverlayError) -> serde_json::Error {
+    serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
 }
 
 /// Convert the client version string to a whole version string (e.g. "1.2.3-alpha.4" -> "1.2.3").

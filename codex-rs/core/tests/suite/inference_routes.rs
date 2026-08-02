@@ -2,6 +2,8 @@ use anyhow::Result;
 use codex_model_provider_info::ModelProviderWireRoute;
 use codex_model_provider_info::WireApi;
 use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::KimiInferenceConfig;
+use codex_protocol::model_inference::KimiThinkingPolicy;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
@@ -15,12 +17,14 @@ async fn missing_native_route_fails_during_thread_start_without_sampling() -> Re
     let server = responses::start_mock_server().await;
     let result = test_codex()
         .with_model_info_override("gpt-5.5", |model| {
-            model.inference = Some(ModelInferenceConfig::Kimi {
+            model.inference = Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
                 wire_api: WireApi::ChatCompletions,
                 dialect: InferenceDialect::Kimi,
                 route: "kimi_code".to_string(),
                 wire_model: "k3".to_string(),
-            });
+                max_output_tokens: 32_768,
+                thinking: KimiThinkingPolicy::Required,
+            }));
         })
         .build_with_auto_env(&server)
         .await;
@@ -65,12 +69,14 @@ async fn family_incompatible_matching_route_fails_before_sampling() -> Result<()
             );
         })
         .with_model_info_override("gpt-5.5", |model| {
-            model.inference = Some(ModelInferenceConfig::Kimi {
+            model.inference = Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
                 wire_api: WireApi::Responses,
                 dialect: InferenceDialect::OpenAi,
                 route: "kimi_code".to_string(),
                 wire_model: "k3".to_string(),
-            });
+                max_output_tokens: 32_768,
+                thinking: KimiThinkingPolicy::Required,
+            }));
         })
         .build_with_auto_env(&server)
         .await;

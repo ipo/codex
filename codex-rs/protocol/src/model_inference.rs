@@ -77,6 +77,25 @@ impl fmt::Display for ModelFamily {
     }
 }
 
+/// Required thinking behavior for a managed Kimi model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum KimiThinkingPolicy {
+    RequiredWithEffort,
+    Required,
+}
+
+/// Native inference contract for the Kimi model family.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct KimiInferenceConfig {
+    pub wire_api: WireApi,
+    pub dialect: InferenceDialect,
+    pub route: String,
+    pub wire_model: String,
+    pub max_output_tokens: u32,
+    pub thinking: KimiThinkingPolicy,
+}
+
 /// Model-family specialization and the named provider route it requires.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "family", rename_all = "snake_case")]
@@ -87,12 +106,7 @@ pub enum ModelInferenceConfig {
         route: String,
         wire_model: String,
     },
-    Kimi {
-        wire_api: WireApi,
-        dialect: InferenceDialect,
-        route: String,
-        wire_model: String,
-    },
+    Kimi(KimiInferenceConfig),
 }
 
 impl ModelInferenceConfig {
@@ -104,7 +118,7 @@ impl ModelInferenceConfig {
     pub fn family(&self) -> ModelFamily {
         match self {
             Self::OpenAi { .. } => ModelFamily::OpenAi,
-            Self::Kimi { .. } => ModelFamily::Kimi,
+            Self::Kimi(_) => ModelFamily::Kimi,
         }
     }
 
@@ -115,13 +129,8 @@ impl ModelInferenceConfig {
                 dialect,
                 route,
                 ..
-            }
-            | Self::Kimi {
-                wire_api,
-                dialect,
-                route,
-                ..
             } => (*wire_api, *dialect, route),
+            Self::Kimi(config) => (config.wire_api, config.dialect, &config.route),
         }
     }
 
@@ -129,7 +138,7 @@ impl ModelInferenceConfig {
     pub fn supported_route_contracts(&self) -> &'static [(WireApi, InferenceDialect)] {
         match self {
             Self::OpenAi { .. } => Self::OPEN_AI_ROUTE_CONTRACTS,
-            Self::Kimi { .. } => Self::KIMI_ROUTE_CONTRACTS,
+            Self::Kimi(_) => Self::KIMI_ROUTE_CONTRACTS,
         }
     }
 

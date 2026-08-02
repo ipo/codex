@@ -224,7 +224,10 @@ fn parse_tool_input_schema_infers_number_from_numeric_keywords() {
     }))
     .expect("parse schema");
 
-    assert_eq!(schema, JsonSchema::number(/*description*/ None));
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({"type":"number","minimum":1})
+    );
 }
 
 #[test]
@@ -242,7 +245,10 @@ fn parse_tool_input_schema_infers_number_from_multiple_of() {
     }))
     .expect("parse schema");
 
-    assert_eq!(schema, JsonSchema::number(/*description*/ None));
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({"type":"number","multipleOf":5})
+    );
 }
 
 #[test]
@@ -279,7 +285,10 @@ fn parse_tool_input_schema_infers_string_from_enum_const_and_format_keywords() {
         const_schema,
         JsonSchema::string_enum(vec![serde_json::json!("file")], /*description*/ None)
     );
-    assert_eq!(format_schema, JsonSchema::string(/*description*/ None));
+    assert_eq!(
+        serde_json::to_value(format_schema).expect("serialize schema"),
+        serde_json::json!({"type":"string","format":"date-time"})
+    );
 }
 
 #[test]
@@ -362,11 +371,10 @@ fn parse_tool_input_schema_infers_array_from_prefix_items() {
     .expect("parse schema");
 
     assert_eq!(
-        schema,
-        JsonSchema::array(
-            JsonSchema::string(/*description*/ None),
-            /*description*/ None,
-        )
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type":"array","items":{"type":"string"},"prefixItems":[{"type":"string"}]
+        })
     );
 }
 

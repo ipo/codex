@@ -1,0 +1,164 @@
+---
+source: kimi-code/src/request_tests.rs
+expression: "serde_json::to_string_pretty(&requests).expect(\"snapshot JSON\")"
+---
+[
+  {
+    "max_completion_tokens": 131072,
+    "messages": [
+      {
+        "content": "You are Codex.",
+        "role": "system"
+      }
+    ],
+    "model": "k3",
+    "prompt_cache_key": "stable-session-affinity",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "thinking": {
+      "effort": "low",
+      "keep": "all",
+      "type": "enabled"
+    }
+  },
+  {
+    "max_completion_tokens": 131071,
+    "messages": [
+      {
+        "content": "You are Codex.",
+        "role": "system"
+      }
+    ],
+    "model": "k3",
+    "prompt_cache_key": "stable-session-affinity",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "thinking": {
+      "effort": "high",
+      "keep": "all",
+      "type": "enabled"
+    }
+  },
+  {
+    "max_completion_tokens": 1,
+    "messages": [
+      {
+        "content": "You are Codex.",
+        "role": "system"
+      }
+    ],
+    "model": "k3",
+    "prompt_cache_key": "stable-session-affinity",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "thinking": {
+      "effort": "max",
+      "keep": "all",
+      "type": "enabled"
+    }
+  },
+  {
+    "max_completion_tokens": 131072,
+    "messages": [
+      {
+        "content": "You are Codex.",
+        "role": "system"
+      }
+    ],
+    "model": "k3-256k",
+    "prompt_cache_key": "stable-session-affinity",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "thinking": {
+      "effort": "low",
+      "keep": "all",
+      "type": "enabled"
+    }
+  },
+  {
+    "max_completion_tokens": 131071,
+    "messages": [
+      {
+        "content": "You are Codex.",
+        "role": "system"
+      }
+    ],
+    "model": "k3-256k",
+    "prompt_cache_key": "stable-session-affinity",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "thinking": {
+      "effort": "high",
+      "keep": "all",
+      "type": "enabled"
+    }
+  },
+  {
+    "max_completion_tokens": 1,
+    "messages": [
+      {
+        "content": "You are Codex.",
+        "role": "system"
+      }
+    ],
+    "model": "k3-256k",
+    "prompt_cache_key": "stable-session-affinity",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "thinking": {
+      "effort": "max",
+      "keep": "all",
+      "type": "enabled"
+    }
+  },
+  {
+    "max_completion_tokens": 32768,
+    "messages": [
+      {
+        "content": "You are Codex.",
+        "role": "system"
+      }
+    ],
+    "model": "kimi-for-coding",
+    "prompt_cache_key": "stable-session-affinity",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "thinking": {
+      "keep": "all",
+      "type": "enabled"
+    }
+  },
+  {
+    "max_completion_tokens": 32767,
+    "messages": [
+      {
+        "content": "You are Codex.",
+        "role": "system"
+      }
+    ],
+    "model": "kimi-for-coding-highspeed",
+    "prompt_cache_key": "stable-session-affinity",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "thinking": {
+      "keep": "all",
+      "type": "enabled"
+    }
+  }
+]
