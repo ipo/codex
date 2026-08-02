@@ -26,7 +26,7 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
-fn event(name: &str, data: Value) -> String {
+pub(super) fn event(name: &str, data: Value) -> String {
     format!("event: {name}\ndata: {data}\n\n")
 }
 
@@ -36,7 +36,7 @@ fn native_sse(body: String) -> ResponseTemplate {
         .set_body_string(body)
 }
 
-fn start(id: &str, model: &str) -> String {
+pub(super) fn start(id: &str, model: &str) -> String {
     start_with_input_tokens(id, model, /*input_tokens*/ 3)
 }
 
@@ -96,7 +96,7 @@ impl Respond for Sequence {
     }
 }
 
-async fn mount_native(server: &MockServer, bodies: Vec<String>) {
+pub(super) async fn mount_native(server: &MockServer, bodies: Vec<String>) {
     let responses = bodies.into_iter().map(native_sse).collect();
     mount_native_responses(server, responses).await;
 }
@@ -127,7 +127,7 @@ fn native_retry_limit(builder: TestCodexBuilder, limit: u64) -> TestCodexBuilder
     })
 }
 
-fn native_builder(server: &MockServer, model: &str) -> TestCodexBuilder {
+pub(super) fn native_builder(server: &MockServer, model: &str) -> TestCodexBuilder {
     let base_url = server.uri();
     let model = model.to_string();
     test_codex().with_config(move |config| {

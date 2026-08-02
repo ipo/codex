@@ -489,7 +489,7 @@ async fn native_terminal_matrix_commits_discards_retries_and_reuses_thread() -> 
     Ok(())
 }
 
-async fn captured_responses_body(
+pub(super) async fn captured_responses_body(
     server: &MockServer,
     home: Arc<TempDir>,
     model: &str,
