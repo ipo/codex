@@ -163,6 +163,8 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 // period between stream events.
 const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
+
+mod claude_dispatch;
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -1815,21 +1817,10 @@ impl ModelClientSession {
             .info()
             .resolve_inference_plan(model_info)
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-        let wire_api = match plan {
-            codex_model_provider_info::ResolvedInferencePlan::Legacy { route, .. } => {
-                route.wire_api
-            }
-            codex_model_provider_info::ResolvedInferencePlan::OpenAi { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::Anthropic { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::Kimi { .. } => {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "model `{}` declares explicit native inference routing, which is not active in this build",
-                    model_info.slug
-                )));
-            }
-        };
-        match wire_api {
-            WireApi::Responses => {
+        match plan {
+            codex_model_provider_info::ResolvedInferencePlan::Legacy { route, .. }
+                if route.wire_api == WireApi::Responses =>
+            {
                 if self.client.responses_websocket_enabled(model_info) {
                     let request_trace = current_span_w3c_trace_context();
                     match self
@@ -1866,9 +1857,86 @@ impl ModelClientSession {
                 )
                 .await
             }
-            WireApi::AnthropicMessages | WireApi::ChatCompletions => {
+            codex_model_provider_info::ResolvedInferencePlan::OpenAi { route, .. }
+                if route.wire_api == WireApi::Responses =>
+            {
+                if self.client.responses_websocket_enabled(model_info) {
+                    let request_trace = current_span_w3c_trace_context();
+                    match self
+                        .stream_responses_websocket(
+                            prompt,
+                            model_info,
+                            session_telemetry,
+                            effort.clone(),
+                            summary,
+                            service_tier.clone(),
+                            responses_metadata,
+                            /*warmup*/ false,
+                            request_trace,
+                            inference_trace,
+                        )
+                        .await?
+                    {
+                        WebsocketStreamOutcome::Stream(stream) => return Ok(stream),
+                        WebsocketStreamOutcome::FallbackToHttp => {
+                            self.try_switch_fallback_transport(session_telemetry, model_info);
+                        }
+                    }
+                }
+                self.stream_responses_api(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    service_tier,
+                    responses_metadata,
+                    inference_trace,
+                )
+                .await
+            }
+            codex_model_provider_info::ResolvedInferencePlan::Anthropic {
+                wire_model,
+                max_output_tokens,
+                thinking,
+                supports_disabled_thinking,
+                route,
+            } => {
+                self.stream_claude(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    responses_metadata,
+                    inference_trace,
+                    claude_dispatch::ClaudePlan {
+                        wire_model,
+                        max_output_tokens,
+                        thinking,
+                        supports_disabled_thinking,
+                        route,
+                    },
+                )
+                .await
+            }
+            codex_model_provider_info::ResolvedInferencePlan::Kimi { .. } => {
+                self.stream_responses_api(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    service_tier,
+                    responses_metadata,
+                    inference_trace,
+                )
+                .await
+            }
+            codex_model_provider_info::ResolvedInferencePlan::Legacy { route, .. }
+            | codex_model_provider_info::ResolvedInferencePlan::OpenAi { route, .. } => {
                 Err(CodexErr::InvalidRequest(format!(
-                    "legacy provider wire API `{wire_api}` is not supported by the active inference client"
+                    "provider wire API `{}` is not supported by the active inference client",
+                    route.wire_api
                 )))
             }
         }
@@ -1982,10 +2050,33 @@ where
         + Send
         + 'static,
 {
+    map_response_events_with_cancellation(
+        upstream_request_id,
+        api_stream,
+        session_telemetry,
+        inference_trace_attempt,
+        provider,
+        CancellationToken::new(),
+    )
+}
+
+fn map_response_events_with_cancellation<S>(
+    upstream_request_id: Option<String>,
+    api_stream: S,
+    session_telemetry: SessionTelemetry,
+    inference_trace_attempt: InferenceTraceAttempt,
+    provider: SharedModelProvider,
+    consumer_dropped: CancellationToken,
+) -> (ResponseStream, oneshot::Receiver<LastResponse>)
+where
+    S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
+        + Unpin
+        + Send
+        + 'static,
+{
     let (tx_event, rx_event) =
         mpsc::channel::<Result<ResponseEvent>>(RESPONSE_STREAM_CHANNEL_CAPACITY);
     let (tx_last_response, rx_last_response) = oneshot::channel::<LastResponse>();
-    let consumer_dropped = CancellationToken::new();
     let consumer_dropped_for_stream = consumer_dropped.clone();
 
     tokio::spawn(async move {

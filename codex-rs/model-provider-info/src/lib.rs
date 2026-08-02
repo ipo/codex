@@ -41,6 +41,9 @@ const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const OPENAI_ACTOR_AUTHORIZATION_HEADER: &str = "x-openai-actor-authorization";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+pub const CLAUDEFLARE_PROVIDER_ID: &str = "claudeflare";
+pub const CLAUDEFLARE_RESPONSES_BASE_URL: &str = "http://127.0.0.1:8080/v1/ccflare/openai";
+pub const CLAUDEFLARE_CLAUDE_BASE_URL: &str = "http://127.0.0.1:8080/v1/claude-code";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
@@ -312,11 +315,10 @@ impl ModelProviderInfo {
                 inference.family()
             )));
         }
-        let route = self.resolve_named_route(model, inference)?;
         Ok(match inference {
             ModelInferenceConfig::OpenAi { wire_model, .. } => ResolvedInferencePlan::OpenAi {
                 wire_model: wire_model.clone(),
-                route,
+                route: self.resolve_named_route(model, inference)?,
             },
             ModelInferenceConfig::Anthropic {
                 wire_model,
@@ -329,11 +331,13 @@ impl ModelProviderInfo {
                 max_output_tokens: *max_output_tokens,
                 thinking: *thinking,
                 supports_disabled_thinking: *supports_disabled_thinking,
-                route,
+                route: self.resolve_named_route(model, inference)?,
             },
             ModelInferenceConfig::Kimi(config) => ResolvedInferencePlan::Kimi {
                 config: config.clone(),
-                route,
+                // Native Kimi dispatch is intentionally deferred to #41. Keep the typed profile
+                // while routing current turns through the provider's legacy Responses endpoint.
+                route: self.resolve_legacy_route(),
             },
         })
     }
@@ -640,6 +644,27 @@ pub fn built_in_model_providers(
     use ModelProviderInfo as P;
     let openai_provider = P::create_openai_provider(openai_base_url);
     let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
+    let claudeflare_provider = ModelProviderInfo {
+        name: "Claudeflare".to_string(),
+        base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
+        wire_api: WireApi::Responses,
+        wire_routes: HashMap::from([(
+            "claude_code".to_string(),
+            ModelProviderWireRoute {
+                wire_api: WireApi::AnthropicMessages,
+                dialect: InferenceDialect::ClaudeCode,
+                base_url: CLAUDEFLARE_CLAUDE_BASE_URL.to_string(),
+                request_path: "v1/messages".to_string(),
+                query_params: Some(HashMap::from([("beta".to_string(), "true".to_string())])),
+                request_max_retries: None,
+                stream_max_retries: Some(10),
+                stream_idle_timeout_ms: None,
+            },
+        )]),
+        stream_max_retries: Some(10),
+        supports_websockets: false,
+        ..ModelProviderInfo::default()
+    };
 
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
@@ -648,6 +673,7 @@ pub fn built_in_model_providers(
     [
         (OPENAI_PROVIDER_ID, openai_provider),
         (AMAZON_BEDROCK_PROVIDER_ID, amazon_bedrock_provider),
+        (CLAUDEFLARE_PROVIDER_ID, claudeflare_provider),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),
