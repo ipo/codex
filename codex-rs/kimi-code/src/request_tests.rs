@@ -11,7 +11,7 @@ use serde_json::json;
 
 use super::*;
 
-fn profile(model: &str, cap: u32, policy: KimiThinkingPolicy) -> KimiInferenceConfig {
+pub(super) fn profile(model: &str, cap: u32, policy: KimiThinkingPolicy) -> KimiInferenceConfig {
     KimiInferenceConfig {
         wire_api: WireApi::ChatCompletions,
         dialect: InferenceDialect::Kimi,
@@ -22,7 +22,7 @@ fn profile(model: &str, cap: u32, policy: KimiThinkingPolicy) -> KimiInferenceCo
     }
 }
 
-fn dialect(
+pub(super) fn dialect(
     profile: KimiInferenceConfig,
     context: u64,
     input: u64,
@@ -40,11 +40,11 @@ fn dialect(
     .expect("valid Kimi request dialect")
 }
 
-fn request(dialect: &KimiDialect, history: &[ResponseItem], tools: &[ToolSpec]) -> Value {
+pub(super) fn request(dialect: &KimiDialect, items: &[ResponseItem], specs: &[ToolSpec]) -> Value {
     let params = KimiEncodeRequest {
         system: Some("You are Codex."),
-        history,
-        tools,
+        history: items,
+        tools: specs,
     };
     serde_json::to_value(encode_request(dialect, params).expect("valid request"))
         .expect("request JSON")

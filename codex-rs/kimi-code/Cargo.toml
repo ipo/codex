@@ -15,11 +15,18 @@ workspace = true
 [dependencies]
 codex-api = { workspace = true }
 codex-chat-completions = { workspace = true }
+codex-client = { workspace = true }
 codex-protocol = { workspace = true }
 codex-tools = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio-util = { workspace = true }
 
 [dev-dependencies]
+bytes = { workspace = true }
 insta = { workspace = true, features = ["json"] }
 pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

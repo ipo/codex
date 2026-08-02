@@ -115,5 +115,10 @@ pub struct DecodedStream {
 pub enum PresentationDelta {
     Content(String),
     Reasoning(String),
-    ToolArguments { index: usize, delta: String },
+    Tool {
+        index: usize,
+        id: String,
+        name: String,
+        delta: String,
+    },
 }

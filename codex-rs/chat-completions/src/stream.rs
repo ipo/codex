@@ -6,7 +6,7 @@ use crate::{stream_types::{DecodedStream, ToolCallFragment}, ChatCompletionChunk
 
 pub struct DecodeStream<'a> {
     pub context: DialectContext<'a>,
-    pub dialect: &'a dyn DialectHooks,
+    pub dialect: &'a (dyn DialectHooks + Sync),
     pub metadata: ResponseMetadata,
 }
 
@@ -23,6 +23,8 @@ struct PendingTool {
     id: Option<String>,
     name: Option<String>,
     arguments: String,
+    presented: bool,
+    unpresented_arguments: String,
 }
 
 struct Decoder<'a, F> {
@@ -41,6 +43,69 @@ struct Decoder<'a, F> {
     done: bool,
 }
 
+pub struct IncrementalDecoder<'a, F> {
+    decoder: Decoder<'a, F>,
+    framing: Framing,
+    empty: bool,
+    deferred_error: Option<DecodeError>,
+}
+
+impl<'a, F: FnMut(PresentationDelta)> IncrementalDecoder<'a, F> {
+    pub fn new(params: DecodeStream<'a>, sink: F) -> Self {
+        Self {
+            decoder: Decoder {
+                params,
+                sink,
+                response_id: None,
+                content: String::new(),
+                reasoning: String::new(),
+                reasoning_provenance: None,
+                tools: Vec::new(),
+                usage: None,
+                terminal: None,
+                recognized: false,
+                saw_finish_field: false,
+                saw_null_finish: false,
+                done: false,
+            },
+            framing: Framing::default(),
+            empty: true,
+            deferred_error: None,
+        }
+    }
+
+    pub fn feed(&mut self, fragment: impl AsRef<[u8]>) -> Result<(), DecodeError> {
+        let fragment = fragment.as_ref();
+        let whitespace = fragment.iter().all(u8::is_ascii_whitespace);
+        if !whitespace && let Some(error) = self.deferred_error.take() {
+            return Err(error);
+        }
+        self.empty &= whitespace;
+        if let Err(error) = self.framing.push(fragment, &mut self.decoder) {
+            if !self.empty {
+                return Err(error);
+            }
+            self.deferred_error = Some(error);
+        }
+        Ok(())
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.decoder.done
+    }
+
+    pub fn finish(mut self) -> Result<DecodedStream, DecodeError> {
+        if self.empty {
+            return Err(DecodeError::EmptyStream);
+        }
+        if let Some(error) = self.deferred_error {
+            return Err(error);
+        }
+        self.framing.finish(&mut self.decoder)?;
+        self.decoder.finish()
+    }
+}
+
 #[rustfmt::skip]
 pub fn decode_stream<I, B, F>(params: DecodeStream<'_>, fragments: I, sink: F) -> Result<DecodedStream, DecodeError>
 where
@@ -48,26 +113,10 @@ where
     B: AsRef<[u8]>,
     F: FnMut(PresentationDelta),
 {
-    let mut decoder = Decoder {
-        params, sink, response_id: None, content: String::new(), reasoning: String::new(), reasoning_provenance: None, tools: Vec::new(), usage: None,
-        terminal: None, recognized: false, saw_finish_field: false, saw_null_finish: false, done: false,
-    };
-    let mut framing = Framing::default();
-    let mut empty = true;
-    let mut deferred_error = None;
+    let mut decoder = IncrementalDecoder::new(params, sink);
     for fragment in fragments {
-        let fragment = fragment.as_ref();
-        let whitespace = fragment.iter().all(u8::is_ascii_whitespace);
-        if !whitespace && let Some(error) = deferred_error { return Err(error); }
-        empty &= whitespace;
-        if let Err(error) = framing.push(fragment, &mut decoder) {
-            if !empty { return Err(error); }
-            deferred_error = Some(error);
-        }
+        decoder.feed(fragment)?;
     }
-    if empty { return Err(DecodeError::EmptyStream); }
-    if let Some(error) = deferred_error { return Err(error); }
-    framing.finish(&mut decoder)?;
     decoder.finish()
 }
 
@@ -97,6 +146,7 @@ impl Framing {
         if self.line.is_empty() { return self.emit(decoder); }
         let line = std::mem::take(&mut self.line);
         let line = std::str::from_utf8(&line).map_err(|_| DecodeError::InvalidUtf8)?;
+        if line.starts_with(':') { return Ok(()); }
         let value = line.strip_prefix("data:").ok_or_else(|| DecodeError::MalformedFraming(format!("unsupported stream line {line:?}")))?;
         self.data.push(value.strip_prefix(' ').unwrap_or(value).to_string());
         Ok(())
@@ -214,15 +264,35 @@ impl<F: FnMut(PresentationDelta)> Decoder<'_, F> {
                 "unsupported tool type {kind}"
             )));
         }
-        if let Some(function) = fragment.function {
+        let arguments = if let Some(function) = fragment.function {
             set_once(&mut tool.name, function.name, "tool name")?;
-            if let Some(arguments) = function.arguments {
-                tool.arguments.push_str(&arguments);
-                (self.sink)(PresentationDelta::ToolArguments {
+            function.arguments
+        } else {
+            None
+        };
+        if let Some(arguments) = arguments {
+            tool.arguments.push_str(&arguments);
+            if tool.presented {
+                (self.sink)(PresentationDelta::Tool {
                     index: fragment.index,
+                    id: tool.id.clone().unwrap_or_default(),
+                    name: tool.name.clone().unwrap_or_default(),
                     delta: arguments,
                 });
+            } else {
+                tool.unpresented_arguments.push_str(&arguments);
             }
+        }
+        if !tool.presented
+            && let (Some(id), Some(name)) = (&tool.id, &tool.name)
+        {
+            (self.sink)(PresentationDelta::Tool {
+                index: fragment.index,
+                id: id.clone(),
+                name: name.clone(),
+                delta: std::mem::take(&mut tool.unpresented_arguments),
+            });
+            tool.presented = true;
         }
         Ok(())
     }

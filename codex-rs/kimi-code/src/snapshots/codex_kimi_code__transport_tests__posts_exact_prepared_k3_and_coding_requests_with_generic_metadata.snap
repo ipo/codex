@@ -1,0 +1,67 @@
+---
+source: kimi-code/src/transport_tests.rs
+expression: "serde_json::to_string_pretty(&captures).unwrap()"
+---
+[
+  {
+    "body": {
+      "max_completion_tokens": 131072,
+      "messages": [
+        {
+          "content": "You are Codex.",
+          "role": "system"
+        }
+      ],
+      "model": "k3",
+      "prompt_cache_key": "stable-session-affinity",
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "thinking": {
+        "effort": "high",
+        "keep": "all",
+        "type": "enabled"
+      }
+    },
+    "headers": {
+      "accept": "text/event-stream",
+      "authorization": "Bearer generic-auth",
+      "content-type": "application/json"
+    },
+    "method": "POST",
+    "model": "k3",
+    "trace_id": "trace-57",
+    "url": "http://127.0.0.1:8080/v1/kimi/chat/completions"
+  },
+  {
+    "body": {
+      "max_completion_tokens": 32768,
+      "messages": [
+        {
+          "content": "You are Codex.",
+          "role": "system"
+        }
+      ],
+      "model": "kimi-for-coding",
+      "prompt_cache_key": "stable-session-affinity",
+      "stream": true,
+      "stream_options": {
+        "include_usage": true
+      },
+      "thinking": {
+        "keep": "all",
+        "type": "enabled"
+      }
+    },
+    "headers": {
+      "accept": "text/event-stream",
+      "authorization": "Bearer generic-auth",
+      "content-type": "application/json"
+    },
+    "method": "POST",
+    "model": "kimi-for-coding",
+    "trace_id": "trace-57",
+    "url": "http://127.0.0.1:8080/v1/kimi/chat/completions"
+  }
+]

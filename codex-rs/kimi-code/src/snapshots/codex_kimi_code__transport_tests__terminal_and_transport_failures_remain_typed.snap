@@ -1,0 +1,33 @@
+---
+source: kimi-code/src/transport_tests.rs
+expression: failures
+---
+[
+    Decode(
+        EmptyStream,
+    ),
+    Decode(
+        PrematureEof {
+            expected: "a recognized chunk",
+        },
+    ),
+    Decode(
+        MalformedChunk(
+            "key must be a string at line 1 column 2",
+        ),
+    ),
+    Decode(
+        InvalidToolJson {
+            index: 0,
+            arguments: "{",
+        },
+    ),
+    Decode(
+        MissingFinishReason,
+    ),
+    Decode(
+        PrematureEof {
+            expected: "[DONE]",
+        },
+    ),
+]

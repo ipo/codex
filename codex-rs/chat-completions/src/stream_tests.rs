@@ -2,6 +2,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Mutex;
 
 use codex_api::TerminalOutcome;
 use codex_protocol::model_inference::InferenceDialect;
@@ -12,11 +13,11 @@ use serde_json::json;
 use super::*;
 
 #[derive(Default)]
-struct TestDialect(RefCell<Vec<(InferenceDialect, String, &'static str)>>);
+struct TestDialect(Mutex<Vec<(InferenceDialect, String, &'static str)>>);
 
 #[rustfmt::skip]
 impl TestDialect {
-    fn record(&self, context: DialectContext<'_>, hook: &'static str) { self.0.borrow_mut().push((context.dialect, context.model.to_string(), hook)); }
+    fn record(&self, context: DialectContext<'_>, hook: &'static str) { self.0.lock().expect("test dialect mutex").push((context.dialect, context.model.to_string(), hook)); }
 }
 
 #[rustfmt::skip]
@@ -44,7 +45,7 @@ impl DialectHooks for TestDialect {
 }
 
 fn frame(value: Value) -> String {
-    format!("data: {value}\r\n\r\n")
+    format!("data: {value}\r\ndata:\r\n\r\n")
 }
 
 #[rustfmt::skip]
@@ -76,6 +77,7 @@ fn params(dialect: &TestDialect) -> DecodeStream<'_> { DecodeStream { context:Di
 fn reconstructs_fragmented_interleaved_reasoning_content_parallel_tools_and_metadata() {
     let usage = json!({"prompt_tokens":10,"completion_tokens":8,"total_tokens":18,"completion_tokens_details":{"reasoning_tokens":3}});
     let body = [
+        ": keepalive\r\n\r\n".into(),
         chunk(vec![choice(json!({"role":"assistant","reasoning_content":"th🧠ink "}), Value::Null, None)], None),
         chunk(vec![choice(json!({"tool_calls":[{"index":4,"id":"call-b","type":"function","function":{"name":"beta","arguments":"{\"b\":"}}]}), Value::Null, None)], None),
         chunk(vec![choice(json!({"content":"hello ","tool_calls":[{"index":2,"id":"call-a","type":"function","function":{"name":"alpha","arguments":"{\"a\":"}}]}), Value::Null, None)], None),
@@ -92,13 +94,15 @@ fn reconstructs_fragmented_interleaved_reasoning_content_parallel_tools_and_meta
         ]}), usage:Some(serde_json::from_value(usage).unwrap()), usage_details:UsageDetails { cached_prompt_tokens:0, reasoning_tokens:3 }, metadata:ResponseMetadata { trace_id:Some("trace-7".into()) },
     }));
     assert_eq!(presentation, vec![
-        PresentationDelta::Reasoning("th🧠ink ".into()), PresentationDelta::ToolArguments { index:4, delta:"{\"b\":".into() },
-        PresentationDelta::Content("hello ".into()), PresentationDelta::ToolArguments { index:2, delta:"{\"a\":".into() },
-        PresentationDelta::Reasoning("carefully".into()), PresentationDelta::ToolArguments { index:4, delta:"2}".into() },
-        PresentationDelta::ToolArguments { index:2, delta:"1}".into() },
+        PresentationDelta::Reasoning("th🧠ink ".into()),
+        PresentationDelta::Tool { index:4, id:"call-b".into(), name:"beta".into(), delta:"{\"b\":".into() },
+        PresentationDelta::Content("hello ".into()),
+        PresentationDelta::Tool { index:2, id:"call-a".into(), name:"alpha".into(), delta:"{\"a\":".into() },
+        PresentationDelta::Reasoning("carefully".into()), PresentationDelta::Tool { index:4, id:"call-b".into(), name:"beta".into(), delta:"2}".into() },
+        PresentationDelta::Tool { index:2, id:"call-a".into(), name:"alpha".into(), delta:"1}".into() },
     ]);
-    assert!(dialect.0.borrow().iter().all(|(dialect, model, _)| *dialect == InferenceDialect::Kimi && model == "deliberately-misleading-openai-slug"));
-    assert_eq!(dialect.0.borrow().iter().map(|entry| entry.2).collect::<Vec<_>>(), vec!["reasoning","reasoning","reasoning","reasoning","finish","usage"]);
+    assert!(dialect.0.lock().unwrap().iter().all(|(dialect, model, _)| *dialect == InferenceDialect::Kimi && model == "deliberately-misleading-openai-slug"));
+    assert_eq!(dialect.0.lock().unwrap().iter().map(|entry| entry.2).collect::<Vec<_>>(), vec!["reasoning","reasoning","reasoning","reasoning","finish","usage"]);
 }
 
 #[test]

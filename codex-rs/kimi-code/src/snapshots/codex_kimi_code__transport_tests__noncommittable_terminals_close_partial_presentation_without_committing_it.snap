@@ -1,0 +1,303 @@
+---
+source: kimi-code/src/transport_tests.rs
+expression: outcomes
+---
+[
+    [
+        Ok(
+            OutputItemAdded(
+                Message {
+                    id: Some(
+                        ResponseItemId(
+                            "msg_kimi",
+                        ),
+                    ),
+                    role: "assistant",
+                    content: [],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            OutputTextDelta {
+                item_id: Some(
+                    "msg_kimi",
+                ),
+                delta: "partial",
+            },
+        ),
+        Ok(
+            OutputItemDone(
+                Message {
+                    id: Some(
+                        ResponseItemId(
+                            "msg_kimi",
+                        ),
+                    ),
+                    role: "assistant",
+                    content: [
+                        OutputText {
+                            text: "partial",
+                        },
+                    ],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            Completed {
+                response_id: "chat-57",
+                token_usage: None,
+                terminal_outcome: OutputExhausted,
+            },
+        ),
+    ],
+    [
+        Ok(
+            OutputItemAdded(
+                Reasoning {
+                    id: Some(
+                        ResponseItemId(
+                            "rs_kimi",
+                        ),
+                    ),
+                    summary: [],
+                    content: Some(
+                        [],
+                    ),
+                    encrypted_content: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            ReasoningContentDelta {
+                item_id: Some(
+                    "rs_kimi",
+                ),
+                delta: "unsafe",
+                content_index: 0,
+            },
+        ),
+        Ok(
+            OutputItemAdded(
+                FunctionCall {
+                    id: Some(
+                        ResponseItemId(
+                            "fc_kimi_2",
+                        ),
+                    ),
+                    name: "blocked",
+                    namespace: None,
+                    arguments: "",
+                    call_id: "call-x",
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            ToolCallInputDelta {
+                item_id: "fc_kimi_2",
+                call_id: Some(
+                    "call-x",
+                ),
+                delta: "{}",
+            },
+        ),
+        Ok(
+            OutputItemDone(
+                Reasoning {
+                    id: Some(
+                        ResponseItemId(
+                            "rs_kimi",
+                        ),
+                    ),
+                    summary: [],
+                    content: Some(
+                        [
+                            ReasoningText {
+                                text: "unsafe",
+                            },
+                        ],
+                    ),
+                    encrypted_content: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            OutputItemDone(
+                FunctionCall {
+                    id: Some(
+                        ResponseItemId(
+                            "fc_kimi_2",
+                        ),
+                    ),
+                    name: "blocked",
+                    namespace: None,
+                    arguments: "{}",
+                    call_id: "call-x",
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            Completed {
+                response_id: "chat-57",
+                token_usage: None,
+                terminal_outcome: Refusal,
+            },
+        ),
+    ],
+    [
+        Ok(
+            OutputItemAdded(
+                Reasoning {
+                    id: Some(
+                        ResponseItemId(
+                            "rs_kimi",
+                        ),
+                    ),
+                    summary: [],
+                    content: Some(
+                        [],
+                    ),
+                    encrypted_content: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            ReasoningContentDelta {
+                item_id: Some(
+                    "rs_kimi",
+                ),
+                delta: "thought",
+                content_index: 0,
+            },
+        ),
+        Ok(
+            OutputItemDone(
+                Reasoning {
+                    id: Some(
+                        ResponseItemId(
+                            "rs_kimi",
+                        ),
+                    ),
+                    summary: [],
+                    content: Some(
+                        [
+                            ReasoningText {
+                                text: "thought",
+                            },
+                        ],
+                    ),
+                    encrypted_content: Some(
+                        "codex:kimi-chat-reasoning:{\"dialect\":\"kimi_chat\",\"key\":\"reasoning_content\",\"model\":\"k3\",\"version\":1}",
+                    ),
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            Completed {
+                response_id: "chat-57",
+                token_usage: None,
+                terminal_outcome: Completed,
+            },
+        ),
+    ],
+    [
+        Ok(
+            OutputItemAdded(
+                Message {
+                    id: Some(
+                        ResponseItemId(
+                            "msg_kimi",
+                        ),
+                    ),
+                    role: "assistant",
+                    content: [],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            OutputTextDelta {
+                item_id: Some(
+                    "msg_kimi",
+                ),
+                delta: "answer",
+            },
+        ),
+        Ok(
+            OutputItemAdded(
+                Reasoning {
+                    id: Some(
+                        ResponseItemId(
+                            "rs_kimi",
+                        ),
+                    ),
+                    summary: [],
+                    content: Some(
+                        [],
+                    ),
+                    encrypted_content: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            OutputItemDone(
+                Reasoning {
+                    id: Some(
+                        ResponseItemId(
+                            "rs_kimi",
+                        ),
+                    ),
+                    summary: [],
+                    content: Some(
+                        [
+                            ReasoningText {
+                                text: "",
+                            },
+                        ],
+                    ),
+                    encrypted_content: Some(
+                        "codex:kimi-chat-reasoning:{\"dialect\":\"kimi_chat\",\"key\":\"reasoning_content\",\"model\":\"k3\",\"version\":1}",
+                    ),
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            OutputItemDone(
+                Message {
+                    id: Some(
+                        ResponseItemId(
+                            "msg_kimi",
+                        ),
+                    ),
+                    role: "assistant",
+                    content: [
+                        OutputText {
+                            text: "answer",
+                        },
+                    ],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                },
+            ),
+        ),
+        Ok(
+            Completed {
+                response_id: "chat-57",
+                token_usage: None,
+                terminal_outcome: Completed,
+            },
+        ),
+    ],
+]
