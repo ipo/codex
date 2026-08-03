@@ -6,6 +6,7 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::render_plaintext_agent_message;
 use codex_tools::ToolSpec;
 use serde_json::Value;
 use thiserror::Error;
@@ -137,6 +138,22 @@ fn encode_history(
     let mut pending = Vec::<String>::new();
     for (index, item) in params.history.iter().enumerate() {
         match item {
+            ResponseItem::AgentMessage {
+                author,
+                recipient,
+                content,
+                ..
+            } => {
+                let content = render_plaintext_agent_message(author, recipient, content).ok_or(
+                    EncodeError::UnsupportedHistoryItem {
+                        index,
+                        kind: "non-plaintext structured agent message",
+                    },
+                )?;
+                messages.push(ChatMessage::User {
+                    content: MessageContent::Text(content),
+                });
+            }
             ResponseItem::Message { role, content, .. } if role == "user" => {
                 messages.push(ChatMessage::User {
                     content: message_content(content, index)?,

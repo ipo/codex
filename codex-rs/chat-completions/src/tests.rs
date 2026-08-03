@@ -106,6 +106,11 @@ fn encode<'a>(
 #[test]
 fn encodes_complete_ordered_request_parallel_calls_results_and_schema() {
     let history = [
+        item(
+            json!({"type":"agent_message", "author":"/root", "recipient":"/root/worker", "content":[
+                {"type":"input_text", "text":"delegated task"}
+            ]}),
+        ),
         item(json!({"type":"message", "role":"user", "content":[
             {"type":"input_text", "text":"inspect "},
             {"type":"input_image", "image_url":"data:image/png;base64,aGVsbG8="}
@@ -156,6 +161,7 @@ fn encodes_complete_ordered_request_parallel_calls_results_and_schema() {
             "model":"gpt-looking-but-resolved-kimi",
             "messages":[
                 {"role":"system", "content":"You are Codex."},
+                {"role":"user", "content":"Agent message from /root to /root/worker:\ndelegated task"},
                 {"role":"user", "content":[
                     {"type":"text", "text":"inspect "},
                     {"type":"image_url", "image_url":{"url":"data:image/png;base64,aGVsbG8="}}
@@ -213,6 +219,18 @@ fn failures_are_typed_and_return_no_partial_request() {
             EncodeError::UnsupportedHistoryItem {
                 index: 0,
                 kind: "freeform tool call",
+            },
+        ),
+        (
+            item(
+                json!({"type":"agent_message", "author":"/root", "recipient":"/root/worker", "content":[
+                    {"type":"input_text", "text":"plaintext"},
+                    {"type":"encrypted_content", "encrypted_content":"must-not-leak"}
+                ]}),
+            ),
+            EncodeError::UnsupportedHistoryItem {
+                index: 0,
+                kind: "non-plaintext structured agent message",
             },
         ),
     ];

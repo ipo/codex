@@ -2,6 +2,7 @@ use codex_protocol::model_inference::AnthropicThinkingPolicy;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::model_inference::WireApi;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -97,6 +98,84 @@ fn structured_output_schema_is_rejected_before_request_assembly() {
     });
 
     assert_eq!(result, Err(EncodeError::UnsupportedStructuredOutput));
+}
+
+#[test]
+fn encodes_plaintext_agent_messages_as_user_input_and_rejects_encrypted_content() {
+    let model = profile("claude-sonnet-5");
+    let plaintext = ResponseItem::AgentMessage {
+        id: None,
+        author: "/root".to_string(),
+        recipient: "/root/worker".to_string(),
+        content: vec![AgentMessageInputContent::InputText {
+            text: "inspect the request".to_string(),
+        }],
+        internal_chat_message_metadata_passthrough: None,
+    };
+
+    let ordered = [
+        message(
+            "user",
+            vec![ContentItem::InputText {
+                text: "before".to_string(),
+            }],
+        ),
+        plaintext,
+        message(
+            "assistant",
+            vec![ContentItem::OutputText {
+                text: "after".to_string(),
+            }],
+        ),
+    ];
+    assert_eq!(
+        encode_for(&model, &ordered)
+            .expect("encode plaintext agent message")
+            .body
+            .messages,
+        vec![
+            Message {
+                role: Role::User,
+                content: vec![
+                    ContentBlock::Text {
+                        text: "before".to_string(),
+                        cache_control: None,
+                    },
+                    ContentBlock::Text {
+                        text: "Agent message from /root to /root/worker:\ninspect the request"
+                            .to_string(),
+                        cache_control: Some(CacheControl::Ephemeral {
+                            ttl: CacheTtl::OneHour,
+                        }),
+                    },
+                ],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text {
+                    text: "after".to_string(),
+                    cache_control: None,
+                }],
+            },
+        ]
+    );
+
+    let encrypted = ResponseItem::AgentMessage {
+        id: None,
+        author: "/root".to_string(),
+        recipient: "/root/worker".to_string(),
+        content: vec![AgentMessageInputContent::EncryptedContent {
+            encrypted_content: "must-not-leak".to_string(),
+        }],
+        internal_chat_message_metadata_passthrough: None,
+    };
+    assert_eq!(
+        encode_for(&model, &[encrypted]),
+        Err(EncodeError::UnsupportedHistoryItem {
+            index: 0,
+            kind: "non-plaintext structured agent message",
+        })
+    );
 }
 
 #[test]
@@ -258,7 +337,6 @@ fn every_unsupported_canonical_item_and_content_kind_is_rejected() {
     let model = profile("claude-sonnet-5");
     let unsupported = [
         json!({"type":"additional_tools","role":"user","tools":[]}),
-        json!({"type":"agent_message","author":"a","recipient":"b","content":[]}),
         json!({"type":"local_shell_call","call_id":"shell","status":"completed","action":{"type":"exec","command":["pwd"],"timeout_ms":null,"working_directory":null,"env":null,"user":null}}),
         json!({"type":"custom_tool_call","call_id":"free","name":"free","input":"raw"}),
         json!({"type":"custom_tool_call_output","call_id":"free","output":"raw"}),
