@@ -12,6 +12,8 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::model_inference::AnthropicThinkingPolicy;
 use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::KimiInferenceConfig;
+use codex_protocol::model_inference::KimiThinkingPolicy;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ApplyPatchToolType;
@@ -1725,6 +1727,88 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
                 .any(|name| name == tool_name),
             "expected {tool_name} in agents namespace"
         );
+    }
+}
+
+#[tokio::test]
+async fn multi_agent_v2_namespace_follows_resolved_model_inference_contract() {
+    let configure_v2 = |turn: &mut TurnContext| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.multi_agent_v2.tool_namespace = Some(MULTI_AGENT_V2_NAMESPACE.to_string());
+        });
+    };
+    let responses = probe(configure_v2).await;
+    let claude = probe(|turn| {
+        configure_v2(turn);
+        turn.model_info.inference = Some(ModelInferenceConfig::Anthropic {
+            wire_api: WireApi::AnthropicMessages,
+            dialect: InferenceDialect::ClaudeCode,
+            route: "claude_code".to_string(),
+            wire_model: "claude-haiku-4-5-20251001".to_string(),
+            max_output_tokens: 32_000,
+            thinking: AnthropicThinkingPolicy::Budgeted {
+                budget_tokens: 31_999,
+            },
+            supports_disabled_thinking: false,
+        });
+    })
+    .await;
+    let kimi = probe(|turn| {
+        configure_v2(turn);
+        turn.model_info.inference = Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+            wire_api: WireApi::ChatCompletions,
+            dialect: InferenceDialect::Kimi,
+            route: "kimi_code".to_string(),
+            wire_model: "kimi-for-coding".to_string(),
+            max_output_tokens: 32_768,
+            thinking: KimiThinkingPolicy::Required,
+        }));
+    })
+    .await;
+
+    let collaboration_tools = [
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "interrupt_agent",
+        "list_agents",
+    ];
+    responses.assert_visible_contains(&[MULTI_AGENT_V2_NAMESPACE]);
+    responses.assert_visible_lacks(&collaboration_tools);
+    let ToolSpec::Namespace(responses_namespace) = responses.visible_spec(MULTI_AGENT_V2_NAMESPACE)
+    else {
+        panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
+    };
+    for native in [&claude, &kimi] {
+        native.assert_visible_lacks(&[MULTI_AGENT_V2_NAMESPACE]);
+        native.assert_visible_contains(&collaboration_tools);
+        for tool_name in collaboration_tools {
+            let ToolSpec::Function(native_function) = native.visible_spec(tool_name) else {
+                panic!("expected visible function spec `{tool_name}`");
+            };
+            let responses_function = responses_namespace
+                .tools
+                .iter()
+                .find_map(|tool| match tool {
+                    ResponsesApiNamespaceTool::Function(function) if function.name == tool_name => {
+                        Some(function)
+                    }
+                    ResponsesApiNamespaceTool::Function(_) => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!("expected `{tool_name}` in {MULTI_AGENT_V2_NAMESPACE} namespace")
+                });
+            assert_eq!(native_function, responses_function);
+            native.assert_registered_contains(&[tool_name]);
+            assert!(
+                !native.registered_names.contains(
+                    &ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, tool_name).to_string()
+                ),
+                "native model should register `{tool_name}` without a namespace"
+            );
+        }
     }
 }
 

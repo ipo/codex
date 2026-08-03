@@ -285,7 +285,7 @@ async fn native_profiles_capture_route_policy_and_compact_at_reserved_boundary()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn incompatible_route_and_unsupported_capabilities_fail_before_io() -> Result<()> {
+async fn incompatible_route_and_structured_output_fail_before_io() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -307,21 +307,6 @@ async fn incompatible_route_and_unsupported_capabilities_fail_before_io() -> Res
         error
             .to_string()
             .contains("must resolve to anthropic_messages/claude_code")
-    );
-    assert_eq!(server.received_requests().await.expect("requests").len(), 0);
-
-    let server = responses::start_mock_server().await;
-    let test = native_builder(&server, "anthropic/claude-sonnet-5")
-        .with_config(|config| config.agents_enabled = true)
-        .build_with_auto_env(&server)
-        .await?;
-    let error = submit_and_expect_completion(&test, "unsupported tools")
-        .await
-        .expect_err("namespace tool should fail");
-    assert!(
-        error
-            .to_string()
-            .contains("only JSON-schema function tools are supported")
     );
     assert_eq!(server.received_requests().await.expect("requests").len(), 0);
 

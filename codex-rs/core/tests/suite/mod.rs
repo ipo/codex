@@ -100,6 +100,7 @@ mod multi_agent_resume;
 #[cfg(unix)]
 mod multi_exec_server_sandbox;
 mod native_subagent_delivery;
+mod native_v2_collaboration;
 mod network_approval;
 mod openai_file_mcp;
 mod otel;

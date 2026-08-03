@@ -347,6 +347,9 @@ pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
 
 fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.provider.capabilities().namespace_tools
+        && turn_context
+            .model_info
+            .supports_responses_capabilities(turn_context.provider.info().wire_api)
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {

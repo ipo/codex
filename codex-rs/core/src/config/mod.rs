@@ -252,14 +252,10 @@ You may also see them addressed as to=/root/..., which indicates your identity i
 "#;
 const DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT: &str = "Full-history forks (`fork_turns` omitted or `\"all\"`) inherit the parent model and reasoning effort and do not accept overrides. Only set `model` or `reasoning_effort` when explicitly requested by the user, applicable `AGENTS.md` instructions, or skill instructions; when doing so, set `fork_turns` to `\"none\"` or a positive integer string.";
 const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "agents";
-fn default_multi_agent_v2_usage_hint_text(
-    usage_hint_text: &str,
-    max_concurrency: usize,
-    tool_namespace: &str,
-) -> String {
+fn default_multi_agent_v2_usage_hint_text(usage_hint_text: &str, max_concurrency: usize) -> String {
     format!(
         r#"{usage_hint_text}
-Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the recipient shown in their tool definitions, such as `to=functions.{tool_namespace}.spawn_agent`, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
+Note that collaboration tools cannot be called from inside `functions.exec`. Call `spawn_agent`, `send_message`, `followup_task`, `wait_agent`, `interrupt_agent`, and `list_agents` only as direct tool calls using the form shown in their tool definitions, since they are intentionally absent from the `functions.exec` `tools.*` namespace. Available tools in `functions.exec` are explicitly described with a `tools` namespace in the developer message.
 
 All agents share the same directory. In detail:
 - All agents have access to the same container and filesystem as you.
@@ -1210,12 +1206,10 @@ impl MultiAgentV2Config {
             root_agent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
                 DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
-                tool_namespace,
             )),
             subagent_usage_hint_text: Some(default_multi_agent_v2_usage_hint_text(
                 DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT,
                 max_concurrent_threads_per_session,
-                tool_namespace,
             )),
             multi_agent_mode_hint_text: None,
             tool_namespace: Some(tool_namespace.to_string()),
