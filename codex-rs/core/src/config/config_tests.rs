@@ -10998,7 +10998,8 @@ max_concurrent_threads_per_session = 17
         ]
         .into_iter()
         .all(|hint| hint.is_some_and(|hint| {
-            hint.contains("to=functions.agents.spawn_agent") && hint.ends_with(concurrency_guidance)
+            hint.contains("using the form shown in their tool definitions")
+                && hint.contains(concurrency_guidance)
         }))
     );
 }
@@ -11089,7 +11090,7 @@ sleep_tool = true
 }
 
 #[test]
-fn multi_agent_v2_default_usage_hints_use_configured_tool_namespace() {
+fn multi_agent_v2_default_usage_hints_are_namespace_neutral() {
     let config_toml = toml::from_str(
         r#"[features.multi_agent_v2]
 tool_namespace = "delegates"
@@ -11106,7 +11107,10 @@ tool_namespace = "delegates"
             config.subagent_usage_hint_text,
         ]
         .into_iter()
-        .all(|hint| hint.is_some_and(|hint| hint.contains("to=functions.delegates.spawn_agent")))
+        .all(|hint| hint.is_some_and(|hint| {
+            hint.contains("using the form shown in their tool definitions")
+                && !hint.contains("functions.delegates")
+        }))
     );
 }
 

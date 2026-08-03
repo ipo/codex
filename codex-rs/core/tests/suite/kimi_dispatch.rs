@@ -309,7 +309,7 @@ async fn managed_profiles_post_complete_native_requests() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn route_and_responses_only_capabilities_fail_before_io() -> Result<()> {
+async fn route_and_structured_output_fail_before_io() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     let result = test_codex()
@@ -359,27 +359,6 @@ async fn route_and_responses_only_capabilities_fail_before_io() -> Result<()> {
             .expect_err("incompatible route")
             .to_string()
             .contains("chat_completions/kimi")
-    );
-    assert!(
-        server
-            .received_requests()
-            .await
-            .expect("requests")
-            .is_empty()
-    );
-
-    let server = responses::start_mock_server().await;
-    let test = native_builder(&server, "kimi/k3")
-        .with_config(|config| config.agents_enabled = true)
-        .build_with_auto_env(&server)
-        .await?;
-    submit(&test, "namespace tool", None).await?;
-    assert!(
-        completion(&test)
-            .await
-            .expect_err("namespace tool")
-            .to_string()
-            .contains("unsupported tool")
     );
     assert!(
         server

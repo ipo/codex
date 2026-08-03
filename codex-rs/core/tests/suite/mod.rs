@@ -97,6 +97,7 @@ mod multi_agent_mode;
 mod multi_agent_resume;
 #[cfg(unix)]
 mod multi_exec_server_sandbox;
+mod kimi_v2_collaboration;
 mod network_approval;
 mod openai_file_mcp;
 mod otel;
