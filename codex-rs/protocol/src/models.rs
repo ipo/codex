@@ -742,6 +742,17 @@ pub fn plaintext_agent_message_content(content: &[AgentMessageInputContent]) -> 
     (!text.trim().is_empty()).then_some(text)
 }
 
+/// Renders one fully plaintext inter-agent message for providers without a
+/// structured agent-message wire item.
+pub fn render_plaintext_agent_message(
+    author: &str,
+    recipient: &str,
+    content: &[AgentMessageInputContent],
+) -> Option<String> {
+    plaintext_agent_message_content(content)
+        .map(|text| format!("Agent message from {author} to {recipient}:\n{text}"))
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageDetail {
@@ -2239,6 +2250,23 @@ mod tests {
         ];
 
         assert_eq!(plaintext_agent_message_content(&content), None);
+    }
+
+    #[test]
+    fn renders_plaintext_agent_message_with_routing_identity() {
+        let content = vec![
+            AgentMessageInputContent::InputText {
+                text: "first".to_string(),
+            },
+            AgentMessageInputContent::InputText {
+                text: "second".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            render_plaintext_agent_message("/root", "/root/worker", &content),
+            Some("Agent message from /root to /root/worker:\nfirst\nsecond".to_string())
+        );
     }
 
     #[test]
