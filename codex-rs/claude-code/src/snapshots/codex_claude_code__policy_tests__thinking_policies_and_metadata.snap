@@ -27,11 +27,7 @@ expression: requests
         "system": [
           {
             "type": "text",
-            "text": "You are Codex, an AI coding agent.",
-            "cache_control": {
-              "type": "ephemeral",
-              "ttl": "1h"
-            }
+            "text": "You are Codex, an AI coding agent."
           },
           {
             "type": "text",
@@ -97,11 +93,7 @@ expression: requests
         "system": [
           {
             "type": "text",
-            "text": "You are Codex, an AI coding agent.",
-            "cache_control": {
-              "type": "ephemeral",
-              "ttl": "1h"
-            }
+            "text": "You are Codex, an AI coding agent."
           },
           {
             "type": "text",
@@ -165,11 +157,7 @@ expression: requests
         "system": [
           {
             "type": "text",
-            "text": "You are Codex, an AI coding agent.",
-            "cache_control": {
-              "type": "ephemeral",
-              "ttl": "1h"
-            }
+            "text": "You are Codex, an AI coding agent."
           },
           {
             "type": "text",
@@ -237,11 +225,7 @@ expression: requests
         "system": [
           {
             "type": "text",
-            "text": "You are Codex, an AI coding agent.",
-            "cache_control": {
-              "type": "ephemeral",
-              "ttl": "1h"
-            }
+            "text": "You are Codex, an AI coding agent."
           },
           {
             "type": "text",
@@ -309,11 +293,7 @@ expression: requests
         "system": [
           {
             "type": "text",
-            "text": "You are Codex, an AI coding agent.",
-            "cache_control": {
-              "type": "ephemeral",
-              "ttl": "1h"
-            }
+            "text": "You are Codex, an AI coding agent."
           },
           {
             "type": "text",
@@ -381,11 +361,7 @@ expression: requests
         "system": [
           {
             "type": "text",
-            "text": "You are Codex, an AI coding agent.",
-            "cache_control": {
-              "type": "ephemeral",
-              "ttl": "1h"
-            }
+            "text": "You are Codex, an AI coding agent."
           },
           {
             "type": "text",
@@ -453,11 +429,7 @@ expression: requests
         "system": [
           {
             "type": "text",
-            "text": "You are Codex, an AI coding agent.",
-            "cache_control": {
-              "type": "ephemeral",
-              "ttl": "1h"
-            }
+            "text": "You are Codex, an AI coding agent."
           },
           {
             "type": "text",
@@ -525,11 +497,7 @@ expression: requests
         "system": [
           {
             "type": "text",
-            "text": "You are Codex, an AI coding agent.",
-            "cache_control": {
-              "type": "ephemeral",
-              "ttl": "1h"
-            }
+            "text": "You are Codex, an AI coding agent."
           },
           {
             "type": "text",
@@ -597,11 +565,7 @@ expression: requests
         "system": [
           {
             "type": "text",
-            "text": "You are Codex, an AI coding agent.",
-            "cache_control": {
-              "type": "ephemeral",
-              "ttl": "1h"
-            }
+            "text": "You are Codex, an AI coding agent."
           },
           {
             "type": "text",

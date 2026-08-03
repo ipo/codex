@@ -63,6 +63,13 @@ fn system(text: &str) -> SystemBlock {
     }
 }
 
+fn cached_system(text: &str, ttl: CacheTtl) -> SystemBlock {
+    SystemBlock::Text {
+        text: text.to_string(),
+        cache_control: Some(CacheControl::Ephemeral { ttl }),
+    }
+}
+
 fn user_text(text: &str) -> Message {
     Message {
         role: Role::User,
@@ -70,6 +77,23 @@ fn user_text(text: &str) -> Message {
             text: text.to_string(),
             cache_control: None,
         }],
+    }
+}
+
+fn cache_control_count(value: &serde_json::Value) -> usize {
+    match value {
+        serde_json::Value::Array(values) => values.iter().map(cache_control_count).sum(),
+        serde_json::Value::Object(values) => {
+            usize::from(values.contains_key("cache_control"))
+                + values.values().map(cache_control_count).sum::<usize>()
+        }
+        _ => 0,
+    }
+}
+
+fn one_hour_cache_control() -> CacheControl {
+    CacheControl::Ephemeral {
+        ttl: CacheTtl::OneHour,
     }
 }
 
@@ -112,7 +136,7 @@ fn assemble(
 #[test]
 fn snapshots_all_thinking_policies_and_transport_metadata() {
     let messages = [user_text("hello")];
-    let system = [
+    let cached_system_blocks = [
         system("You are Codex, an AI coding agent."),
         system("Follow the user."),
     ];
@@ -160,7 +184,8 @@ fn snapshots_all_thinking_policies_and_transport_metadata() {
         .map(|(name, profile, effort)| {
             (
                 *name,
-                assemble(profile, effort, &messages, &system, &[]).expect("supported policy"),
+                assemble(profile, effort, &messages, &cached_system_blocks, &[])
+                    .expect("supported policy"),
             )
         })
         .collect::<Vec<_>>();
@@ -251,9 +276,7 @@ fn function_local_result_schema_is_not_sent_to_claude() {
                 "required": ["path"],
                 "additionalProperties": false
             }),
-            cache_control: Some(CacheControl::Ephemeral {
-                ttl: CacheTtl::OneHour,
-            }),
+            cache_control: None,
         }]
     );
 }
@@ -298,6 +321,211 @@ fn cache_placement_handles_no_tools_and_trailing_ineligible_user_content() {
         ),
         Err(AssembleError::UnsupportedNativeBlock { .. })
     ));
+}
+
+#[test]
+fn cache_policy_is_bounded_across_system_tool_and_user_shapes() {
+    let profile = adaptive("claude-sonnet-5", true);
+    for system_count in [0, 1, 2, 4, 9] {
+        for tool_count in [0, 3] {
+            for has_eligible_user_block in [true, false] {
+                let system = (0..system_count)
+                    .map(|index| system(&format!("system {index}")))
+                    .collect::<Vec<_>>();
+                let tools = (0..tool_count)
+                    .map(|index| function_tool(&format!("tool_{index}")))
+                    .collect::<Vec<_>>();
+                let messages = if has_eligible_user_block {
+                    vec![user_text("latest user")]
+                } else {
+                    vec![Message {
+                        role: Role::User,
+                        content: vec![],
+                    }]
+                };
+
+                let request =
+                    assemble(&profile, &ReasoningEffort::High, &messages, &system, &tools)
+                        .expect("assemble native request");
+                let value = serde_json::to_value(&request).expect("serialize request");
+
+                assert!(cache_control_count(&value) <= 4);
+                assert_eq!(
+                    cache_control_count(&value),
+                    usize::from(system_count > 0) + usize::from(has_eligible_user_block)
+                );
+                assert!(
+                    request
+                        .body
+                        .tools
+                        .iter()
+                        .all(|tool| tool.cache_control.is_none())
+                );
+                assert_eq!(
+                    request.body.system.last().and_then(|block| match block {
+                        SystemBlock::Text { cache_control, .. } => *cache_control,
+                    }),
+                    (system_count > 0).then(one_hour_cache_control)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn cache_policy_normalizes_caller_markers_without_changing_request_content() {
+    let messages = [
+        Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "older user".to_string(),
+                    cache_control: Some(CacheControl::Ephemeral {
+                        ttl: CacheTtl::FiveMinutes,
+                    }),
+                },
+                ContentBlock::Image {
+                    source: ImageSource::Base64 {
+                        media_type: "image/png".to_string(),
+                        data: "aGVsbG8=".to_string(),
+                    },
+                    cache_control: Some(CacheControl::Ephemeral {
+                        ttl: CacheTtl::OneHour,
+                    }),
+                },
+            ],
+        },
+        Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Thinking {
+                thinking: "replayed thought".to_string(),
+                signature: "sig".to_string(),
+            }],
+        },
+        Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "call-1".to_string(),
+                    content: ToolResultContent::Text("result".to_string()),
+                    is_error: false,
+                    cache_control: Some(CacheControl::Ephemeral {
+                        ttl: CacheTtl::FiveMinutes,
+                    }),
+                },
+                ContentBlock::Text {
+                    text: "latest user".to_string(),
+                    cache_control: Some(CacheControl::Ephemeral {
+                        ttl: CacheTtl::OneHour,
+                    }),
+                },
+            ],
+        },
+    ];
+    let cached_system_blocks = [
+        cached_system("first", CacheTtl::FiveMinutes),
+        cached_system("second", CacheTtl::OneHour),
+        cached_system("third", CacheTtl::FiveMinutes),
+        cached_system("final", CacheTtl::OneHour),
+    ];
+    let expected_messages = [
+        Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "older user".to_string(),
+                    cache_control: None,
+                },
+                ContentBlock::Image {
+                    source: ImageSource::Base64 {
+                        media_type: "image/png".to_string(),
+                        data: "aGVsbG8=".to_string(),
+                    },
+                    cache_control: None,
+                },
+            ],
+        },
+        Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Thinking {
+                thinking: "replayed thought".to_string(),
+                signature: "sig".to_string(),
+            }],
+        },
+        Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "call-1".to_string(),
+                    content: ToolResultContent::Text("result".to_string()),
+                    is_error: false,
+                    cache_control: None,
+                },
+                ContentBlock::Text {
+                    text: "latest user".to_string(),
+                    cache_control: None,
+                },
+            ],
+        },
+    ];
+    let expected_system = [
+        system("first"),
+        system("second"),
+        system("third"),
+        system("final"),
+    ];
+    let profile = adaptive("claude-sonnet-5", true);
+    let tools = [function_tool("read"), function_tool("write")];
+
+    let request = assemble(
+        &profile,
+        &ReasoningEffort::High,
+        &messages,
+        &cached_system_blocks,
+        &tools,
+    )
+    .expect("assemble cached input");
+    let expected = assemble(
+        &profile,
+        &ReasoningEffort::High,
+        &expected_messages,
+        &expected_system,
+        &tools,
+    )
+    .expect("assemble uncached input");
+
+    assert_eq!(request, expected);
+    assert_eq!(
+        cache_control_count(&serde_json::to_value(&request).expect("serialize request")),
+        2
+    );
+    assert_eq!(
+        request.body.system,
+        vec![
+            system("first"),
+            system("second"),
+            system("third"),
+            SystemBlock::Text {
+                text: "final".to_string(),
+                cache_control: Some(one_hour_cache_control()),
+            },
+        ]
+    );
+    assert_eq!(
+        request.body.messages[2].content,
+        vec![
+            ContentBlock::ToolResult {
+                tool_use_id: "call-1".to_string(),
+                content: ToolResultContent::Text("result".to_string()),
+                is_error: false,
+                cache_control: None,
+            },
+            ContentBlock::Text {
+                text: "latest user".to_string(),
+                cache_control: Some(one_hour_cache_control()),
+            },
+        ]
+    );
 }
 
 #[test]

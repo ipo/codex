@@ -24,11 +24,7 @@ expression: request
     "system": [
       {
         "type": "text",
-        "text": "first",
-        "cache_control": {
-          "type": "ephemeral",
-          "ttl": "1h"
-        }
+        "text": "first"
       },
       {
         "type": "text",
@@ -123,10 +119,6 @@ expression: request
             "path"
           ],
           "type": "object"
-        },
-        "cache_control": {
-          "type": "ephemeral",
-          "ttl": "1h"
         }
       }
     ],

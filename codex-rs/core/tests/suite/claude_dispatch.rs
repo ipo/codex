@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -5,6 +6,8 @@ use std::time::Duration;
 use anyhow::Result;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
+use codex_protocol::protocol::AdditionalContextEntry;
+use codex_protocol::protocol::AdditionalContextKind;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
@@ -181,6 +184,125 @@ async fn wait_for_completion(test: &core_test_support::test_codex::TestCodex) ->
         _ => None,
     })
     .await
+}
+
+fn cache_control_count(value: &Value) -> usize {
+    match value {
+        Value::Array(values) => values.iter().map(cache_control_count).sum(),
+        Value::Object(values) => {
+            usize::from(values.contains_key("cache_control"))
+                + values.values().map(cache_control_count).sum::<usize>()
+        }
+        _ => 0,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_cache_policy_bounds_production_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let model = "claude-sonnet-5";
+    mount_native(
+        &server,
+        vec![text_terminal(
+            "cache-policy",
+            model,
+            "completed",
+            "end_turn",
+        )],
+    )
+    .await;
+    let test = native_builder(&server, "anthropic/claude-sonnet-5")
+        .build_with_auto_env(&server)
+        .await?;
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "production cache policy".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: BTreeMap::from([
+                (
+                    "one".to_string(),
+                    AdditionalContextEntry {
+                        value: "first application context".to_string(),
+                        kind: AdditionalContextKind::Application,
+                    },
+                ),
+                (
+                    "two".to_string(),
+                    AdditionalContextEntry {
+                        value: "second application context".to_string(),
+                        kind: AdditionalContextKind::Application,
+                    },
+                ),
+                (
+                    "three".to_string(),
+                    AdditionalContextEntry {
+                        value: "third application context".to_string(),
+                        kind: AdditionalContextKind::Application,
+                    },
+                ),
+            ]),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_completion(&test).await?;
+
+    let requests = server.received_requests().await.expect("native requests");
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(request.url.path(), "/v1/messages");
+    assert_eq!(request.url.query(), Some("beta=true"));
+    let body: Value = request.body_json()?;
+    let system = body["system"].as_array().expect("native system blocks");
+    assert!(system.len() >= 4);
+    assert!(
+        system[..system.len() - 1]
+            .iter()
+            .all(|block| block.get("cache_control").is_none())
+    );
+    assert_eq!(
+        system.last().and_then(|block| block.get("cache_control")),
+        Some(&json!({"type": "ephemeral", "ttl": "1h"}))
+    );
+    assert!(
+        body["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+    );
+    assert!(body["tools"].as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "exec_command" && tool.get("input_schema").is_some())
+    }));
+    assert!(
+        body["tools"]
+            .as_array()
+            .expect("native tools")
+            .iter()
+            .all(|tool| tool.get("cache_control").is_none())
+    );
+    let latest_user = body["messages"]
+        .as_array()
+        .expect("native messages")
+        .iter()
+        .rev()
+        .find(|message| message["role"] == "user")
+        .expect("latest native user message");
+    let latest_user_block = latest_user["content"]
+        .as_array()
+        .expect("latest user content")
+        .last()
+        .expect("latest user block");
+    assert_eq!(
+        latest_user_block.get("cache_control"),
+        Some(&json!({"type": "ephemeral", "ttl": "1h"}))
+    );
+    assert_eq!(cache_control_count(&body), 2);
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

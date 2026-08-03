@@ -121,9 +121,11 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
         params.effort,
         wire_model,
     )?;
+    let mut system = params.system.to_vec();
     let mut messages = params.messages.to_vec();
     validate_messages(&messages)?;
-    cache_final_eligible_user_block(&mut messages);
+    let mut tools = encode_tools(params.tools)?;
+    apply_cache_policy(&mut system, &mut messages, &mut tools);
 
     Ok(AssembledRequest {
         transport: request_transport(params.codex_version, session_id),
@@ -131,9 +133,9 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
             model: wire_model.clone(),
             max_tokens: *max_output_tokens,
             stream: true,
-            system: cached_system_blocks(params.system),
+            system,
             messages,
-            tools: encode_tools(params.tools)?,
+            tools,
             thinking,
             output_config,
             context_management: ContextManagement {
@@ -219,21 +221,8 @@ fn thinking_config(
     }
 }
 
-fn cached_system_blocks(system: &[SystemBlock]) -> Vec<SystemBlock> {
-    system
-        .iter()
-        .cloned()
-        .map(|block| match block {
-            SystemBlock::Text { text, .. } => SystemBlock::Text {
-                text,
-                cache_control: Some(one_hour_cache_control()),
-            },
-        })
-        .collect()
-}
-
 fn encode_tools(specs: &[ToolSpec]) -> Result<Vec<Tool>, AssembleError> {
-    let mut tools = specs
+    specs
         .iter()
         .enumerate()
         .map(|(index, spec)| match spec {
@@ -270,11 +259,7 @@ fn encode_tools(specs: &[ToolSpec]) -> Result<Vec<Tool>, AssembleError> {
                 name: tool.name.clone(),
             }),
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    if let Some(tool) = tools.last_mut() {
-        tool.cache_control = Some(one_hour_cache_control());
-    }
-    Ok(tools)
+        .collect()
 }
 
 fn validate_messages(messages: &[Message]) -> Result<(), AssembleError> {
@@ -321,7 +306,33 @@ fn content_block_kind(block: &ContentBlock) -> &'static str {
     }
 }
 
-fn cache_final_eligible_user_block(messages: &mut [Message]) {
+/// Removes caller cache hints and selects the bounded Claude Code-compatible breakpoints.
+fn apply_cache_policy(system: &mut [SystemBlock], messages: &mut [Message], tools: &mut [Tool]) {
+    for block in system.iter_mut() {
+        match block {
+            SystemBlock::Text { cache_control, .. } => *cache_control = None,
+        }
+    }
+    for message in messages.iter_mut() {
+        for block in &mut message.content {
+            match block {
+                ContentBlock::Text { cache_control, .. }
+                | ContentBlock::Image { cache_control, .. }
+                | ContentBlock::ToolResult { cache_control, .. } => *cache_control = None,
+                ContentBlock::Thinking { .. }
+                | ContentBlock::RedactedThinking { .. }
+                | ContentBlock::ToolUse { .. } => {}
+            }
+        }
+    }
+    for tool in tools {
+        tool.cache_control = None;
+    }
+
+    if let Some(SystemBlock::Text { cache_control, .. }) = system.last_mut() {
+        *cache_control = Some(one_hour_cache_control());
+    }
+
     let Some(message) = messages
         .iter_mut()
         .rev()
@@ -329,7 +340,14 @@ fn cache_final_eligible_user_block(messages: &mut [Message]) {
     else {
         return;
     };
-    let Some(block) = message.content.last_mut() else {
+    let Some(block) = message.content.iter_mut().rev().find(|block| {
+        matches!(
+            block,
+            ContentBlock::Text { .. }
+                | ContentBlock::Image { .. }
+                | ContentBlock::ToolResult { .. }
+        )
+    }) else {
         return;
     };
     match block {
