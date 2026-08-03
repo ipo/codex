@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::*;
 
 #[test]
-fn messages_wire_shapes_round_trip() {
+fn messages_wire_shapes_round_trip_with_and_without_context_management() {
     let wire: Value = serde_json::from_str(
         r#"{
           "model":"claude-sonnet-5","max_tokens":64000,"stream":true,
@@ -27,12 +27,20 @@ fn messages_wire_shapes_round_trip() {
         }"#,
     )
     .expect("valid request JSON");
-    let request: MessagesRequest = serde_json::from_value(wire.clone()).expect("valid request");
+    let mut without_context_management = wire.clone();
+    without_context_management
+        .as_object_mut()
+        .expect("request object")
+        .remove("context_management");
 
-    assert_eq!(
-        serde_json::to_value(request).expect("serialize request"),
-        wire
-    );
+    for wire in [wire, without_context_management] {
+        let request: MessagesRequest = serde_json::from_value(wire.clone()).expect("valid request");
+
+        assert_eq!(
+            serde_json::to_value(request).expect("serialize request"),
+            wire
+        );
+    }
 }
 
 #[test]

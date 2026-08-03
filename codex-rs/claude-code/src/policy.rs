@@ -126,6 +126,14 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
     validate_messages(&messages)?;
     let mut tools = encode_tools(params.tools)?;
     apply_cache_policy(&mut system, &mut messages, &mut tools);
+    let context_management = match &thinking {
+        Thinking::Enabled { .. } | Thinking::Adaptive { .. } => Some(ContextManagement {
+            edits: vec![ContextEdit::ClearThinking20251015 {
+                keep: ContextKeep::All,
+            }],
+        }),
+        Thinking::Disabled => None,
+    };
 
     Ok(AssembledRequest {
         transport: request_transport(params.codex_version, session_id),
@@ -138,11 +146,7 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
             tools,
             thinking,
             output_config,
-            context_management: ContextManagement {
-                edits: vec![ContextEdit::ClearThinking20251015 {
-                    keep: ContextKeep::All,
-                }],
-            },
+            context_management,
             metadata: None,
         },
     })

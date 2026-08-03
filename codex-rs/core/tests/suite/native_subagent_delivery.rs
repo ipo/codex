@@ -226,6 +226,10 @@ async fn assert_native_child_delivery(child: NativeChild) -> Result<()> {
         .find(|request| request.url.path() == child.path())
         .expect("native child request");
     let body: Value = request.body_json()?;
+    if matches!(child, NativeChild::Claude) {
+        assert_eq!(body["thinking"], json!({"type": "disabled"}));
+        assert!(body.get("context_management").is_none());
+    }
     let rendered = format!(
         "Agent message from /root to /root/{}:\n{CHILD_PROMPT}",
         child.task_name()
