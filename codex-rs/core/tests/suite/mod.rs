@@ -78,6 +78,8 @@ mod items;
 mod json_result;
 mod kimi_dispatch;
 mod kimi_native_conformance;
+mod kimi_subagent_delivery;
+mod kimi_v2_collaboration;
 mod live_cli;
 mod mcp_auth_elicitation;
 mod mcp_auth_refresh;
@@ -97,7 +99,6 @@ mod multi_agent_mode;
 mod multi_agent_resume;
 #[cfg(unix)]
 mod multi_exec_server_sandbox;
-mod kimi_v2_collaboration;
 mod network_approval;
 mod openai_file_mcp;
 mod otel;
