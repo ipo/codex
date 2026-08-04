@@ -40,6 +40,20 @@ pub struct UsageDetails {
     pub reasoning_tokens: u64,
 }
 
+/// Controls how streamed usage reports are combined by the generic decoder.
+///
+/// The policy applies both to choice-level versus top-level usage within one
+/// chunk and to usage reported by successive chunks. Providers should select
+/// `PreferLatest` only when their protocol defines later reports as authoritative.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UsageMergePolicy {
+    /// Repeated decoded usage must be identical.
+    #[default]
+    RequireIdentical,
+    /// Replace prior usage with the most recently decoded report.
+    PreferLatest,
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DialectError {
     #[error("malformed assistant reasoning replay: {0}")]
@@ -88,6 +102,16 @@ pub trait DialectHooks {
         usage: &ChunkUsage,
     ) -> Result<UsageDetails, DialectError> {
         response_hook_unavailable(context, usage)
+    }
+
+    /// Selects usage precedence for the exact resolved dialect and model.
+    ///
+    /// The default preserves strict conflict rejection for all dialects.
+    fn usage_merge_policy(
+        &self,
+        _context: DialectContext<'_>,
+    ) -> Result<UsageMergePolicy, DialectError> {
+        Ok(UsageMergePolicy::RequireIdentical)
     }
 }
 

@@ -284,6 +284,102 @@ async fn ordered_parallel_loop_replays_reasoning_usage_and_matched_results() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn authoritative_final_usage_executes_and_replays_tool_once() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let preliminary_usage = json!({
+        "prompt_tokens":16646,"completion_tokens":654,"total_tokens":17300
+    });
+    let final_usage = json!({
+        "prompt_tokens":16648,"completion_tokens":654,"total_tokens":17302,
+        "prompt_tokens_details":{"cached_tokens":12000},
+        "completion_tokens_details":{"reasoning_tokens":378}
+    });
+    let tool_stream = [
+        chunk(
+            "authoritative-usage",
+            json!({"reasoning_content":"inspect usage ","tool_calls":[{
+                "index":0,"id":"usage-call","type":"function",
+                "function":{"name":"exec_command","arguments":"{\"cmd\":\"pwd\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}"}
+            }]}),
+            None,
+        ),
+        format!("data: {}\n\n", json!({"id":"authoritative-usage","choices":[{
+            "index":0,"delta":{},"finish_reason":"tool_calls","usage":preliminary_usage
+        }]})),
+        format!("data: {}\n\n", json!({
+            "id":"authoritative-usage","choices":[],"usage":final_usage
+        })),
+        "data: [DONE]\n\n".to_string(),
+    ]
+    .concat();
+    mount_native(
+        &server,
+        vec![
+            native_response(tool_stream),
+            native_response(text_terminal("continued", "usage accepted")),
+        ],
+    )
+    .await;
+    let test = native_builder(&server).build_with_auto_env(&server).await?;
+    let events = submit(&test.codex, "run one usage tool").await?;
+
+    assert!(error(&events).is_none());
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, EventMsg::ExecCommandBegin(_)))
+            .count(),
+        1
+    );
+    let usage = events.iter().rev().find_map(|event| match event {
+        EventMsg::TokenCount(event) => event.info.as_ref(),
+        _ => None,
+    });
+    let expected_usage = codex_protocol::protocol::TokenUsage {
+        input_tokens: 16648,
+        cached_input_tokens: 12000,
+        cache_write_input_tokens: 0,
+        output_tokens: 654,
+        reasoning_output_tokens: 378,
+        total_tokens: 17302,
+    };
+    assert_eq!(
+        usage.map(|usage| &usage.last_token_usage),
+        Some(&expected_usage)
+    );
+    assert_eq!(
+        usage.map(|usage| &usage.total_token_usage),
+        Some(&expected_usage)
+    );
+
+    let requests = server.received_requests().await.expect("native requests");
+    assert_eq!(requests.len(), 2);
+    let continuation = body(&requests[1])?;
+    assert_eq!(
+        continuation["messages"][2],
+        json!({
+            "role":"assistant",
+            "reasoning_content":"inspect usage ",
+            "tool_calls":[{
+                "id":"usage-call","type":"function","function":{
+                    "name":"exec_command",
+                    "arguments":"{\"cmd\":\"pwd\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}"
+                }
+            }]
+        })
+    );
+    assert_eq!(continuation["messages"][3]["role"], "tool");
+    assert_eq!(continuation["messages"][3]["tool_call_id"], "usage-call");
+    assert!(
+        continuation["messages"][3]["content"]
+            .as_str()
+            .is_some_and(|content| !content.is_empty())
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_and_retry_matrix_preserves_exact_stable_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;

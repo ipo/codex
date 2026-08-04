@@ -260,6 +260,14 @@ fn normalize_call_id(call_id: &str) -> String {
 }
 
 impl DialectHooks for KimiDialect {
+    fn usage_merge_policy(
+        &self,
+        context: DialectContext<'_>,
+    ) -> Result<codex_chat_completions::UsageMergePolicy, DialectError> {
+        self.validate_context(context)?;
+        Ok(codex_chat_completions::UsageMergePolicy::PreferLatest)
+    }
+
     fn request_extensions(
         &self,
         context: DialectContext<'_>,
