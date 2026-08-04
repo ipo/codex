@@ -2,7 +2,7 @@ use codex_api::TerminalOutcome;
 use serde_json::Value;
 
 #[rustfmt::skip]
-use crate::{stream_types::{DecodedStream, ToolCallFragment}, ChatCompletionChunk, ChunkUsage, DecodeError, DialectContext, DialectHooks, FinishReason, PendingResult, PresentationDelta, ResponseMetadata, ToolCall, ToolCallFunction, ToolCallKind};
+use crate::{stream_types::{DecodedStream, ToolCallFragment}, ChatCompletionChunk, ChunkUsage, DecodeError, DialectContext, DialectHooks, FinishReason, PendingResult, PresentationDelta, ResponseMetadata, ToolCall, ToolCallFunction, ToolCallKind, UsageMergePolicy};
 
 pub struct DecodeStream<'a> {
     pub context: DialectContext<'a>,
@@ -184,6 +184,10 @@ impl<F: FnMut(PresentationDelta)> Decoder<'_, F> {
                 "choice representation mismatch".to_string(),
             ));
         }
+        let usage_merge_policy = self
+            .params
+            .dialect
+            .usage_merge_policy(self.params.context)?;
         let mut choice_usage = None;
         for (choice, raw_choice) in chunk.choices.into_iter().zip(raw_choices) {
             if choice.index != 0 {
@@ -197,10 +201,10 @@ impl<F: FnMut(PresentationDelta)> Decoder<'_, F> {
             }
             self.delta(choice.delta)?;
             self.finish_reason(raw_choice)?;
-            merge_usage(&mut choice_usage, choice.usage)?;
+            merge_usage(&mut choice_usage, choice.usage, usage_merge_policy)?;
         }
-        merge_usage(&mut choice_usage, chunk.usage)?;
-        merge_usage(&mut self.usage, choice_usage)
+        merge_usage(&mut choice_usage, chunk.usage, usage_merge_policy)?;
+        merge_usage(&mut self.usage, choice_usage, usage_merge_policy)
     }
 
     fn set_response_id(&mut self, id: String) -> Result<(), DecodeError> {
@@ -406,12 +410,16 @@ fn set_once(
 fn merge_usage(
     target: &mut Option<ChunkUsage>,
     usage: Option<ChunkUsage>,
+    policy: UsageMergePolicy,
 ) -> Result<(), DecodeError> {
     if let Some(usage) = usage {
         match target {
             None => *target = Some(usage),
             Some(existing) if existing == &usage => {}
-            Some(_) => return Err(DecodeError::ConflictingUsage),
+            Some(_) => match policy {
+                UsageMergePolicy::RequireIdentical => return Err(DecodeError::ConflictingUsage),
+                UsageMergePolicy::PreferLatest => *target = Some(usage),
+            },
         }
     }
     Ok(())

@@ -8,12 +8,16 @@ use codex_api::HttpTransport;
 use codex_api::Provider;
 use codex_api::ResponseEvent;
 use codex_api::RetryConfig;
+use codex_api::TerminalOutcome;
 use codex_chat_completions::DecodeError;
 use codex_client::Request;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
+use codex_protocol::ResponseItemId;
 use codex_protocol::model_inference::KimiThinkingPolicy;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TokenUsage;
 use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
@@ -219,6 +223,88 @@ async fn stream_result(body: &str) -> Vec<Result<ResponseEvent, KimiStreamError>
     }
     drop(sender);
     stream.collect().await
+}
+
+#[tokio::test]
+async fn authoritative_final_usage_completes_observed_tool_stream() -> Result<(), KimiStreamError> {
+    let preliminary_usage = json!({
+        "prompt_tokens":16646,"completion_tokens":654,"total_tokens":17300
+    });
+    let final_usage = json!({
+        "prompt_tokens":16648,"completion_tokens":654,"total_tokens":17302,
+        "prompt_tokens_details":{"cached_tokens":12000},
+        "completion_tokens_details":{"reasoning_tokens":378}
+    });
+    let body = [
+        format!("data: {}\n\n", json!({"id":"chat-observed","choices":[{
+            "index":0,
+            "delta":{"reasoning_content":"inspect ","tool_calls":[{
+                "index":0,"id":"call-observed","type":"function",
+                "function":{"name":"exec_command","arguments":"{\"cmd\":\"pwd\""}
+            }]},
+            "finish_reason":null
+        }]})),
+        format!("data: {}\n\n", json!({"id":"chat-observed","choices":[{
+            "index":0,
+            "delta":{"tool_calls":[{
+                "index":0,"function":{"arguments":",\"yield_time_ms\":1000,\"max_output_tokens\":1000}"}
+            }]},
+            "finish_reason":"tool_calls",
+            "usage":preliminary_usage
+        }]})),
+        format!("data: {}\n\n", json!({
+            "id":"chat-observed","choices":[],"usage":final_usage
+        })),
+        "data: [DONE]\n\n".to_string(),
+    ]
+    .concat();
+
+    let results = stream_result(&body).await;
+    assert!(results.iter().all(Result::is_ok));
+    let events = results.into_iter().collect::<Result<Vec<_>, _>>()?;
+    let completed_tools = events
+        .iter()
+        .filter_map(|event| match event {
+            ResponseEvent::OutputItemDone(item @ ResponseItem::FunctionCall { .. }) => {
+                Some(item.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        completed_tools,
+        [ResponseItem::FunctionCall {
+            id: Some(ResponseItemId::from_server("fc_kimi_0".to_string())),
+            name: "exec_command".to_string(),
+            namespace: None,
+            arguments: r#"{"cmd":"pwd","yield_time_ms":1000,"max_output_tokens":1000}"#.to_string(),
+            call_id: "call-observed".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }]
+    );
+    let completed = events.iter().find_map(|event| match event {
+        ResponseEvent::Completed {
+            token_usage,
+            terminal_outcome,
+            ..
+        } => Some((token_usage, terminal_outcome)),
+        _ => None,
+    });
+    assert_eq!(
+        completed,
+        Some((
+            &Some(TokenUsage {
+                input_tokens: 16648,
+                cached_input_tokens: 12000,
+                cache_write_input_tokens: 0,
+                output_tokens: 654,
+                reasoning_output_tokens: 378,
+                total_tokens: 17302,
+            }),
+            &TerminalOutcome::ToolsReady,
+        ))
+    );
+    Ok(())
 }
 
 #[tokio::test]

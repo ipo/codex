@@ -12,12 +12,22 @@ use serde_json::json;
 
 use super::*;
 
-#[derive(Default)]
-struct TestDialect(Mutex<Vec<(InferenceDialect, String, &'static str)>>);
+struct TestDialect(
+    Mutex<Vec<(InferenceDialect, String, &'static str)>>,
+    UsageMergePolicy,
+);
+
+impl Default for TestDialect {
+    fn default() -> Self {
+        Self(Mutex::new(Vec::new()), UsageMergePolicy::RequireIdentical)
+    }
+}
 
 #[rustfmt::skip]
 impl TestDialect {
     fn record(&self, context: DialectContext<'_>, hook: &'static str) { self.0.lock().expect("test dialect mutex").push((context.dialect, context.model.to_string(), hook)); }
+
+    fn with_usage_merge_policy(policy: UsageMergePolicy) -> Self { Self(Mutex::new(Vec::new()), policy) }
 }
 
 #[rustfmt::skip]
@@ -42,6 +52,7 @@ impl DialectHooks for TestDialect {
         let reasoning_tokens = usage.details.get("completion_tokens_details").and_then(|value| value.get("reasoning_tokens")).and_then(Value::as_u64).unwrap_or(0);
         Ok(UsageDetails { cached_prompt_tokens:0, reasoning_tokens })
     }
+    fn usage_merge_policy(&self, _context: DialectContext<'_>) -> Result<UsageMergePolicy, DialectError> { Ok(self.1) }
 }
 
 fn frame(value: Value) -> String {
@@ -160,9 +171,33 @@ fn rejects_every_strict_failure_without_returning_pending_tools() {
 
 #[test]
 #[rustfmt::skip]
-fn rejects_conflicting_usage_instead_of_double_counting() {
-    let top = json!({"prompt_tokens":1,"completion_tokens":2,"total_tokens":3});
-    let choice_usage = json!({"prompt_tokens":1,"completion_tokens":3,"total_tokens":4});
-    let body = chunk(vec![choice(json!({"content":"x"}), "stop".into(), Some(choice_usage))], Some(top)) + "data: [DONE]\n\n";
-    assert_eq!(decode(&body, &TestDialect::default()).0, Err(DecodeError::ConflictingUsage));
+fn require_identical_usage_rejects_conflicts_and_accepts_identical_repeats() {
+    let first = json!({"prompt_tokens":1,"completion_tokens":2,"total_tokens":3});
+    let conflicting = json!({"prompt_tokens":1,"completion_tokens":3,"total_tokens":4});
+    let same_chunk = chunk(vec![choice(json!({"content":"x"}), "stop".into(), Some(first.clone()))], Some(conflicting.clone())) + "data: [DONE]\n\n";
+    assert_eq!(decode(&same_chunk, &TestDialect::default()).0, Err(DecodeError::ConflictingUsage));
+
+    let cross_chunk = chunk(vec![choice(json!({"content":"x"}), "stop".into(), Some(first.clone()))], None)
+        + &chunk(vec![], Some(conflicting)) + "data: [DONE]\n\n";
+    assert_eq!(decode(&cross_chunk, &TestDialect::default()).0, Err(DecodeError::ConflictingUsage));
+
+    let identical = chunk(vec![choice(json!({"content":"x"}), "stop".into(), Some(first.clone()))], Some(first.clone()))
+        + &chunk(vec![], Some(first.clone())) + "data: [DONE]\n\n";
+    assert_eq!(decode(&identical, &TestDialect::default()).0.unwrap().usage, Some(serde_json::from_value(first).unwrap()));
+}
+
+#[test]
+#[rustfmt::skip]
+fn prefer_latest_usage_honors_same_chunk_and_cross_chunk_precedence() {
+    let choice_usage = json!({"prompt_tokens":10,"completion_tokens":5,"total_tokens":15});
+    let top_level_usage = json!({"prompt_tokens":11,"completion_tokens":5,"total_tokens":16,"prompt_tokens_details":{"cached_tokens":2}});
+    let dialect = TestDialect::with_usage_merge_policy(UsageMergePolicy::PreferLatest);
+    let same_chunk = chunk(vec![choice(json!({"content":"x"}), "stop".into(), Some(choice_usage.clone()))], Some(top_level_usage.clone())) + "data: [DONE]\n\n";
+    assert_eq!(decode(&same_chunk, &dialect).0.unwrap().usage, Some(serde_json::from_value(top_level_usage.clone()).unwrap()));
+
+    let final_usage = json!({"prompt_tokens":12,"completion_tokens":5,"total_tokens":17,"prompt_tokens_details":{"cached_tokens":3},"completion_tokens_details":{"reasoning_tokens":4}});
+    let cross_chunk = chunk(vec![choice(json!({"content":"x"}), "stop".into(), Some(choice_usage))], Some(top_level_usage))
+        + &chunk(vec![], Some(final_usage.clone())) + "data: [DONE]\n\n";
+    let decoded = decode(&cross_chunk, &dialect).0.unwrap();
+    assert_eq!((decoded.usage, decoded.usage_details), (Some(serde_json::from_value(final_usage).unwrap()), UsageDetails { cached_prompt_tokens:0, reasoning_tokens:4 }));
 }
