@@ -144,12 +144,7 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
         (Some(_), Some(_)) => unreachable!("wire model selects only one compatibility profile"),
     };
     let (thinking, output_config) = if compatibility_enabled {
-        (
-            Thinking::Adaptive { display: None },
-            Some(OutputConfig {
-                effort: OutputEffort::Medium,
-            }),
-        )
+        compatibility_thinking_config(*supports_disabled_thinking, params.effort, wire_model)?
     } else {
         thinking_config(
             *thinking,
@@ -263,25 +258,51 @@ fn thinking_config(
             None,
         )),
         AnthropicThinkingPolicy::Adaptive => {
-            let effort = match effort {
-                ReasoningEffort::Minimal | ReasoningEffort::Low => OutputEffort::Low,
-                ReasoningEffort::Medium => OutputEffort::Medium,
-                ReasoningEffort::High => OutputEffort::High,
-                ReasoningEffort::XHigh => OutputEffort::Xhigh,
-                ReasoningEffort::Max => OutputEffort::Max,
-                ReasoningEffort::None => unreachable!(),
-                ReasoningEffort::Ultra | ReasoningEffort::Custom(_) => {
-                    return Err(AssembleError::UnsupportedEffort {
-                        effort: effort.to_string(),
-                    });
-                }
-            };
+            let effort = adaptive_output_effort(effort)?;
             Ok((
                 Thinking::Adaptive {
                     display: Some(ThinkingDisplay::Omitted),
                 },
                 Some(OutputConfig { effort }),
             ))
+        }
+    }
+}
+
+fn compatibility_thinking_config(
+    supports_disabled: bool,
+    effort: &ReasoningEffort,
+    model: &str,
+) -> Result<(Thinking, Option<OutputConfig>), AssembleError> {
+    if matches!(effort, ReasoningEffort::None) {
+        return if supports_disabled {
+            Ok((Thinking::Disabled, None))
+        } else {
+            Err(AssembleError::DisabledThinkingUnsupported {
+                model: model.to_string(),
+            })
+        };
+    }
+    Ok((
+        Thinking::Adaptive { display: None },
+        Some(OutputConfig {
+            effort: adaptive_output_effort(effort)?,
+        }),
+    ))
+}
+
+fn adaptive_output_effort(effort: &ReasoningEffort) -> Result<OutputEffort, AssembleError> {
+    match effort {
+        ReasoningEffort::Minimal | ReasoningEffort::Low => Ok(OutputEffort::Low),
+        ReasoningEffort::Medium => Ok(OutputEffort::Medium),
+        ReasoningEffort::High => Ok(OutputEffort::High),
+        ReasoningEffort::XHigh => Ok(OutputEffort::Xhigh),
+        ReasoningEffort::Max => Ok(OutputEffort::Max),
+        ReasoningEffort::None => unreachable!(),
+        ReasoningEffort::Ultra | ReasoningEffort::Custom(_) => {
+            Err(AssembleError::UnsupportedEffort {
+                effort: effort.to_string(),
+            })
         }
     }
 }

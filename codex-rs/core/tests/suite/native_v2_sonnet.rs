@@ -246,7 +246,6 @@ async fn sonnet_root_and_public_v2_subagent_use_complete_compatibility_profile()
     for body in [&root_body, &child_body] {
         assert_eq!(body["max_tokens"], 64_000);
         assert_eq!(body["thinking"], json!({"type":"adaptive"}));
-        assert_eq!(body["output_config"], json!({"effort":"medium"}));
         assert_eq!(
             body["context_management"],
             json!({"edits":[{"type":"clear_thinking_20251015","keep":"all"}]})
@@ -291,6 +290,8 @@ async fn sonnet_root_and_public_v2_subagent_use_complete_compatibility_profile()
         assert_eq!(metadata["account_uuid"], "");
         assert_eq!(metadata["session_id"], session);
     }
+    assert_eq!(root_body["output_config"], json!({"effort":"medium"}));
+    assert_eq!(child_body["output_config"], json!({"effort":"high"}));
     assert_eq!(
         root_body["system"][1]["text"],
         "You are Claude Code, Anthropic's official CLI for Claude."

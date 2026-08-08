@@ -112,7 +112,7 @@ expression: requests
         "type": "adaptive"
       },
       "output_config": {
-        "effort": "medium"
+        "effort": "max"
       },
       "context_management": {
         "edits": [
@@ -237,7 +237,7 @@ expression: requests
         "type": "adaptive"
       },
       "output_config": {
-        "effort": "medium"
+        "effort": "max"
       },
       "context_management": {
         "edits": [

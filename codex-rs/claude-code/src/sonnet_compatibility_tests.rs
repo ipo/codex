@@ -136,7 +136,7 @@ fn sonnet_compatibility_replaces_native_profile() {
     assert_eq!(
         root.body.output_config,
         Some(OutputConfig {
-            effort: OutputEffort::Medium,
+            effort: OutputEffort::High,
         })
     );
     assert_eq!(root.body.system.len(), 3);
