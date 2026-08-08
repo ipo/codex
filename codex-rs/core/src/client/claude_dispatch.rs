@@ -2,17 +2,25 @@ use super::*;
 use codex_claude_code::CanonicalOutputSchema;
 use codex_claude_code::ClaudeHttpAdapter;
 use codex_claude_code::EncodeRequest;
+use codex_claude_code::OpusCompatibilityContext;
+use codex_claude_code::OpusEnvironment;
+use codex_claude_code::OpusRequestKind;
 use codex_claude_code::SystemBlock;
 use codex_claude_code::encode_request;
 use codex_model_provider_info::ResolvedWireRoute;
 use codex_protocol::model_inference::AnthropicThinkingPolicy;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::ModelInferenceConfig;
+use codex_utils_path_uri::LegacyAppPathString;
 use futures::TryStreamExt;
 
 use crate::sampling_retry::classify_native_error;
 
 const CLAUDE_MESSAGES_ENDPOINT: &str = "/v1/messages";
+
+#[cfg(test)]
+#[path = "claude_dispatch_tests.rs"]
+mod tests;
 
 pub(super) struct ClaudePlan {
     pub wire_model: String,
@@ -35,6 +43,7 @@ impl ModelClientSession {
         plan: ClaudePlan,
     ) -> Result<ResponseStream> {
         validate_route(&plan.route)?;
+        let opus_compatibility_enabled = plan.wire_model == "claude-opus-5";
         let profile = ModelInferenceConfig::Anthropic {
             wire_api: plan.route.wire_api,
             dialect: plan.route.dialect,
@@ -59,6 +68,22 @@ impl ModelClientSession {
             .map_or(CanonicalOutputSchema::Disabled, |schema| {
                 CanonicalOutputSchema::JsonSchema { schema }
             });
+        let opus_compatibility = if opus_compatibility_enabled {
+            let kind = if matches!(self.client.state.session_source, SessionSource::SubAgent(_)) {
+                OpusRequestKind::Subagent
+            } else {
+                OpusRequestKind::Root
+            };
+            Some(OpusCompatibilityContext {
+                kind,
+                session_id: responses_metadata.session_id.clone(),
+                thread_id: responses_metadata.thread_id.clone(),
+                installation_id: responses_metadata.installation_id.clone(),
+                environment: opus_environment(responses_metadata)?,
+            })
+        } else {
+            None
+        };
         let request = encode_request(EncodeRequest {
             profile: &profile,
             effort: &effort,
@@ -68,14 +93,19 @@ impl ModelClientSession {
             output_schema,
             resumable_session_id: &responses_metadata.session_id.to_string(),
             codex_version: env!("CARGO_PKG_VERSION"),
+            opus_compatibility: opus_compatibility.as_ref(),
         })
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
 
         let client_setup = self.client.current_client_setup().await?;
         let api_provider = provider_for_route(client_setup.api_provider, &plan.route)?;
-        let transport = self
-            .client
-            .build_api_transport(&api_provider, CLAUDE_MESSAGES_ENDPOINT)?;
+        let transport = if opus_compatibility.is_some() {
+            self.client
+                .build_raw_api_transport(&api_provider, CLAUDE_MESSAGES_ENDPOINT)?
+        } else {
+            self.client
+                .build_api_transport(&api_provider, CLAUDE_MESSAGES_ENDPOINT)?
+        };
         let request_auth_context = AuthRequestTelemetryContext::new(
             client_setup.auth.as_ref().map(CodexAuth::auth_mode),
             client_setup.api_auth.as_ref(),
@@ -109,6 +139,36 @@ impl ModelClientSession {
         )
         .0)
     }
+}
+
+fn opus_environment(responses_metadata: &CodexResponsesMetadata) -> Result<OpusEnvironment> {
+    let environment = responses_metadata
+        .turn_environment
+        .as_ref()
+        .ok_or_else(|| {
+            CodexErr::InvalidRequest(
+                "Opus 5 compatibility requires authoritative execution environment facts"
+                    .to_string(),
+            )
+        })?;
+    let cwd = LegacyAppPathString::from_path_uri(
+        &environment.cwd,
+        environment.system.operating_system.path_convention(),
+    )
+    .map_err(|err| {
+        CodexErr::InvalidRequest(format!(
+            "Opus 5 compatibility could not render the execution environment cwd: {err}"
+        ))
+    })?
+    .into_string();
+    Ok(OpusEnvironment {
+        cwd,
+        is_git_repository: environment.is_git_repository,
+        platform: environment.system.operating_system.platform().to_string(),
+        architecture: environment.system.architecture.clone(),
+        shell: environment.shell.clone(),
+        os_version: environment.system.os_version.clone(),
+    })
 }
 
 fn native_system_and_history(prompt: &Prompt) -> Result<(Vec<SystemBlock>, Vec<ResponseItem>)> {

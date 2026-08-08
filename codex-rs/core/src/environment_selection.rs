@@ -273,9 +273,16 @@ impl ThreadEnvironments {
                 tracing::warn!("turn environment `{environment_id}` failed to start: {err}");
                 return Err(Arc::new(err));
             }
+            let info = match environment.info().await {
+                Ok(info) => Some(info),
+                Err(err) => {
+                    tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
+                    None
+                }
+            };
             let shell = if environment.is_remote() {
-                match environment.info().await {
-                    Ok(info) => match Shell::from_environment_shell_info(info.shell) {
+                match info.as_ref() {
+                    Some(info) => match Shell::from_environment_shell_info(info.shell.clone()) {
                         Ok(shell) => Some(shell),
                         Err(err) => {
                             tracing::warn!(
@@ -284,12 +291,7 @@ impl ThreadEnvironments {
                             None
                         }
                     },
-                    Err(err) => {
-                        tracing::warn!(
-                            "failed to get info for environment `{environment_id}`: {err}"
-                        );
-                        None
-                    }
+                    None => None,
                 }
             } else {
                 Some(local_shell)
@@ -301,6 +303,7 @@ impl ThreadEnvironments {
                 selection.workspace_roots,
                 shell,
             );
+            turn_environment.info = info.map(Arc::new);
             let task = shell_snapshot
                 .build(turn_environment.clone())
                 .boxed()

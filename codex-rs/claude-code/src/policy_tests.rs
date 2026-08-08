@@ -66,7 +66,7 @@ fn system(text: &str) -> SystemBlock {
 fn cached_system(text: &str, ttl: CacheTtl) -> SystemBlock {
     SystemBlock::Text {
         text: text.to_string(),
-        cache_control: Some(CacheControl::Ephemeral { ttl }),
+        cache_control: Some(CacheControl::Ephemeral { ttl: Some(ttl) }),
     }
 }
 
@@ -93,7 +93,7 @@ fn cache_control_count(value: &serde_json::Value) -> usize {
 
 fn one_hour_cache_control() -> CacheControl {
     CacheControl::Ephemeral {
-        ttl: CacheTtl::OneHour,
+        ttl: Some(CacheTtl::OneHour),
     }
 }
 
@@ -115,6 +115,23 @@ fn function_tool(name: &str) -> ToolSpec {
     })
 }
 
+fn opus_context(kind: OpusRequestKind) -> OpusCompatibilityContext {
+    OpusCompatibilityContext {
+        kind,
+        session_id: SESSION_A.to_string(),
+        thread_id: "019fbf00-0000-7000-8000-000000000045".to_string(),
+        installation_id: "019fbf00-0000-7000-8000-000000000046".to_string(),
+        environment: OpusEnvironment {
+            cwd: "/workspace/project".to_string(),
+            is_git_repository: true,
+            platform: "linux".to_string(),
+            architecture: "x86_64".to_string(),
+            shell: "bash".to_string(),
+            os_version: "Linux 6.17.0-test".to_string(),
+        },
+    }
+}
+
 fn assemble(
     profile: &ModelInferenceConfig,
     effort: &ReasoningEffort,
@@ -122,6 +139,14 @@ fn assemble(
     system: &[SystemBlock],
     tools: &[ToolSpec],
 ) -> Result<AssembledRequest, AssembleError> {
+    let opus_compatibility = match profile {
+        ModelInferenceConfig::Anthropic { wire_model, .. } if wire_model == "claude-opus-5" => {
+            Some(opus_context(OpusRequestKind::Root))
+        }
+        ModelInferenceConfig::Anthropic { .. }
+        | ModelInferenceConfig::OpenAi { .. }
+        | ModelInferenceConfig::Kimi(_) => None,
+    };
     assemble_request(AssembleRequest {
         profile,
         effort,
@@ -130,7 +155,112 @@ fn assemble(
         tools,
         resumable_session_id: SESSION_A,
         codex_version: "0.146.0",
+        opus_compatibility: opus_compatibility.as_ref(),
     })
+}
+
+#[test]
+fn snapshots_complete_opus_root_and_subagent_requests() {
+    let profile = adaptive("claude-opus-5", true);
+    let messages = [
+        user_text("inspect the workspace"),
+        Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "call-1".to_string(),
+                name: "read".to_string(),
+                input: json!({"path": "src/lib.rs"}),
+            }],
+        },
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call-1".to_string(),
+                content: ToolResultContent::Text("file contents".to_string()),
+                is_error: false,
+                cache_control: None,
+            }],
+        },
+    ];
+    let tools = [function_tool("read")];
+    let requests = [OpusRequestKind::Root, OpusRequestKind::Subagent]
+        .into_iter()
+        .map(|kind| {
+            let context = opus_context(kind);
+            assemble_request(AssembleRequest {
+                profile: &profile,
+                effort: &ReasoningEffort::Max,
+                messages: &messages,
+                system: &[system("Codex instructions must be replaced")],
+                tools: &tools,
+                resumable_session_id: SESSION_B,
+                codex_version: "0.146.0",
+                opus_compatibility: Some(&context),
+            })
+            .expect("assemble Opus compatibility request")
+        })
+        .collect::<Vec<_>>();
+
+    insta::assert_json_snapshot!("opus_5_root_and_subagent_requests", requests);
+}
+
+#[test]
+fn opus_prompts_render_non_git_turn_environment() {
+    let mut context = opus_context(OpusRequestKind::Root);
+    context.environment.cwd = "/workspace/no-repo".to_string();
+    context.environment.is_git_repository = false;
+    let root_system = context.system();
+    let SystemBlock::Text {
+        text: root_prompt, ..
+    } = &root_system[2];
+    assert!(root_prompt.contains("Primary working directory: /workspace/no-repo"));
+    assert!(root_prompt.contains("Is a git repository: false"));
+
+    context.kind = OpusRequestKind::Subagent;
+    let subagent_system = context.system();
+    let SystemBlock::Text {
+        text: subagent_prompt,
+        ..
+    } = &subagent_system[2];
+    assert!(subagent_prompt.contains("Working directory: /workspace/no-repo"));
+    assert!(subagent_prompt.contains("Is directory a git repo: No"));
+}
+
+#[test]
+fn snapshots_complete_non_opus_request_regression() {
+    let messages = [user_text("preserve the native request")];
+    let system = [system("You are Codex."), system("Follow the user.")];
+    let tools = [function_tool("read")];
+    let cases = [
+        (
+            "sonnet",
+            adaptive("claude-sonnet-5", true),
+            ReasoningEffort::High,
+        ),
+        (
+            "fable",
+            adaptive("claude-fable-5", false),
+            ReasoningEffort::High,
+        ),
+        ("haiku", haiku(), ReasoningEffort::High),
+        (
+            "opus_4_8",
+            adaptive("claude-opus-4-8", true),
+            ReasoningEffort::High,
+        ),
+    ];
+    let requests = cases
+        .iter()
+        .map(|(name, profile, effort)| {
+            (
+                *name,
+                assemble(profile, effort, &messages, &system, &tools)
+                    .expect("assemble non-Opus regression request"),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    insta::assert_json_snapshot!("non_opus_request_regression", requests);
 }
 
 #[test]
@@ -155,7 +285,7 @@ fn snapshots_all_thinking_policies_and_transport_metadata() {
         ),
         (
             "adaptive_medium",
-            adaptive("claude-opus-5", true),
+            adaptive("claude-sonnet-5", true),
             ReasoningEffort::Medium,
         ),
         (
@@ -170,7 +300,7 @@ fn snapshots_all_thinking_policies_and_transport_metadata() {
         ),
         (
             "adaptive_max",
-            adaptive("claude-opus-5", true),
+            adaptive("claude-sonnet-5", true),
             ReasoningEffort::Max,
         ),
         (
@@ -298,7 +428,7 @@ fn cache_placement_handles_no_tools_and_trailing_ineligible_user_content() {
         vec![ContentBlock::Text {
             text: "last user".to_string(),
             cache_control: Some(CacheControl::Ephemeral {
-                ttl: CacheTtl::OneHour,
+                ttl: Some(CacheTtl::OneHour),
             }),
         }]
     );
@@ -381,7 +511,7 @@ fn cache_policy_normalizes_caller_markers_without_changing_request_content() {
                 ContentBlock::Text {
                     text: "older user".to_string(),
                     cache_control: Some(CacheControl::Ephemeral {
-                        ttl: CacheTtl::FiveMinutes,
+                        ttl: Some(CacheTtl::FiveMinutes),
                     }),
                 },
                 ContentBlock::Image {
@@ -390,7 +520,7 @@ fn cache_policy_normalizes_caller_markers_without_changing_request_content() {
                         data: "aGVsbG8=".to_string(),
                     },
                     cache_control: Some(CacheControl::Ephemeral {
-                        ttl: CacheTtl::OneHour,
+                        ttl: Some(CacheTtl::OneHour),
                     }),
                 },
             ],
@@ -410,13 +540,13 @@ fn cache_policy_normalizes_caller_markers_without_changing_request_content() {
                     content: ToolResultContent::Text("result".to_string()),
                     is_error: false,
                     cache_control: Some(CacheControl::Ephemeral {
-                        ttl: CacheTtl::FiveMinutes,
+                        ttl: Some(CacheTtl::FiveMinutes),
                     }),
                 },
                 ContentBlock::Text {
                     text: "latest user".to_string(),
                     cache_control: Some(CacheControl::Ephemeral {
-                        ttl: CacheTtl::OneHour,
+                        ttl: Some(CacheTtl::OneHour),
                     }),
                 },
             ],
@@ -542,6 +672,7 @@ fn session_metadata_is_stable_and_identity_free() {
         tools: &[],
         resumable_session_id: session_id,
         codex_version: "0.146.0",
+        opus_compatibility: None,
     };
     let first = assemble_request(params(SESSION_A)).expect("first session");
     let resumed = assemble_request(params(SESSION_A)).expect("resumed session");

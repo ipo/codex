@@ -70,6 +70,27 @@ fn encode_for(
     profile: &ModelInferenceConfig,
     history: &[ResponseItem],
 ) -> Result<AssembledRequest, EncodeError> {
+    let opus_compatibility = match profile {
+        ModelInferenceConfig::Anthropic { wire_model, .. } if wire_model == "claude-opus-5" => {
+            Some(OpusCompatibilityContext {
+                kind: OpusRequestKind::Root,
+                session_id: SESSION.to_string(),
+                thread_id: "019fbf00-0000-7000-8000-000000000045".to_string(),
+                installation_id: "019fbf00-0000-7000-8000-000000000046".to_string(),
+                environment: OpusEnvironment {
+                    cwd: "/workspace/project".to_string(),
+                    is_git_repository: true,
+                    platform: "linux".to_string(),
+                    architecture: "x86_64".to_string(),
+                    shell: "bash".to_string(),
+                    os_version: "Linux 6.17.0-test".to_string(),
+                },
+            })
+        }
+        ModelInferenceConfig::Anthropic { .. }
+        | ModelInferenceConfig::OpenAi { .. }
+        | ModelInferenceConfig::Kimi(_) => None,
+    };
     encode_request(EncodeRequest {
         profile,
         effort: &ReasoningEffort::High,
@@ -79,6 +100,7 @@ fn encode_for(
         output_schema: CanonicalOutputSchema::Disabled,
         resumable_session_id: SESSION,
         codex_version: "0.146.0",
+        opus_compatibility: opus_compatibility.as_ref(),
     })
 }
 
@@ -95,6 +117,7 @@ fn structured_output_schema_is_rejected_before_request_assembly() {
         output_schema: CanonicalOutputSchema::JsonSchema { schema: &schema },
         resumable_session_id: "invalid-if-assembly-runs",
         codex_version: "0.146.0",
+        opus_compatibility: None,
     });
 
     assert_eq!(result, Err(EncodeError::UnsupportedStructuredOutput));
@@ -145,7 +168,7 @@ fn encodes_plaintext_agent_messages_as_user_input_and_rejects_encrypted_content(
                         text: "Agent message from /root to /root/worker:\ninspect the request"
                             .to_string(),
                         cache_control: Some(CacheControl::Ephemeral {
-                            ttl: CacheTtl::OneHour,
+                            ttl: Some(CacheTtl::OneHour),
                         }),
                     },
                 ],

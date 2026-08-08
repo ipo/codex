@@ -384,6 +384,7 @@ async fn native_profiles_capture_route_policy_and_compact_at_reserved_boundary()
             );
         }
         assert!(request.headers.contains_key("anthropic-beta"));
+        assert!(request.headers.contains_key("originator"));
         assert!(request.headers.contains_key("x-claude-code-session-id"));
         let pending = format!("boundary input {}", "x".repeat(4_000));
         test.submit_turn_with_environments(&pending, Some(Vec::new()))

@@ -17,6 +17,7 @@ use crate::ContextKeep;
 use crate::ContextManagement;
 use crate::Message;
 use crate::MessagesRequest;
+use crate::OpusCompatibilityContext;
 use crate::OutputConfig;
 use crate::OutputEffort;
 use crate::Role;
@@ -54,6 +55,7 @@ pub struct AssembleRequest<'a> {
     pub tools: &'a [ToolSpec],
     pub resumable_session_id: &'a str,
     pub codex_version: &'a str,
+    pub opus_compatibility: Option<&'a OpusCompatibilityContext>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -71,6 +73,8 @@ pub enum AssembleError {
     DisabledThinkingUnsupported { model: String },
     #[error("resumable Codex session ID must be a UUID: {session_id}")]
     InvalidSessionId { session_id: String },
+    #[error("claude-opus-5 requires a Claude Code compatibility context")]
+    MissingOpusCompatibilityContext,
     #[error(
         "unsupported tool at index {index}: {kind} `{name}`; only JSON-schema function tools are supported"
     )]
@@ -114,18 +118,40 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
         });
     }
 
-    let session_id = claude_session_id(params.resumable_session_id)?;
-    let (thinking, output_config) = thinking_config(
-        *thinking,
-        *supports_disabled_thinking,
-        params.effort,
-        wire_model,
-    )?;
+    let opus_compatibility = (wire_model == crate::opus_compatibility::OPUS_WIRE_MODEL)
+        .then_some(params.opus_compatibility)
+        .flatten();
+    if wire_model == crate::opus_compatibility::OPUS_WIRE_MODEL && opus_compatibility.is_none() {
+        return Err(AssembleError::MissingOpusCompatibilityContext);
+    }
+    let session_id = match opus_compatibility {
+        Some(context) => context.session_id.clone(),
+        None => claude_session_id(params.resumable_session_id)?,
+    };
+    let (thinking, output_config) = match opus_compatibility {
+        Some(_) => (
+            Thinking::Adaptive { display: None },
+            Some(OutputConfig {
+                effort: OutputEffort::Medium,
+            }),
+        ),
+        None => thinking_config(
+            *thinking,
+            *supports_disabled_thinking,
+            params.effort,
+            wire_model,
+        )?,
+    };
     let mut system = params.system.to_vec();
     let mut messages = params.messages.to_vec();
     validate_messages(&messages)?;
     let mut tools = encode_tools(params.tools)?;
-    apply_cache_policy(&mut system, &mut messages, &mut tools);
+    if let Some(context) = opus_compatibility {
+        system = context.system();
+        crate::opus_compatibility::apply_cache_policy(&mut messages, &mut tools);
+    } else {
+        apply_cache_policy(&mut system, &mut messages, &mut tools);
+    }
     let context_management = match &thinking {
         Thinking::Enabled { .. } | Thinking::Adaptive { .. } => Some(ContextManagement {
             edits: vec![ContextEdit::ClearThinking20251015 {
@@ -136,10 +162,17 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
     };
 
     Ok(AssembledRequest {
-        transport: request_transport(params.codex_version, session_id),
+        transport: match opus_compatibility {
+            Some(context) => context.transport(),
+            None => request_transport(params.codex_version, session_id),
+        },
         body: MessagesRequest {
             model: wire_model.clone(),
-            max_tokens: *max_output_tokens,
+            max_tokens: if opus_compatibility.is_some() {
+                64_000
+            } else {
+                *max_output_tokens
+            },
             stream: true,
             system,
             messages,
@@ -147,7 +180,7 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
             thinking,
             output_config,
             context_management,
-            metadata: None,
+            metadata: opus_compatibility.map(OpusCompatibilityContext::metadata),
         },
     })
 }
@@ -217,7 +250,7 @@ fn thinking_config(
             };
             Ok((
                 Thinking::Adaptive {
-                    display: ThinkingDisplay::Omitted,
+                    display: Some(ThinkingDisplay::Omitted),
                 },
                 Some(OutputConfig { effort }),
             ))
@@ -368,6 +401,6 @@ fn apply_cache_policy(system: &mut [SystemBlock], messages: &mut [Message], tool
 
 fn one_hour_cache_control() -> CacheControl {
     CacheControl::Ephemeral {
-        ttl: crate::CacheTtl::OneHour,
+        ttl: Some(crate::CacheTtl::OneHour),
     }
 }

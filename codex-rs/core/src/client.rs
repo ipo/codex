@@ -992,6 +992,19 @@ impl ModelClient {
         Ok(ReqwestTransport::from_http_client(client))
     }
 
+    fn build_raw_api_transport(
+        &self,
+        api_provider: &ApiProvider,
+        endpoint: &str,
+    ) -> Result<ReqwestTransport> {
+        let request_url = api_provider.url_for_path(endpoint);
+        let client = self
+            .http_client_factory
+            .build_client(&request_url, ClientRouteClass::Api)
+            .map_err(std::io::Error::from)?;
+        Ok(ReqwestTransport::from_http_client(client))
+    }
+
     pub(crate) async fn prewarm_auth(&self) -> Result<()> {
         self.current_client_setup().await.map(|_| ())
     }

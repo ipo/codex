@@ -4,6 +4,7 @@ use crate::shell_snapshot::ShellSnapshotFile;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::TrustedPluginRoots;
 use codex_core_skills::HostSkillsSnapshot;
+use codex_exec_server::EnvironmentInfo;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
@@ -51,6 +52,7 @@ pub(crate) struct TurnEnvironment {
     cwd: PathUri,
     workspace_roots: Vec<PathUri>,
     pub(crate) shell: Option<shell::Shell>,
+    pub(crate) info: Option<Arc<EnvironmentInfo>>,
     pub(crate) shell_snapshot: ShellSnapshotTask,
 }
 
@@ -68,6 +70,7 @@ impl TurnEnvironment {
             cwd,
             workspace_roots,
             shell,
+            info: None,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
         }
     }
@@ -90,6 +93,10 @@ impl TurnEnvironment {
         &self.workspace_roots
     }
 
+    pub(crate) fn info(&self) -> Option<&EnvironmentInfo> {
+        self.info.as_deref()
+    }
+
     pub(crate) fn selection(&self) -> TurnEnvironmentSelection {
         TurnEnvironmentSelection {
             environment_id: self.environment_id.clone(),
@@ -107,6 +114,7 @@ impl std::fmt::Debug for TurnEnvironment {
             .field("cwd", &self.cwd)
             .field("workspace_roots", &self.workspace_roots)
             .field("shell", &self.shell)
+            .field("info", &self.info)
             .finish_non_exhaustive()
     }
 }
@@ -755,6 +763,12 @@ impl Session {
         self.services
             .thread_extension_data
             .insert(model_info.clone());
+        let turn_execution_environment =
+            super::turn_environment_metadata::collect_opus_turn_environment(
+                &model_info,
+                primary_turn_environment,
+            )
+            .await;
 
         let multi_agent_version = match multi_agent_runtime {
             TurnMultiAgentRuntime::ResolveAndStore => {
@@ -820,6 +834,11 @@ impl Session {
         );
         turn_context.extension_data.insert(trusted_plugin_roots);
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
+        if let Some(turn_execution_environment) = turn_execution_environment {
+            turn_context
+                .turn_metadata_state
+                .set_turn_environment(turn_execution_environment);
+        }
 
         if let Some(final_schema) = final_output_json_schema {
             turn_context.final_output_json_schema = final_schema;

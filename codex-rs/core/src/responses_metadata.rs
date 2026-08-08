@@ -6,12 +6,14 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
+use codex_exec_server::EnvironmentSystemInfo;
 use codex_protocol::ThreadId;
 use codex_protocol::ToolName;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
+use codex_utils_path_uri::PathUri;
 use codex_utils_string::to_ascii_json_string;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
@@ -147,6 +149,14 @@ pub(crate) struct TurnMetadataWorkspace {
     pub(crate) has_changes: Option<bool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TurnExecutionEnvironment {
+    pub(crate) cwd: PathUri,
+    pub(crate) is_git_repository: bool,
+    pub(crate) shell: String,
+    pub(crate) system: EnvironmentSystemInfo,
+}
+
 /// Caller-owned snapshot of Codex metadata sent to ResponsesAPI.
 ///
 /// The full Codex turn metadata blob is transported canonically as
@@ -168,6 +178,7 @@ pub struct CodexResponsesMetadata {
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) sandbox: Option<String>,
     pub(crate) workspaces: BTreeMap<String, TurnMetadataWorkspace>,
+    pub(crate) turn_environment: Option<TurnExecutionEnvironment>,
     pub(crate) code_mode_tool_names: Option<BTreeMap<String, ToolName>>,
     pub(crate) turn_started_at_unix_ms: Option<i64>,
     pub(crate) extra: BTreeMap<String, String>,
@@ -194,6 +205,7 @@ impl CodexResponsesMetadata {
             thread_source: None,
             sandbox: None,
             workspaces: BTreeMap::new(),
+            turn_environment: None,
             code_mode_tool_names: None,
             turn_started_at_unix_ms: None,
             extra: BTreeMap::new(),

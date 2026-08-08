@@ -14,6 +14,7 @@ use codex_utils_path_uri::PathUri;
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::EnvironmentSystemInfo;
 use crate::ProcessId;
 
 pub const INITIALIZE_METHOD: &str = "initialize";
@@ -96,6 +97,12 @@ pub struct EnvironmentInfo {
     /// Optional executor features that clients must gate before sending newer request fields.
     #[serde(default)]
     pub capabilities: EnvironmentCapabilities,
+    /// System facts detected by the exec-server on the execution target.
+    ///
+    /// Older exec servers omit this field. Callers that require target identity must fail closed
+    /// instead of substituting facts from their own host process.
+    #[serde(default)]
+    pub system: Option<EnvironmentSystemInfo>,
 }
 
 /// Features supported by the selected exec-server environment.
@@ -137,6 +144,7 @@ impl EnvironmentInfo {
             capabilities: EnvironmentCapabilities {
                 network_proxy_launch: true,
             },
+            system: EnvironmentSystemInfo::local(),
         }
     }
 }
@@ -839,6 +847,7 @@ mod tests {
                 },
                 cwd: None,
                 capabilities: EnvironmentCapabilities::default(),
+                system: None,
             }
         );
     }

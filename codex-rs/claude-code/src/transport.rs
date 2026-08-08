@@ -98,10 +98,10 @@ impl<T: HttpTransport> ClaudeHttpAdapter<T> {
                 headers,
                 Some(body),
                 |request| {
-                    request.headers.insert(
-                        http::header::ACCEPT,
-                        HeaderValue::from_static("text/event-stream"),
-                    );
+                    request
+                        .headers
+                        .entry(http::header::ACCEPT)
+                        .or_insert(HeaderValue::from_static("text/event-stream"));
                 },
             ) => response?,
         };

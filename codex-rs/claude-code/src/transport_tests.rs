@@ -103,6 +103,7 @@ fn request(profile: &ModelInferenceConfig, effort: ReasoningEffort) -> Assembled
     assemble_request(AssembleRequest {
         profile, effort: &effort, messages: &[], system: &[], tools: &[],
         resumable_session_id: SESSION, codex_version: "0.146.0",
+        opus_compatibility: None,
     }).expect("request assembles")
 }
 

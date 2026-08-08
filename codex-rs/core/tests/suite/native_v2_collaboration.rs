@@ -3,9 +3,13 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
+use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AgentStatus;
+use codex_utils_path_uri::LegacyAppPathString;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -27,6 +31,9 @@ use wiremock::matchers::path;
 const CHILD_MODEL: &str = "gpt-5.6-sol";
 const CHILD_TASK: &str = "return a brief acknowledgement";
 const SPAWN_CALL_ID: &str = "call-spawn-child";
+const OPUS_MODEL: &str = "claude-opus-5";
+const OPUS_PROFILE: &str = "anthropic/claude-opus-5";
+const OPUS_BETAS: &str = "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24,fallback-credit-2026-06-01";
 
 #[derive(Clone, Copy)]
 enum NativeParent {
@@ -237,6 +244,361 @@ async fn wait_for_request_count(server: &MockServer, expected: usize) -> Result<
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+struct OpusV2Sequence {
+    root_request_count: AtomicUsize,
+    spawn_arguments: String,
+}
+
+impl Respond for OpusV2Sequence {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body = if request.headers.contains_key("x-claude-code-agent-id") {
+            opus_text("msg-opus-child", "opus child complete")
+        } else if self.root_request_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            opus_spawn(&self.spawn_arguments)
+        } else {
+            opus_text("msg-opus-root", "opus root complete")
+        };
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(body)
+    }
+}
+
+fn opus_start(id: &str) -> String {
+    claude_event(
+        "message_start",
+        json!({"type":"message_start","message":{"id":id,"type":"message","role":"assistant","model":OPUS_MODEL,"content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":0}}}),
+    )
+}
+
+fn opus_text(id: &str, text: &str) -> String {
+    [
+        opus_start(id),
+        claude_event("content_block_start", json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})),
+        claude_event("content_block_delta", json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":text}})),
+        claude_event("content_block_stop", json!({"type":"content_block_stop","index":0})),
+        claude_event("message_delta", json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}})),
+        claude_event("message_stop", json!({"type":"message_stop"})),
+    ]
+    .concat()
+}
+
+fn opus_spawn(arguments: &str) -> String {
+    [
+        opus_start("msg-opus-spawn"),
+        claude_event("content_block_start", json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":SPAWN_CALL_ID,"name":"spawn_agent","input":{}}})),
+        claude_event("content_block_delta", json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":arguments}})),
+        claude_event("content_block_stop", json!({"type":"content_block_stop","index":0})),
+        claude_event("message_delta", json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}})),
+        claude_event("message_stop", json!({"type":"message_stop"})),
+    ]
+    .concat()
+}
+
+fn opus_builder(server: &MockServer) -> TestCodexBuilder {
+    let base_url = server.uri();
+    test_codex().with_config(move |config| {
+        let mut provider = built_in_model_providers(/*openai_base_url*/ None)
+            .remove(CLAUDEFLARE_PROVIDER_ID)
+            .expect("managed Claudeflare provider");
+        provider.base_url = Some(base_url.clone());
+        provider
+            .wire_routes
+            .get_mut("claude_code")
+            .expect("Claude route")
+            .base_url = base_url;
+        config.model_provider = provider;
+        config.model = Some(OPUS_PROFILE.to_string());
+        let cwd = config.codex_home.join("opus-cwd");
+        std::fs::create_dir_all(&cwd).expect("create isolated Opus cwd");
+        config.cwd = cwd;
+        config.agent_default_subagent_model = Some(OPUS_PROFILE.to_string());
+        config.agent_default_subagent_reasoning_effort = Some(ReasoningEffort::Medium);
+        config.base_instructions = Some("Codex root instructions must be replaced".to_string());
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("collaboration feature should be enableable");
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("multi-agent V2 feature should be enableable");
+        config.include_skill_instructions = false;
+        config.include_permissions_instructions = false;
+        config.include_apps_instructions = false;
+        config.include_environment_context = false;
+    })
+}
+
+fn assert_opus_identity(
+    request: &Request,
+    expected_session: &str,
+    expected_platform: &str,
+    expected_architecture: &str,
+    is_subagent: bool,
+) -> Result<()> {
+    assert_eq!(request.url.path(), "/v1/messages");
+    assert_eq!(request.url.query(), Some("beta=true"));
+    assert_eq!(
+        request.headers["user-agent"],
+        "claude-cli/2.1.224 (external, cli)"
+    );
+    assert_eq!(request.headers["accept"], "application/json");
+    assert_eq!(request.headers["x-app"], "cli");
+    assert_eq!(request.headers["anthropic-beta"], OPUS_BETAS);
+    assert_eq!(request.headers["anthropic-version"], "2023-06-01");
+    assert_eq!(
+        request.headers["anthropic-dangerous-direct-browser-access"],
+        "true"
+    );
+    assert_eq!(
+        request.headers["x-claude-code-session-id"],
+        expected_session
+    );
+    assert_eq!(request.headers["x-stainless-lang"], "js");
+    assert_eq!(request.headers["x-stainless-os"], expected_platform);
+    assert_eq!(request.headers["x-stainless-arch"], expected_architecture);
+    assert_eq!(request.headers["x-stainless-package-version"], "0.94.0");
+    assert_eq!(request.headers["x-stainless-runtime"], "node");
+    assert_eq!(request.headers["x-stainless-runtime-version"], "v26.3.0");
+    assert_eq!(request.headers["x-stainless-timeout"], "600");
+    assert_eq!(request.headers["x-stainless-retry-count"], "0");
+    assert!(!request.headers.contains_key("originator"));
+    let agent_id = request
+        .headers
+        .get("x-claude-code-agent-id")
+        .map(|value| value.to_str())
+        .transpose()?;
+    if is_subagent {
+        let agent_id = agent_id.expect("subagent identity header");
+        assert_eq!(agent_id.len(), 17);
+        assert!(agent_id.starts_with('a'));
+        assert!(
+            agent_id[1..]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        );
+    } else {
+        assert_eq!(agent_id, None);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn opus_root_and_public_v2_subagent_use_claude_code_compatibility_profile() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let spawn_arguments = serde_json::to_string(&json!({
+        "plaintext_message": CHILD_TASK,
+        "task_name": "worker",
+        "fork_turns": "none",
+    }))?;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(OpusV2Sequence {
+            root_request_count: AtomicUsize::new(0),
+            spawn_arguments,
+        })
+        .up_to_n_times(3)
+        .mount(&server)
+        .await;
+
+    let test = opus_builder(&server).build_with_auto_env(&server).await?;
+    let selected_cwd = test
+        .codex
+        .environment_selections()
+        .await
+        .into_iter()
+        .next()
+        .expect("selected execution environment")
+        .cwd;
+    test.fs()
+        .create_directory(
+            &selected_cwd.join(".git")?,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    let target_info = test.executor_environment().environment().info().await?;
+    let target_system = target_info
+        .system
+        .expect("current exec server should report target system facts");
+    let expected_cwd = LegacyAppPathString::from_path_uri(
+        &selected_cwd,
+        target_system.operating_system.path_convention(),
+    )?;
+    let expected_shell = if test.executor_environment().environment().is_remote() {
+        target_info.shell.path
+    } else {
+        std::env::var(if cfg!(windows) { "COMSPEC" } else { "SHELL" })
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| if cfg!(windows) { "cmd" } else { "sh" }.to_string())
+    };
+    test.submit_turn("spawn an Opus worker").await?;
+    let requests = wait_for_request_count(&server, /*expected*/ 3).await?;
+    let root_requests = requests
+        .iter()
+        .filter(|request| !request.headers.contains_key("x-claude-code-agent-id"))
+        .collect::<Vec<_>>();
+    let child_request = requests
+        .iter()
+        .find(|request| request.headers.contains_key("x-claude-code-agent-id"))
+        .expect("public V2 Opus child request");
+    assert_eq!(root_requests.len(), 2);
+    let expected_session = test.session_configured.session_id.to_string();
+    let expected_stainless_platform = match target_system.operating_system.platform() {
+        "linux" => "Linux",
+        "macos" => "MacOS",
+        "windows" => "Windows",
+        platform => platform,
+    };
+    let expected_stainless_architecture = match target_system.architecture.as_str() {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        architecture => architecture,
+    };
+    assert_opus_identity(
+        root_requests[0],
+        &expected_session,
+        expected_stainless_platform,
+        expected_stainless_architecture,
+        false,
+    )?;
+    assert_opus_identity(
+        child_request,
+        &expected_session,
+        expected_stainless_platform,
+        expected_stainless_architecture,
+        true,
+    )?;
+
+    let root_body: Value = root_requests[0].body_json()?;
+    let child_body: Value = child_request.body_json()?;
+    for body in [&root_body, &child_body] {
+        assert_eq!(body["model"], OPUS_MODEL);
+        assert_eq!(body["max_tokens"], 64_000);
+        assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+        assert_eq!(body["output_config"], json!({"effort": "medium"}));
+        assert_eq!(
+            body["context_management"],
+            json!({"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]})
+        );
+        assert_eq!(
+            body["system"][1]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
+        assert_eq!(
+            body["system"][2]["cache_control"],
+            json!({"type": "ephemeral"})
+        );
+        let latest_user = body["messages"]
+            .as_array()
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .rev()
+                    .find(|message| message["role"] == "user")
+            })
+            .expect("latest user message");
+        let latest_user_cache = latest_user["content"]
+            .as_array()
+            .and_then(|content| {
+                content
+                    .iter()
+                    .rev()
+                    .find_map(|block| block.get("cache_control"))
+            })
+            .expect("latest eligible user cache marker");
+        assert_eq!(latest_user_cache, &json!({"type": "ephemeral"}));
+        assert!(body["tools"].as_array().is_some_and(|tools| {
+            tools
+                .iter()
+                .all(|tool| tool["name"].is_string() && tool["input_schema"].is_object())
+        }));
+        let compatibility_prompt = body["system"][2]["text"]
+            .as_str()
+            .expect("Opus compatibility prompt");
+        assert!(compatibility_prompt.contains(expected_cwd.as_str()));
+        assert!(compatibility_prompt.contains(&format!(
+            "Platform: {}",
+            target_system.operating_system.platform()
+        )));
+        assert!(compatibility_prompt.contains(&format!("Shell: {expected_shell}")));
+        assert!(
+            compatibility_prompt.contains(&format!("OS Version: {}", target_system.os_version))
+        );
+        assert!(
+            !body
+                .to_string()
+                .contains("Codex root instructions must be replaced")
+        );
+        let metadata: Value = serde_json::from_str(
+            body["metadata"]["user_id"]
+                .as_str()
+                .expect("metadata user identity"),
+        )?;
+        assert_eq!(metadata["device_id"].as_str().map(str::len), Some(64));
+        assert_eq!(metadata["account_uuid"], "");
+        assert_eq!(metadata["session_id"], expected_session);
+    }
+    assert!(
+        root_body["system"][0]["text"]
+            .as_str()
+            .is_some_and(|text| !text.contains("cc_is_subagent=true"))
+    );
+    assert!(root_body["system"][2]["text"].as_str().is_some_and(|text| {
+        text.contains("interactive agent") && text.contains("Is a git repository: true")
+    }));
+    assert!(
+        child_body["system"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("cc_is_subagent=true"))
+    );
+    assert!(
+        child_body["system"][2]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("agent for Claude Code")
+                && text.contains("Is directory a git repo: Yes"))
+    );
+    assert!(child_body["tools"].as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| matches!(tool["name"].as_str(), Some("exec_command" | "spawn_agent")))
+    }));
+    assert!(root_body.to_string().contains("spawn an Opus worker"));
+    assert!(child_body.to_string().contains(CHILD_TASK));
+
+    let root_thread_id = test.session_configured.thread_id;
+    let child_thread_id = test
+        .thread_manager
+        .list_thread_ids()
+        .await
+        .into_iter()
+        .find(|thread_id| *thread_id != root_thread_id)
+        .expect("spawned Opus child thread");
+    let child = test.thread_manager.get_thread(child_thread_id).await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.agent_status().await {
+            AgentStatus::Completed(message) => {
+                assert_eq!(message.as_deref(), Some("opus child complete"));
+                break;
+            }
+            AgentStatus::Errored(error) => anyhow::bail!("Opus child errored: {error}"),
+            status if tokio::time::Instant::now() >= deadline => {
+                anyhow::bail!("timed out waiting for Opus child completion: {status:?}")
+            }
+            AgentStatus::PendingInit
+            | AgentStatus::Running
+            | AgentStatus::Interrupted
+            | AgentStatus::Shutdown
+            | AgentStatus::NotFound => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

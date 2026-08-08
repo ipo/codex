@@ -101,7 +101,10 @@ pub enum ImageSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CacheControl {
-    Ephemeral { ttl: CacheTtl },
+    Ephemeral {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ttl: Option<CacheTtl>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,7 +132,8 @@ pub enum Thinking {
         display: ThinkingDisplay,
     },
     Adaptive {
-        display: ThinkingDisplay,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display: Option<ThinkingDisplay>,
     },
     Disabled,
 }

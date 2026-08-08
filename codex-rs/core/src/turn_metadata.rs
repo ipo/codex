@@ -12,6 +12,7 @@ use tokio::task::JoinHandle;
 use crate::responses_metadata::CODE_MODE_TOOL_NAMES_KEY;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
+use crate::responses_metadata::TurnExecutionEnvironment;
 use crate::responses_metadata::TurnMetadataWorkspace;
 use crate::responses_metadata::filter_extra_metadata;
 use crate::responses_metadata::subagent_header_value;
@@ -29,6 +30,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathUri;
 
 const MODEL_KEY: &str = "model";
 const REASONING_EFFORT_KEY: &str = "reasoning_effort";
@@ -75,11 +77,21 @@ pub async fn detached_memory_responses_metadata(
     cwd: &AbsolutePathBuf,
     sandbox: Option<&str>,
 ) -> CodexResponsesMetadata {
+    let is_git_repository = get_git_repo_root(cwd).is_some();
+    let turn_environment = codex_exec_server::EnvironmentInfo::local()
+        .system
+        .map(|system| TurnExecutionEnvironment {
+            cwd: PathUri::from_abs_path(cwd),
+            is_git_repository,
+            shell: local_model_visible_shell(),
+            system,
+        });
     CodexResponsesMetadata {
         request_kind: Some(CodexResponsesRequestKind::Memory),
         subagent_header: subagent_header_value(session_source),
         sandbox: sandbox.map(ToString::to_string),
         workspaces: memory_workspaces(cwd).await,
+        turn_environment,
         ..CodexResponsesMetadata::new(installation_id, session_id, thread_id, window_id)
     }
 }
@@ -100,6 +112,7 @@ pub(crate) struct TurnMetadataState {
     enriched_workspaces: Arc<RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>>,
     code_mode_tool_names: Arc<RwLock<Option<BTreeMap<String, ToolName>>>>,
     turn_started_at_unix_ms: Arc<RwLock<Option<i64>>>,
+    turn_environment: Arc<RwLock<Option<TurnExecutionEnvironment>>>,
     responsesapi_client_metadata: Arc<RwLock<BTreeMap<String, String>>>,
     user_input_requested_during_turn: Arc<AtomicBool>,
     enrichment_task: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -144,6 +157,7 @@ impl TurnMetadataState {
             enriched_workspaces: Arc::new(RwLock::new(None)),
             code_mode_tool_names: Arc::new(RwLock::new(None)),
             turn_started_at_unix_ms: Arc::new(RwLock::new(None)),
+            turn_environment: Arc::new(RwLock::new(None)),
             responsesapi_client_metadata: Arc::new(RwLock::new(BTreeMap::new())),
             user_input_requested_during_turn: Arc::new(AtomicBool::new(false)),
             enrichment_task: Arc::new(Mutex::new(None)),
@@ -248,6 +262,11 @@ impl TurnMetadataState {
             thread_source: self.thread_source.clone(),
             sandbox: self.sandbox.clone(),
             workspaces: self.current_workspaces(),
+            turn_environment: self
+                .turn_environment
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
             code_mode_tool_names: self
                 .code_mode_tool_names
                 .read()
@@ -288,6 +307,13 @@ impl TurnMetadataState {
             .turn_started_at_unix_ms
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(turn_started_at_unix_ms);
+    }
+
+    pub(crate) fn set_turn_environment(&self, turn_environment: TurnExecutionEnvironment) {
+        *self
+            .turn_environment
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(turn_environment);
     }
 
     pub(crate) fn spawn_git_enrichment_task(&self) {
@@ -347,6 +373,13 @@ impl TurnMetadataState {
             has_changes,
         }
     }
+}
+
+pub(crate) fn local_model_visible_shell() -> String {
+    std::env::var(if cfg!(windows) { "COMSPEC" } else { "SHELL" })
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| if cfg!(windows) { "cmd" } else { "sh" }.to_string())
 }
 
 async fn memory_workspaces(cwd: &AbsolutePathBuf) -> BTreeMap<String, TurnMetadataWorkspace> {

@@ -198,6 +198,40 @@ async fn detached_memory_responses_metadata_omits_empty_workspace_metadata() {
     assert_eq!(parsed, serde_json::json!({"request_kind": "memory"}));
 }
 
+#[tokio::test]
+async fn responses_metadata_preserves_turn_execution_environment() {
+    let (_temp_dir, repo_path) = create_clean_git_repo("repo").await;
+    let cwd = repo_path.join("nested");
+    std::fs::create_dir_all(&cwd).expect("create nested cwd");
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "thread-a".to_string(),
+        /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
+        &SessionSource::Exec,
+        /*thread_source*/ None,
+        "turn-a".to_string(),
+        cwd.clone(),
+        &PermissionProfile::read_only(),
+        WindowsSandboxLevel::Disabled,
+        /*enforce_managed_network*/ false,
+    );
+
+    let expected = TurnExecutionEnvironment {
+        cwd: PathUri::from_abs_path(&cwd),
+        is_git_repository: true,
+        shell: local_model_visible_shell(),
+        system: codex_exec_server::EnvironmentInfo::local()
+            .system
+            .expect("supported local system"),
+    };
+    state.set_turn_environment(expected.clone());
+    let metadata = state.responses_metadata_template();
+
+    assert_eq!(metadata.turn_environment, Some(expected));
+    assert!(metadata.workspaces.is_empty());
+}
+
 #[test]
 fn turn_metadata_state_uses_platform_sandbox_tag() {
     let temp_dir = TempDir::new().expect("temp dir");

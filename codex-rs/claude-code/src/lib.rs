@@ -3,6 +3,7 @@
 mod encoder;
 mod history;
 mod history_content;
+mod opus_compatibility;
 mod policy;
 mod replay;
 mod stream;
@@ -13,6 +14,9 @@ pub use encoder::CanonicalOutputSchema;
 pub use encoder::EncodeError;
 pub use encoder::EncodeRequest;
 pub use encoder::encode_request;
+pub use opus_compatibility::OpusCompatibilityContext;
+pub use opus_compatibility::OpusEnvironment;
+pub use opus_compatibility::OpusRequestKind;
 pub use policy::AssembleError;
 pub use policy::AssembleRequest;
 pub use policy::AssembledRequest;

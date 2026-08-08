@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::AssembleError;
 use crate::AssembleRequest;
 use crate::AssembledRequest;
+use crate::OpusCompatibilityContext;
 use crate::SystemBlock;
 use crate::history::encode_history;
 
@@ -27,6 +28,7 @@ pub struct EncodeRequest<'a> {
     pub output_schema: CanonicalOutputSchema<'a>,
     pub resumable_session_id: &'a str,
     pub codex_version: &'a str,
+    pub opus_compatibility: Option<&'a OpusCompatibilityContext>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -73,5 +75,6 @@ pub fn encode_request(params: EncodeRequest<'_>) -> Result<AssembledRequest, Enc
         tools: params.tools,
         resumable_session_id: params.resumable_session_id,
         codex_version: params.codex_version,
+        opus_compatibility: params.opus_compatibility,
     })?)
 }
