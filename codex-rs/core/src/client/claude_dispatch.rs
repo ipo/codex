@@ -1,10 +1,13 @@
 use super::*;
 use codex_claude_code::CanonicalOutputSchema;
+use codex_claude_code::ClaudeCodeIdentity;
+use codex_claude_code::ClaudeCodeRequestKind;
 use codex_claude_code::ClaudeHttpAdapter;
 use codex_claude_code::EncodeRequest;
 use codex_claude_code::OpusCompatibilityContext;
 use codex_claude_code::OpusEnvironment;
 use codex_claude_code::OpusRequestKind;
+use codex_claude_code::SonnetCompatibilityContext;
 use codex_claude_code::SystemBlock;
 use codex_claude_code::encode_request;
 use codex_model_provider_info::ResolvedWireRoute;
@@ -44,6 +47,7 @@ impl ModelClientSession {
     ) -> Result<ResponseStream> {
         validate_route(&plan.route)?;
         let opus_compatibility_enabled = plan.wire_model == "claude-opus-5";
+        let sonnet_compatibility_enabled = plan.wire_model == "claude-sonnet-5";
         let profile = ModelInferenceConfig::Anthropic {
             wire_api: plan.route.wire_api,
             dialect: plan.route.dialect,
@@ -84,6 +88,19 @@ impl ModelClientSession {
         } else {
             None
         };
+        let sonnet_compatibility =
+            sonnet_compatibility_enabled.then(|| SonnetCompatibilityContext {
+                identity: ClaudeCodeIdentity {
+                    kind: if matches!(self.client.state.session_source, SessionSource::SubAgent(_))
+                    {
+                        ClaudeCodeRequestKind::Subagent
+                    } else {
+                        ClaudeCodeRequestKind::Root
+                    },
+                    session_id: responses_metadata.session_id.clone(),
+                    thread_id: responses_metadata.thread_id.clone(),
+                },
+            });
         let request = encode_request(EncodeRequest {
             profile: &profile,
             effort: &effort,
@@ -94,12 +111,13 @@ impl ModelClientSession {
             resumable_session_id: &responses_metadata.session_id.to_string(),
             codex_version: env!("CARGO_PKG_VERSION"),
             opus_compatibility: opus_compatibility.as_ref(),
+            sonnet_compatibility: sonnet_compatibility.as_ref(),
         })
         .map_err(|error| CodexErr::InvalidRequest(error.to_string()))?;
 
         let client_setup = self.client.current_client_setup().await?;
         let api_provider = provider_for_route(client_setup.api_provider, &plan.route)?;
-        let transport = if opus_compatibility.is_some() {
+        let transport = if opus_compatibility.is_some() || sonnet_compatibility.is_some() {
             self.client
                 .build_raw_api_transport(&api_provider, CLAUDE_MESSAGES_ENDPOINT)?
         } else {

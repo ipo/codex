@@ -1,15 +1,19 @@
 //! Native Anthropic Messages wire types and opaque thinking replay support.
 
+mod claude_code_identity;
 mod encoder;
 mod history;
 mod history_content;
 mod opus_compatibility;
 mod policy;
 mod replay;
+mod sonnet_compatibility;
 mod stream;
 mod transport;
 mod types;
 
+pub use claude_code_identity::ClaudeCodeIdentity;
+pub use claude_code_identity::ClaudeCodeRequestKind;
 pub use encoder::CanonicalOutputSchema;
 pub use encoder::EncodeError;
 pub use encoder::EncodeRequest;
@@ -27,6 +31,7 @@ pub use replay::ReplayError;
 pub use replay::ThinkingReplayBlock;
 pub use replay::decode_thinking_replay;
 pub use replay::encode_thinking_replay;
+pub use sonnet_compatibility::SonnetCompatibilityContext;
 pub use stream::DecodeError;
 pub use stream::DecodedBlock;
 pub use stream::DecodedStream;
@@ -65,6 +70,10 @@ mod tests;
 #[cfg(test)]
 #[path = "policy_tests.rs"]
 mod policy_tests;
+
+#[cfg(test)]
+#[path = "sonnet_compatibility_tests.rs"]
+mod sonnet_compatibility_tests;
 
 #[cfg(test)]
 #[path = "encoder_tests.rs"]

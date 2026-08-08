@@ -101,6 +101,7 @@ fn encode_for(
         resumable_session_id: SESSION,
         codex_version: "0.146.0",
         opus_compatibility: opus_compatibility.as_ref(),
+        sonnet_compatibility: None,
     })
 }
 
@@ -118,6 +119,7 @@ fn structured_output_schema_is_rejected_before_request_assembly() {
         resumable_session_id: "invalid-if-assembly-runs",
         codex_version: "0.146.0",
         opus_compatibility: None,
+        sonnet_compatibility: None,
     });
 
     assert_eq!(result, Err(EncodeError::UnsupportedStructuredOutput));

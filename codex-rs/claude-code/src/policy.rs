@@ -21,6 +21,7 @@ use crate::OpusCompatibilityContext;
 use crate::OutputConfig;
 use crate::OutputEffort;
 use crate::Role;
+use crate::SonnetCompatibilityContext;
 use crate::SystemBlock;
 use crate::Thinking;
 use crate::ThinkingDisplay;
@@ -56,6 +57,7 @@ pub struct AssembleRequest<'a> {
     pub resumable_session_id: &'a str,
     pub codex_version: &'a str,
     pub opus_compatibility: Option<&'a OpusCompatibilityContext>,
+    pub sonnet_compatibility: Option<&'a SonnetCompatibilityContext>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -124,6 +126,9 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
     if wire_model == crate::opus_compatibility::OPUS_WIRE_MODEL && opus_compatibility.is_none() {
         return Err(AssembleError::MissingOpusCompatibilityContext);
     }
+    let sonnet_compatibility = (wire_model == crate::sonnet_compatibility::SONNET_WIRE_MODEL)
+        .then_some(params.sonnet_compatibility)
+        .flatten();
     let session_id = match opus_compatibility {
         Some(context) => context.session_id.clone(),
         None => claude_session_id(params.resumable_session_id)?,
@@ -164,7 +169,10 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
     Ok(AssembledRequest {
         transport: match opus_compatibility {
             Some(context) => context.transport(),
-            None => request_transport(params.codex_version, session_id),
+            None => sonnet_compatibility.map_or_else(
+                || request_transport(params.codex_version, session_id),
+                SonnetCompatibilityContext::transport,
+            ),
         },
         body: MessagesRequest {
             model: wire_model.clone(),

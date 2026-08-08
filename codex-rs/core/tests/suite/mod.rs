@@ -101,6 +101,7 @@ mod multi_agent_resume;
 mod multi_exec_server_sandbox;
 mod native_subagent_delivery;
 mod native_v2_collaboration;
+mod native_v2_sonnet;
 mod network_approval;
 mod openai_file_mcp;
 mod otel;

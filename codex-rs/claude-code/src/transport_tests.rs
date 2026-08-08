@@ -104,6 +104,7 @@ fn request(profile: &ModelInferenceConfig, effort: ReasoningEffort) -> Assembled
         profile, effort: &effort, messages: &[], system: &[], tools: &[],
         resumable_session_id: SESSION, codex_version: "0.146.0",
         opus_compatibility: None,
+        sonnet_compatibility: None,
     }).expect("request assembles")
 }
 

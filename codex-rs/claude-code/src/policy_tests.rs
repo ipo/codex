@@ -156,6 +156,7 @@ fn assemble(
         resumable_session_id: SESSION_A,
         codex_version: "0.146.0",
         opus_compatibility: opus_compatibility.as_ref(),
+        sonnet_compatibility: None,
     })
 }
 
@@ -196,6 +197,7 @@ fn snapshots_complete_opus_root_and_subagent_requests() {
                 resumable_session_id: SESSION_B,
                 codex_version: "0.146.0",
                 opus_compatibility: Some(&context),
+                sonnet_compatibility: None,
             })
             .expect("assemble Opus compatibility request")
         })
@@ -673,6 +675,7 @@ fn session_metadata_is_stable_and_identity_free() {
         resumable_session_id: session_id,
         codex_version: "0.146.0",
         opus_compatibility: None,
+        sonnet_compatibility: None,
     };
     let first = assemble_request(params(SESSION_A)).expect("first session");
     let resumed = assemble_request(params(SESSION_A)).expect("resumed session");

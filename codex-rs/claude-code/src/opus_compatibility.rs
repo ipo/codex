@@ -1,7 +1,6 @@
-use std::collections::BTreeMap;
-use uuid::Uuid;
-
 use crate::CacheControl;
+use crate::ClaudeCodeIdentity;
+use crate::ClaudeCodeRequestKind;
 use crate::ContentBlock;
 use crate::Message;
 use crate::RequestMetadata;
@@ -9,12 +8,12 @@ use crate::RequestTransport;
 use crate::Role;
 use crate::SystemBlock;
 use crate::Tool;
+use crate::claude_code_identity::stable_uuid;
 
 pub(crate) const OPUS_WIRE_MODEL: &str = "claude-opus-5";
 pub(crate) const CLAUDE_CODE_VERSION: &str = "2.1.224";
 pub(crate) const ANTHROPIC_BETAS: &str = "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24,fallback-credit-2026-06-01";
 
-const ID_NAMESPACE: Uuid = Uuid::from_u128(0xd73e_49ad_9688_54f9_a068_fbc7_66b5_821a);
 const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /// Selects the Claude Code prompt and request identity used by an Opus 5 turn.
@@ -47,53 +46,12 @@ pub struct OpusCompatibilityContext {
 
 impl OpusCompatibilityContext {
     pub(crate) fn transport(&self) -> RequestTransport {
-        let mut headers = BTreeMap::from([
-            (
-                "User-Agent".to_string(),
-                format!("claude-cli/{CLAUDE_CODE_VERSION} (external, cli)"),
-            ),
-            ("accept".to_string(), "application/json".to_string()),
-            ("anthropic-beta".to_string(), ANTHROPIC_BETAS.to_string()),
-            (
-                "anthropic-dangerous-direct-browser-access".to_string(),
-                "true".to_string(),
-            ),
-            ("anthropic-version".to_string(), "2023-06-01".to_string()),
-            ("x-app".to_string(), "cli".to_string()),
-            (
-                "x-claude-code-session-id".to_string(),
-                self.session_id.clone(),
-            ),
-            (
-                "x-stainless-arch".to_string(),
-                stainless_arch(&self.environment.architecture).to_string(),
-            ),
-            ("x-stainless-lang".to_string(), "js".to_string()),
-            (
-                "x-stainless-os".to_string(),
-                stainless_os(&self.environment.platform).to_string(),
-            ),
-            (
-                "x-stainless-package-version".to_string(),
-                "0.94.0".to_string(),
-            ),
-            ("x-stainless-retry-count".to_string(), "0".to_string()),
-            ("x-stainless-runtime".to_string(), "node".to_string()),
-            (
-                "x-stainless-runtime-version".to_string(),
-                "v26.3.0".to_string(),
-            ),
-            ("x-stainless-timeout".to_string(), "600".to_string()),
-        ]);
-        if let Some(agent_id) = self.agent_id() {
-            headers.insert("x-claude-code-agent-id".to_string(), agent_id);
-        }
-        RequestTransport {
-            method: "POST",
-            path: "/v1/messages",
-            query: BTreeMap::from([("beta".to_string(), "true".to_string())]),
-            headers,
-        }
+        self.identity().transport(
+            CLAUDE_CODE_VERSION,
+            ANTHROPIC_BETAS,
+            stainless_os(&self.environment.platform),
+            stainless_arch(&self.environment.architecture),
+        )
     }
 
     pub(crate) fn system(&self) -> Vec<SystemBlock> {
@@ -140,13 +98,14 @@ impl OpusCompatibilityContext {
         }
     }
 
-    pub(crate) fn agent_id(&self) -> Option<String> {
-        match self.kind {
-            OpusRequestKind::Root => None,
-            OpusRequestKind::Subagent => {
-                let id = stable_uuid("agent", &self.thread_id).simple().to_string();
-                Some(format!("a{}", &id[..16]))
-            }
+    fn identity(&self) -> ClaudeCodeIdentity {
+        ClaudeCodeIdentity {
+            kind: match self.kind {
+                OpusRequestKind::Root => ClaudeCodeRequestKind::Root,
+                OpusRequestKind::Subagent => ClaudeCodeRequestKind::Subagent,
+            },
+            session_id: self.session_id.clone(),
+            thread_id: self.thread_id.clone(),
         }
     }
 }
@@ -198,10 +157,6 @@ pub(crate) fn apply_cache_policy(messages: &mut [Message], tools: &mut [Tool]) {
 
 pub(crate) fn default_cache_control() -> CacheControl {
     CacheControl::Ephemeral { ttl: None }
-}
-
-fn stable_uuid(domain: &str, identity: &str) -> Uuid {
-    Uuid::new_v5(&ID_NAMESPACE, format!("{domain}:{identity}").as_bytes())
 }
 
 fn stainless_os(platform: &str) -> &str {

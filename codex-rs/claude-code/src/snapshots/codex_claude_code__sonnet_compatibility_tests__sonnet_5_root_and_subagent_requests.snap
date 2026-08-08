@@ -1,0 +1,231 @@
+---
+source: claude-code/src/sonnet_compatibility_tests.rs
+expression: "[request(Some(&root)), request(Some(&subagent))]"
+---
+[
+  {
+    "transport": {
+      "method": "POST",
+      "path": "/v1/messages",
+      "query": {
+        "beta": "true"
+      },
+      "headers": {
+        "User-Agent": "claude-cli/2.1.223 (external, cli)",
+        "accept": "application/json",
+        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "anthropic-version": "2023-06-01",
+        "x-app": "cli",
+        "x-claude-code-session-id": "019fbf00-0000-7000-8000-000000000043",
+        "x-stainless-arch": "x64",
+        "x-stainless-lang": "js",
+        "x-stainless-os": "Linux",
+        "x-stainless-package-version": "0.94.0",
+        "x-stainless-retry-count": "0",
+        "x-stainless-runtime": "node",
+        "x-stainless-runtime-version": "v26.3.0",
+        "x-stainless-timeout": "600"
+      }
+    },
+    "body": {
+      "model": "claude-sonnet-5",
+      "max_tokens": 64000,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "Preserve this native system prompt.",
+          "cache_control": {
+            "type": "ephemeral",
+            "ttl": "1h"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Inspect the workspace."
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call-1",
+              "name": "read",
+              "input": {
+                "path": "src/lib.rs"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "call-1",
+              "content": "contents",
+              "cache_control": {
+                "type": "ephemeral",
+                "ttl": "1h"
+              }
+            }
+          ]
+        }
+      ],
+      "tools": [
+        {
+          "name": "read",
+          "description": "Read a file",
+          "input_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        }
+      ],
+      "thinking": {
+        "type": "adaptive",
+        "display": "omitted"
+      },
+      "output_config": {
+        "effort": "high"
+      },
+      "context_management": {
+        "edits": [
+          {
+            "type": "clear_thinking_20251015",
+            "keep": "all"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "transport": {
+      "method": "POST",
+      "path": "/v1/messages",
+      "query": {
+        "beta": "true"
+      },
+      "headers": {
+        "User-Agent": "claude-cli/2.1.223 (external, cli)",
+        "accept": "application/json",
+        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24",
+        "anthropic-dangerous-direct-browser-access": "true",
+        "anthropic-version": "2023-06-01",
+        "x-app": "cli",
+        "x-claude-code-agent-id": "ae6597ba9beaf540b",
+        "x-claude-code-session-id": "019fbf00-0000-7000-8000-000000000043",
+        "x-stainless-arch": "x64",
+        "x-stainless-lang": "js",
+        "x-stainless-os": "Linux",
+        "x-stainless-package-version": "0.94.0",
+        "x-stainless-retry-count": "0",
+        "x-stainless-runtime": "node",
+        "x-stainless-runtime-version": "v26.3.0",
+        "x-stainless-timeout": "600"
+      }
+    },
+    "body": {
+      "model": "claude-sonnet-5",
+      "max_tokens": 64000,
+      "stream": true,
+      "system": [
+        {
+          "type": "text",
+          "text": "Preserve this native system prompt.",
+          "cache_control": {
+            "type": "ephemeral",
+            "ttl": "1h"
+          }
+        }
+      ],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Inspect the workspace."
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "call-1",
+              "name": "read",
+              "input": {
+                "path": "src/lib.rs"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_use_id": "call-1",
+              "content": "contents",
+              "cache_control": {
+                "type": "ephemeral",
+                "ttl": "1h"
+              }
+            }
+          ]
+        }
+      ],
+      "tools": [
+        {
+          "name": "read",
+          "description": "Read a file",
+          "input_schema": {
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        }
+      ],
+      "thinking": {
+        "type": "adaptive",
+        "display": "omitted"
+      },
+      "output_config": {
+        "effort": "high"
+      },
+      "context_management": {
+        "edits": [
+          {
+            "type": "clear_thinking_20251015",
+            "keep": "all"
+          }
+        ]
+      }
+    }
+  }
+]
