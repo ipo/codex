@@ -77,6 +77,8 @@ pub enum AssembleError {
     InvalidSessionId { session_id: String },
     #[error("claude-opus-5 requires a Claude Code compatibility context")]
     MissingOpusCompatibilityContext,
+    #[error("claude-sonnet-5 requires a Claude Code compatibility context")]
+    MissingSonnetCompatibilityContext,
     #[error(
         "unsupported tool at index {index}: {kind} `{name}`; only JSON-schema function tools are supported"
     )]
@@ -129,29 +131,41 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
     let sonnet_compatibility = (wire_model == crate::sonnet_compatibility::SONNET_WIRE_MODEL)
         .then_some(params.sonnet_compatibility)
         .flatten();
-    let session_id = match opus_compatibility {
-        Some(context) => context.session_id.clone(),
-        None => claude_session_id(params.resumable_session_id)?,
+    if wire_model == crate::sonnet_compatibility::SONNET_WIRE_MODEL
+        && sonnet_compatibility.is_none()
+    {
+        return Err(AssembleError::MissingSonnetCompatibilityContext);
+    }
+    let compatibility_enabled = opus_compatibility.is_some() || sonnet_compatibility.is_some();
+    let session_id = match (opus_compatibility, sonnet_compatibility) {
+        (Some(context), None) => context.session_id.clone(),
+        (None, Some(context)) => context.identity.session_id.clone(),
+        (None, None) => claude_session_id(params.resumable_session_id)?,
+        (Some(_), Some(_)) => unreachable!("wire model selects only one compatibility profile"),
     };
-    let (thinking, output_config) = match opus_compatibility {
-        Some(_) => (
+    let (thinking, output_config) = if compatibility_enabled {
+        (
             Thinking::Adaptive { display: None },
             Some(OutputConfig {
                 effort: OutputEffort::Medium,
             }),
-        ),
-        None => thinking_config(
+        )
+    } else {
+        thinking_config(
             *thinking,
             *supports_disabled_thinking,
             params.effort,
             wire_model,
-        )?,
+        )?
     };
     let mut system = params.system.to_vec();
     let mut messages = params.messages.to_vec();
     validate_messages(&messages)?;
     let mut tools = encode_tools(params.tools)?;
     if let Some(context) = opus_compatibility {
+        system = context.system();
+        crate::opus_compatibility::apply_cache_policy(&mut messages, &mut tools);
+    } else if let Some(context) = sonnet_compatibility {
         system = context.system();
         crate::opus_compatibility::apply_cache_policy(&mut messages, &mut tools);
     } else {
@@ -167,16 +181,15 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
     };
 
     Ok(AssembledRequest {
-        transport: match opus_compatibility {
-            Some(context) => context.transport(),
-            None => sonnet_compatibility.map_or_else(
-                || request_transport(params.codex_version, session_id),
-                SonnetCompatibilityContext::transport,
-            ),
+        transport: match (opus_compatibility, sonnet_compatibility) {
+            (Some(context), None) => context.transport(),
+            (None, Some(context)) => context.transport(),
+            (None, None) => request_transport(params.codex_version, session_id),
+            (Some(_), Some(_)) => unreachable!("wire model selects only one compatibility profile"),
         },
         body: MessagesRequest {
             model: wire_model.clone(),
-            max_tokens: if opus_compatibility.is_some() {
+            max_tokens: if compatibility_enabled {
                 64_000
             } else {
                 *max_output_tokens
@@ -188,7 +201,14 @@ pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest,
             thinking,
             output_config,
             context_management,
-            metadata: opus_compatibility.map(OpusCompatibilityContext::metadata),
+            metadata: match (opus_compatibility, sonnet_compatibility) {
+                (Some(context), None) => Some(context.metadata()),
+                (None, Some(context)) => Some(context.metadata()),
+                (None, None) => None,
+                (Some(_), Some(_)) => {
+                    unreachable!("wire model selects only one compatibility profile")
+                }
+            },
         },
     })
 }

@@ -23,15 +23,23 @@ pub enum OpusRequestKind {
     Subagent,
 }
 
-/// Environment facts substituted into the Claude Code-compatible prompt.
+/// Environment facts substituted into a Claude Code-compatible prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpusEnvironment {
+pub struct ClaudeCodeEnvironment {
     pub cwd: String,
     pub is_git_repository: bool,
     pub platform: String,
     pub architecture: String,
     pub shell: String,
     pub os_version: String,
+}
+
+pub type OpusEnvironment = ClaudeCodeEnvironment;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClaudeCodePromptModel {
+    Opus5,
+    Sonnet5,
 }
 
 /// Stable Codex identities and environment facts needed by the Opus 5 wire profile.
@@ -41,7 +49,7 @@ pub struct OpusCompatibilityContext {
     pub session_id: String,
     pub thread_id: String,
     pub installation_id: String,
-    pub environment: OpusEnvironment,
+    pub environment: ClaudeCodeEnvironment,
 }
 
 impl OpusCompatibilityContext {
@@ -64,8 +72,10 @@ impl OpusCompatibilityContext {
             }
         };
         let prompt = match self.kind {
-            OpusRequestKind::Root => root_prompt(&self.environment),
-            OpusRequestKind::Subagent => subagent_prompt(&self.environment),
+            OpusRequestKind::Root => root_prompt(&self.environment, ClaudeCodePromptModel::Opus5),
+            OpusRequestKind::Subagent => {
+                subagent_prompt(&self.environment, ClaudeCodePromptModel::Opus5)
+            }
         };
         vec![
             SystemBlock::Text {
@@ -84,18 +94,7 @@ impl OpusCompatibilityContext {
     }
 
     pub(crate) fn metadata(&self) -> RequestMetadata {
-        let first = stable_uuid("device-1", &self.installation_id);
-        let second = stable_uuid("device-2", &self.installation_id);
-        RequestMetadata {
-            user_id: Some(
-                serde_json::json!({
-                    "device_id": format!("{}{}", first.simple(), second.simple()),
-                    "account_uuid": "",
-                    "session_id": &self.session_id,
-                })
-                .to_string(),
-            ),
-        }
+        request_metadata(&self.installation_id, &self.session_id)
     }
 
     fn identity(&self) -> ClaudeCodeIdentity {
@@ -159,7 +158,22 @@ pub(crate) fn default_cache_control() -> CacheControl {
     CacheControl::Ephemeral { ttl: None }
 }
 
-fn stainless_os(platform: &str) -> &str {
+pub(crate) fn request_metadata(installation_id: &str, session_id: &str) -> RequestMetadata {
+    let first = stable_uuid("device-1", installation_id);
+    let second = stable_uuid("device-2", installation_id);
+    RequestMetadata {
+        user_id: Some(
+            serde_json::json!({
+                "device_id": format!("{}{}", first.simple(), second.simple()),
+                "account_uuid": "",
+                "session_id": session_id,
+            })
+            .to_string(),
+        ),
+    }
+}
+
+pub(crate) fn stainless_os(platform: &str) -> &str {
     match platform {
         "linux" => "Linux",
         "macos" => "MacOS",
@@ -168,7 +182,7 @@ fn stainless_os(platform: &str) -> &str {
     }
 }
 
-fn stainless_arch(architecture: &str) -> &str {
+pub(crate) fn stainless_arch(architecture: &str) -> &str {
     match architecture {
         "x86_64" => "x64",
         "aarch64" => "arm64",
@@ -176,9 +190,16 @@ fn stainless_arch(architecture: &str) -> &str {
     }
 }
 
-fn root_environment_block(environment: &OpusEnvironment) -> String {
+pub(crate) fn root_environment_block(
+    environment: &ClaudeCodeEnvironment,
+    model: ClaudeCodePromptModel,
+) -> String {
+    let (model_name, model_id, knowledge_cutoff) = match model {
+        ClaudeCodePromptModel::Opus5 => ("Opus 5 (1M context)", "claude-opus-5[1m]", "May 2026"),
+        ClaudeCodePromptModel::Sonnet5 => ("Sonnet 5", "claude-sonnet-5", "January 2026"),
+    };
     format!(
-        "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: {}\n - Is a git repository: {}\n - Platform: {}\n - Shell: {}\n - OS Version: {}\n - You are powered by the model named Opus 5 (1M context). The exact model ID is claude-opus-5[1m].\n - Assistant knowledge cutoff is May 2026.\n - The most recent Claude models are the Claude 5 family and Haiku 4.5. Model IDs — Fable 5: 'claude-fable-5', Opus 5: 'claude-opus-5', Sonnet 5: 'claude-sonnet-5', Haiku 4.5: 'claude-haiku-4-5-20251001'. When building AI applications, default to the latest and most capable Claude models.\n - This request uses a Claude Code-compatible profile inside Codex; Claude Code-specific surfaces and commands are not necessarily available.\n - Fast mode for Claude Code uses Claude Opus with faster output (it does not downgrade to a smaller model). The Claude Code `/fast` command is not available in Codex.",
+        "# Environment\nYou have been invoked in the following environment: \n - Primary working directory: {}\n - Is a git repository: {}\n - Platform: {}\n - Shell: {}\n - OS Version: {}\n - You are powered by the model named {model_name}. The exact model ID is {model_id}.\n - Assistant knowledge cutoff is {knowledge_cutoff}.\n - The most recent Claude models are the Claude 5 family and Haiku 4.5. Model IDs — Fable 5: 'claude-fable-5', Opus 5: 'claude-opus-5', Sonnet 5: 'claude-sonnet-5', Haiku 4.5: 'claude-haiku-4-5-20251001'. When building AI applications, default to the latest and most capable Claude models.\n - This request uses a Claude Code-compatible profile inside Codex; Claude Code-specific surfaces and commands are not necessarily available.\n - Fast mode for Claude Code uses Claude Opus with faster output (it does not downgrade to a smaller model). The Claude Code `/fast` command is not available in Codex.",
         environment.cwd,
         environment.is_git_repository,
         environment.platform,
@@ -187,9 +208,16 @@ fn root_environment_block(environment: &OpusEnvironment) -> String {
     )
 }
 
-fn subagent_environment_block(environment: &OpusEnvironment) -> String {
+fn subagent_environment_block(
+    environment: &ClaudeCodeEnvironment,
+    model: ClaudeCodePromptModel,
+) -> String {
+    let (model_name, model_id, knowledge_cutoff) = match model {
+        ClaudeCodePromptModel::Opus5 => ("Opus 5 (1M context)", "claude-opus-5[1m]", "May 2026"),
+        ClaudeCodePromptModel::Sonnet5 => ("Sonnet 5", "claude-sonnet-5", "January 2026"),
+    };
     format!(
-        "Here is useful information about the environment you are running in:\n<env>\nWorking directory: {}\nIs directory a git repo: {}\nPlatform: {}\nShell: {}\nOS Version: {}\n</env>\nYou are powered by the model named Opus 5 (1M context). The exact model ID is claude-opus-5[1m].\n\nAssistant knowledge cutoff is May 2026.",
+        "Here is useful information about the environment you are running in:\n<env>\nWorking directory: {}\nIs directory a git repo: {}\nPlatform: {}\nShell: {}\nOS Version: {}\n</env>\nYou are powered by the model named {model_name}. The exact model ID is {model_id}.\n\nAssistant knowledge cutoff is {knowledge_cutoff}.",
         environment.cwd,
         if environment.is_git_repository {
             "Yes"
@@ -202,7 +230,10 @@ fn subagent_environment_block(environment: &OpusEnvironment) -> String {
     )
 }
 
-fn root_prompt(environment: &OpusEnvironment) -> String {
+pub(crate) fn root_prompt(
+    environment: &ClaudeCodeEnvironment,
+    model: ClaudeCodePromptModel,
+) -> String {
     format!(
         r#"
 You are an interactive agent that helps users with software engineering tasks.
@@ -250,11 +281,14 @@ Do not use workflows or deep-research unless the user requested it
 
 gitStatus: Repository state can change during the conversation. Inspect the actual repository with the available tools before relying on its status.
 "#,
-        root_environment_block(environment)
+        root_environment_block(environment, model)
     )
 }
 
-fn subagent_prompt(environment: &OpusEnvironment) -> String {
+pub(crate) fn subagent_prompt(
+    environment: &ClaudeCodeEnvironment,
+    model: ClaudeCodePromptModel,
+) -> String {
     format!(
         r#"You are an agent for Claude Code, Anthropic's official CLI for Claude. Given the user's message, you should use the tools available to complete the task. Complete the task fully—don't gold-plate, but don't leave it half-done. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.
 
@@ -285,6 +319,6 @@ Notes:
 
 gitStatus: Repository state can change during the conversation. Inspect the actual repository with the available tools before relying on its status.
 "#,
-        subagent_environment_block(environment)
+        subagent_environment_block(environment, model)
     )
 }

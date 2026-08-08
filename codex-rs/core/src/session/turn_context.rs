@@ -764,7 +764,7 @@ impl Session {
             .thread_extension_data
             .insert(model_info.clone());
         let turn_execution_environment =
-            super::turn_environment_metadata::collect_opus_turn_environment(
+            super::turn_environment_metadata::collect_claude_code_turn_environment(
                 &model_info,
                 primary_turn_environment,
             )

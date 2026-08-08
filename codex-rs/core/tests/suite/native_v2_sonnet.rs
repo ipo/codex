@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::Result;
+use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
@@ -28,6 +29,7 @@ const PROFILE: &str = "anthropic/claude-sonnet-5";
 const BETAS: &str = "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,advisor-tool-2026-03-01,effort-2025-11-24";
 const CALL_ID: &str = "call-spawn-sonnet";
 const CHILD_TASK: &str = "return a Sonnet acknowledgement";
+
 fn event(name: &str, data: Value) -> String {
     format!("event: {name}\ndata: {data}\n\n")
 }
@@ -94,6 +96,9 @@ fn builder(server: &MockServer) -> TestCodexBuilder {
             .base_url = base_url;
         config.model_provider = provider;
         config.model = Some(PROFILE.to_string());
+        let cwd = config.codex_home.join("sonnet-cwd");
+        std::fs::create_dir_all(&cwd).expect("create isolated Sonnet cwd");
+        config.cwd = cwd;
         config.agent_default_subagent_model = Some(PROFILE.to_string());
         config.agent_default_subagent_reasoning_effort = Some(ReasoningEffort::High);
         config.base_instructions = Some("keep the native Sonnet prompt".to_string());
@@ -120,7 +125,16 @@ async fn wait_for_requests(server: &MockServer, expected: usize) -> Result<Vec<R
             return Ok(requests);
         }
         if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for {expected} Sonnet requests")
+            let received = requests
+                .iter()
+                .map(|request| {
+                    (
+                        request.url.path().to_string(),
+                        request.headers.contains_key("x-claude-code-agent-id"),
+                    )
+                })
+                .collect::<Vec<_>>();
+            anyhow::bail!("timed out waiting for {expected} Sonnet requests; received {received:?}")
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -157,6 +171,8 @@ fn assert_sonnet_headers(request: &Request, session_id: &str, subagent: bool) ->
         .is_ok()
     );
     assert!(!request.headers.contains_key("originator"));
+    assert!(request.headers.contains_key("authorization"));
+    assert!(!request.headers.contains_key("chatgpt-account-id"));
     let agent_id = request
         .headers
         .get("x-claude-code-agent-id")
@@ -175,7 +191,7 @@ fn assert_sonnet_headers(request: &Request, session_id: &str, subagent: bool) ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sonnet_root_and_public_v2_subagent_use_header_only_profile() -> Result<()> {
+async fn sonnet_root_and_public_v2_subagent_use_complete_compatibility_profile() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
     Mock::given(method("POST"))
@@ -193,6 +209,21 @@ async fn sonnet_root_and_public_v2_subagent_use_header_only_profile() -> Result<
         .await;
 
     let test = builder(&server).build_with_auto_env(&server).await?;
+    let selected_cwd = test
+        .codex
+        .environment_selections()
+        .await
+        .into_iter()
+        .next()
+        .expect("selected execution environment")
+        .cwd;
+    test.fs()
+        .create_directory(
+            &selected_cwd.join(".git")?,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
     test.submit_turn("spawn a Sonnet worker").await?;
     let requests = wait_for_requests(&server, /*expected*/ 3).await?;
     let root_requests = requests
@@ -212,14 +243,78 @@ async fn sonnet_root_and_public_v2_subagent_use_header_only_profile() -> Result<
     let child_body: Value = child_request.body_json()?;
     assert_eq!(root_body["model"], MODEL);
     assert_eq!(child_body["model"], MODEL);
-    assert_eq!(root_body["max_tokens"], 64_000);
+    for body in [&root_body, &child_body] {
+        assert_eq!(body["max_tokens"], 64_000);
+        assert_eq!(body["thinking"], json!({"type":"adaptive"}));
+        assert_eq!(body["output_config"], json!({"effort":"medium"}));
+        assert_eq!(
+            body["context_management"],
+            json!({"edits":[{"type":"clear_thinking_20251015","keep":"all"}]})
+        );
+        assert_eq!(body["system"].as_array().map(Vec::len), Some(3));
+        assert_eq!(
+            body["system"][1]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert_eq!(
+            body["system"][2]["cache_control"],
+            json!({"type":"ephemeral"})
+        );
+        assert!(body["tools"].as_array().is_some_and(|tools| {
+            tools
+                .iter()
+                .all(|tool| tool["name"].is_string() && tool["input_schema"].is_object())
+        }));
+        let latest_user_cache = body["messages"]
+            .as_array()
+            .and_then(|messages| {
+                messages
+                    .iter()
+                    .rev()
+                    .find(|message| message["role"] == "user")
+            })
+            .and_then(|message| message["content"].as_array())
+            .and_then(|content| {
+                content
+                    .iter()
+                    .rev()
+                    .find_map(|block| block.get("cache_control"))
+            })
+            .expect("latest eligible user cache marker");
+        assert_eq!(latest_user_cache, &json!({"type":"ephemeral"}));
+        let metadata: Value = serde_json::from_str(
+            body["metadata"]["user_id"]
+                .as_str()
+                .expect("metadata user identity"),
+        )?;
+        assert_eq!(metadata["device_id"].as_str().map(str::len), Some(64));
+        assert_eq!(metadata["account_uuid"], "");
+        assert_eq!(metadata["session_id"], session);
+    }
     assert_eq!(
-        root_body["thinking"],
-        json!({"type":"adaptive", "display":"omitted"})
+        root_body["system"][1]["text"],
+        "You are Claude Code, Anthropic's official CLI for Claude."
     );
-    assert_eq!(root_body["output_config"], json!({"effort":"high"}));
+    assert_eq!(
+        child_body["system"][1]["text"],
+        "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+    );
+    assert!(root_body["system"][2]["text"].as_str().is_some_and(|text| {
+        text.contains("model named Sonnet 5")
+            && text.contains("exact model ID is claude-sonnet-5")
+            && text.contains("knowledge cutoff is January 2026")
+    }));
     assert!(
-        root_body
+        child_body["system"][2]["text"]
+            .as_str()
+            .is_some_and(|text| {
+                text.contains("agent for Claude Code")
+                    && text.contains("model named Sonnet 5")
+                    && text.contains("knowledge cutoff is January 2026")
+            })
+    );
+    assert!(
+        !root_body
             .to_string()
             .contains("keep the native Sonnet prompt")
     );

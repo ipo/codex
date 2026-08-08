@@ -201,7 +201,7 @@ fn cache_control_count(value: &Value) -> usize {
 async fn native_cache_policy_bounds_production_request() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
-    let model = "claude-sonnet-5";
+    let model = "claude-opus-4-8";
     mount_native(
         &server,
         vec![text_terminal(
@@ -212,7 +212,7 @@ async fn native_cache_policy_bounds_production_request() -> Result<()> {
         )],
     )
     .await;
-    let test = native_builder(&server, "anthropic/claude-sonnet-5")
+    let test = native_builder(&server, "anthropic/claude-opus-4-8")
         .build_with_auto_env(&server)
         .await?;
     test.codex
@@ -318,8 +318,8 @@ async fn native_profiles_capture_route_policy_and_compact_at_reserved_boundary()
             Value::Null,
         ),
         (
-            "anthropic/claude-sonnet-5",
-            "claude-sonnet-5",
+            "anthropic/claude-opus-4-8",
+            "claude-opus-4-8",
             64_000,
             885_500,
             json!({"type":"adaptive","display":"omitted"}),
@@ -515,7 +515,7 @@ async fn parallel_exec_commands_pause_and_completion_use_one_native_session() ->
 async fn discarding_and_protocol_terminals_leave_native_history_stable() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
-    let model = "claude-sonnet-5";
+    let model = "claude-opus-4-8";
     let unknown = [start("msg-bad", model), event("message_delta", json!({"type":"message_delta","delta":{"stop_reason":"future_reason"},"usage":{"output_tokens":1}}))].concat();
     mount_native(
         &server,
@@ -528,7 +528,7 @@ async fn discarding_and_protocol_terminals_leave_native_history_stable() -> Resu
         ],
     )
     .await;
-    let test = native_retry_limit(native_builder(&server, "anthropic/claude-sonnet-5"), 3)
+    let test = native_retry_limit(native_builder(&server, "anthropic/claude-opus-4-8"), 3)
         .build_with_auto_env(&server)
         .await?;
     for prompt in ["exhaust", "after exhaustion", "refuse", "after refusal"] {

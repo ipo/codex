@@ -15,6 +15,18 @@ use super::*;
 
 const SESSION: &str = "019fbf00-0000-7000-8000-000000000043";
 const THREAD: &str = "019fbf00-0000-7000-8000-000000000044";
+const INSTALLATION: &str = "019fbf00-0000-7000-8000-000000000045";
+
+fn environment() -> OpusEnvironment {
+    OpusEnvironment {
+        cwd: "/workspace/project".to_string(),
+        is_git_repository: true,
+        platform: "linux".to_string(),
+        architecture: "x86_64".to_string(),
+        shell: "bash".to_string(),
+        os_version: "Linux 6.17.0-test".to_string(),
+    }
+}
 
 fn profile() -> ModelInferenceConfig {
     ModelInferenceConfig::Anthropic {
@@ -35,10 +47,14 @@ fn context(kind: ClaudeCodeRequestKind) -> SonnetCompatibilityContext {
             session_id: SESSION.to_string(),
             thread_id: THREAD.to_string(),
         },
+        installation_id: INSTALLATION.to_string(),
+        environment: environment(),
     }
 }
 
-fn request(context: Option<&SonnetCompatibilityContext>) -> AssembledRequest {
+fn request(
+    context: Option<&SonnetCompatibilityContext>,
+) -> Result<AssembledRequest, AssembleError> {
     let profile = profile();
     let system = [SystemBlock::Text {
         text: "Preserve this native system prompt.".to_string(),
@@ -93,7 +109,6 @@ fn request(context: Option<&SonnetCompatibilityContext>) -> AssembledRequest {
         opus_compatibility: None,
         sonnet_compatibility: context,
     })
-    .expect("assemble Sonnet request")
 }
 
 #[test]
@@ -102,25 +117,39 @@ fn snapshots_complete_sonnet_root_and_subagent_requests() {
     let subagent = context(ClaudeCodeRequestKind::Subagent);
     insta::assert_json_snapshot!(
         "sonnet_5_root_and_subagent_requests",
-        [request(Some(&root)), request(Some(&subagent))]
+        [
+            request(Some(&root)).expect("assemble Sonnet root request"),
+            request(Some(&subagent)).expect("assemble Sonnet subagent request"),
+        ]
     );
 }
 
 #[test]
-fn sonnet_compatibility_changes_only_transport_headers() {
+fn sonnet_compatibility_replaces_native_profile() {
     let root = context(ClaudeCodeRequestKind::Root);
     let subagent = context(ClaudeCodeRequestKind::Subagent);
-    let native = request(None);
-    let root = request(Some(&root));
-    let subagent = request(Some(&subagent));
+    let root = request(Some(&root)).expect("assemble Sonnet root request");
+    let subagent = request(Some(&subagent)).expect("assemble Sonnet subagent request");
 
+    assert_eq!(root.body.max_tokens, 64_000);
+    assert_eq!(root.body.thinking, Thinking::Adaptive { display: None });
     assert_eq!(
-        serde_json::to_vec(&root.body).expect("serialize root body"),
-        serde_json::to_vec(&native.body).expect("serialize native body")
+        root.body.output_config,
+        Some(OutputConfig {
+            effort: OutputEffort::Medium,
+        })
     );
+    assert_eq!(root.body.system.len(), 3);
+    assert_eq!(subagent.body.system.len(), 3);
+    let SystemBlock::Text { text, .. } = &root.body.system[1];
     assert_eq!(
-        serde_json::to_vec(&subagent.body).expect("serialize subagent body"),
-        serde_json::to_vec(&native.body).expect("serialize native body")
+        text,
+        "You are Claude Code, Anthropic's official CLI for Claude."
+    );
+    let SystemBlock::Text { text, .. } = &subagent.body.system[1];
+    assert_eq!(
+        text,
+        "You are a Claude agent, built on Anthropic's Claude Agent SDK."
     );
     assert!(
         !root
@@ -137,4 +166,12 @@ fn sonnet_compatibility_changes_only_transport_headers() {
     assert!(agent_id.starts_with('a'));
     assert!(agent_id[1..].bytes().all(|byte| byte.is_ascii_hexdigit()));
     assert!(agent_id[1..].bytes().all(|byte| !byte.is_ascii_uppercase()));
+}
+
+#[test]
+fn exact_sonnet_model_requires_compatibility_context() {
+    assert_eq!(
+        request(None),
+        Err(AssembleError::MissingSonnetCompatibilityContext)
+    );
 }

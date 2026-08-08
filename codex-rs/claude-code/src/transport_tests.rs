@@ -176,7 +176,7 @@ fn event_trace(event: ResponseEvent) -> String {
 async fn exact_haiku_and_adaptive_requests_use_generic_auth_and_telemetry() {
     let cases = [
         request(&profile("claude-haiku-4-5-20251001", 32_000, AnthropicThinkingPolicy::Budgeted { budget_tokens: 31_999 }), ReasoningEffort::High),
-        request(&profile("claude-sonnet-5", 64_000, AnthropicThinkingPolicy::Adaptive), ReasoningEffort::Minimal),
+        request(&profile("claude-opus-4-8", 64_000, AnthropicThinkingPolicy::Adaptive), ReasoningEffort::Minimal),
     ];
     for expected in cases {
         let transport = CaptureTransport::chunks(vec![Ok(Bytes::from(successful_fixture("ok")))]);

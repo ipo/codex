@@ -236,7 +236,7 @@ fn snapshots_complete_non_opus_request_regression() {
     let cases = [
         (
             "sonnet",
-            adaptive("claude-sonnet-5", true),
+            adaptive("claude-opus-4-8", true),
             ReasoningEffort::High,
         ),
         (
@@ -277,7 +277,7 @@ fn snapshots_all_thinking_policies_and_transport_metadata() {
         ("haiku_disabled", haiku(), ReasoningEffort::None),
         (
             "adaptive_minimal",
-            adaptive("claude-sonnet-5", true),
+            adaptive("claude-opus-4-8", true),
             ReasoningEffort::Minimal,
         ),
         (
@@ -287,7 +287,7 @@ fn snapshots_all_thinking_policies_and_transport_metadata() {
         ),
         (
             "adaptive_medium",
-            adaptive("claude-sonnet-5", true),
+            adaptive("claude-opus-4-8", true),
             ReasoningEffort::Medium,
         ),
         (
@@ -297,17 +297,17 @@ fn snapshots_all_thinking_policies_and_transport_metadata() {
         ),
         (
             "adaptive_xhigh",
-            adaptive("claude-sonnet-5", true),
+            adaptive("claude-opus-4-8", true),
             ReasoningEffort::XHigh,
         ),
         (
             "adaptive_max",
-            adaptive("claude-sonnet-5", true),
+            adaptive("claude-opus-4-8", true),
             ReasoningEffort::Max,
         ),
         (
             "adaptive_disabled",
-            adaptive("claude-sonnet-5", true),
+            adaptive("claude-opus-4-8", true),
             ReasoningEffort::None,
         ),
     ];
@@ -361,7 +361,7 @@ fn snapshots_cache_placement_and_complete_function_schemas() {
         },
     ];
     let request = assemble(
-        &adaptive("claude-sonnet-5", true),
+        &adaptive("claude-opus-4-8", true),
         &ReasoningEffort::High,
         &messages,
         &[system("first"), system("second")],
@@ -384,7 +384,7 @@ fn function_local_result_schema_is_not_sent_to_claude() {
     }));
 
     let request = assemble(
-        &adaptive("claude-sonnet-5", true),
+        &adaptive("claude-opus-4-8", true),
         &ReasoningEffort::High,
         &[],
         &[system("system")],
@@ -415,7 +415,7 @@ fn function_local_result_schema_is_not_sent_to_claude() {
 
 #[test]
 fn cache_placement_handles_no_tools_and_trailing_ineligible_user_content() {
-    let profile = adaptive("claude-sonnet-5", true);
+    let profile = adaptive("claude-opus-4-8", true);
     let no_tools = assemble(
         &profile,
         &ReasoningEffort::High,
@@ -457,7 +457,7 @@ fn cache_placement_handles_no_tools_and_trailing_ineligible_user_content() {
 
 #[test]
 fn cache_policy_is_bounded_across_system_tool_and_user_shapes() {
-    let profile = adaptive("claude-sonnet-5", true);
+    let profile = adaptive("claude-opus-4-8", true);
     for system_count in [0, 1, 2, 4, 9] {
         for tool_count in [0, 3] {
             for has_eligible_user_block in [true, false] {
@@ -606,7 +606,7 @@ fn cache_policy_normalizes_caller_markers_without_changing_request_content() {
         system("third"),
         system("final"),
     ];
-    let profile = adaptive("claude-sonnet-5", true);
+    let profile = adaptive("claude-opus-4-8", true);
     let tools = [function_tool("read"), function_tool("write")];
 
     let request = assemble(
@@ -662,7 +662,7 @@ fn cache_policy_normalizes_caller_markers_without_changing_request_content() {
 
 #[test]
 fn session_metadata_is_stable_and_identity_free() {
-    let profile = adaptive("claude-sonnet-5", true);
+    let profile = adaptive("claude-opus-4-8", true);
     let effort = ReasoningEffort::High;
     let messages = [user_text("hello")];
     let system = [system("system")];
@@ -720,7 +720,7 @@ fn unsupported_tools_and_efforts_fail_before_assembling_a_request() {
         ),
         Err(AssembleError::DisabledThinkingUnsupported { .. })
     ));
-    let sonnet = adaptive("claude-sonnet-5", true);
+    let sonnet = adaptive("claude-opus-4-8", true);
     assert!(matches!(
         assemble(
             &sonnet,

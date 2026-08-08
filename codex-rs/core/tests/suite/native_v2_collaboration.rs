@@ -366,6 +366,8 @@ fn assert_opus_identity(
     assert_eq!(request.headers["x-stainless-timeout"], "600");
     assert_eq!(request.headers["x-stainless-retry-count"], "0");
     assert!(!request.headers.contains_key("originator"));
+    assert!(request.headers.contains_key("authorization"));
+    assert!(!request.headers.contains_key("chatgpt-account-id"));
     let agent_id = request
         .headers
         .get("x-claude-code-agent-id")
@@ -634,6 +636,7 @@ async fn native_parents_route_plain_v2_spawn_agent_to_openai_child() -> Result<(
             .filter(|request| request.url.path() == parent.path())
             .collect::<Vec<_>>();
         assert_eq!(native_requests.len(), 2);
+        assert!(native_requests[0].headers.contains_key("authorization"));
         let initial: Value = native_requests[0].body_json()?;
         let initial_text = initial.to_string();
         assert!(initial_text.contains("using the form shown in their tool definitions"));

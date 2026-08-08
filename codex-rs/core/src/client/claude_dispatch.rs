@@ -1,11 +1,11 @@
 use super::*;
 use codex_claude_code::CanonicalOutputSchema;
+use codex_claude_code::ClaudeCodeEnvironment;
 use codex_claude_code::ClaudeCodeIdentity;
 use codex_claude_code::ClaudeCodeRequestKind;
 use codex_claude_code::ClaudeHttpAdapter;
 use codex_claude_code::EncodeRequest;
 use codex_claude_code::OpusCompatibilityContext;
-use codex_claude_code::OpusEnvironment;
 use codex_claude_code::OpusRequestKind;
 use codex_claude_code::SonnetCompatibilityContext;
 use codex_claude_code::SystemBlock;
@@ -20,6 +20,7 @@ use futures::TryStreamExt;
 use crate::sampling_retry::classify_native_error;
 
 const CLAUDE_MESSAGES_ENDPOINT: &str = "/v1/messages";
+const CHATGPT_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 
 #[cfg(test)]
 #[path = "claude_dispatch_tests.rs"]
@@ -83,13 +84,13 @@ impl ModelClientSession {
                 session_id: responses_metadata.session_id.clone(),
                 thread_id: responses_metadata.thread_id.clone(),
                 installation_id: responses_metadata.installation_id.clone(),
-                environment: opus_environment(responses_metadata)?,
+                environment: claude_code_environment(responses_metadata)?,
             })
         } else {
             None
         };
-        let sonnet_compatibility =
-            sonnet_compatibility_enabled.then(|| SonnetCompatibilityContext {
+        let sonnet_compatibility = if sonnet_compatibility_enabled {
+            Some(SonnetCompatibilityContext {
                 identity: ClaudeCodeIdentity {
                     kind: if matches!(self.client.state.session_source, SessionSource::SubAgent(_))
                     {
@@ -100,7 +101,12 @@ impl ModelClientSession {
                     session_id: responses_metadata.session_id.clone(),
                     thread_id: responses_metadata.thread_id.clone(),
                 },
-            });
+                installation_id: responses_metadata.installation_id.clone(),
+                environment: claude_code_environment(responses_metadata)?,
+            })
+        } else {
+            None
+        };
         let request = encode_request(EncodeRequest {
             profile: &profile,
             effort: &effort,
@@ -139,7 +145,12 @@ impl ModelClientSession {
         let inference_trace_attempt = inference_trace.start_attempt();
         inference_trace_attempt.record_started(&request);
         let cancellation = CancellationToken::new();
-        let stream = ClaudeHttpAdapter::new(transport, api_provider, client_setup.api_auth)
+        let api_auth = if opus_compatibility.is_some() || sonnet_compatibility.is_some() {
+            compatibility_auth(client_setup.api_auth)
+        } else {
+            client_setup.api_auth
+        };
+        let stream = ClaudeHttpAdapter::new(transport, api_provider, api_auth)
             .with_telemetry(Some(request_telemetry))
             .stream_request(request, cancellation.clone())
             .await
@@ -159,13 +170,15 @@ impl ModelClientSession {
     }
 }
 
-fn opus_environment(responses_metadata: &CodexResponsesMetadata) -> Result<OpusEnvironment> {
+fn claude_code_environment(
+    responses_metadata: &CodexResponsesMetadata,
+) -> Result<ClaudeCodeEnvironment> {
     let environment = responses_metadata
         .turn_environment
         .as_ref()
         .ok_or_else(|| {
             CodexErr::InvalidRequest(
-                "Opus 5 compatibility requires authoritative execution environment facts"
+                "Claude Code compatibility requires authoritative execution environment facts"
                     .to_string(),
             )
         })?;
@@ -175,11 +188,11 @@ fn opus_environment(responses_metadata: &CodexResponsesMetadata) -> Result<OpusE
     )
     .map_err(|err| {
         CodexErr::InvalidRequest(format!(
-            "Opus 5 compatibility could not render the execution environment cwd: {err}"
+            "Claude Code compatibility could not render the execution environment cwd: {err}"
         ))
     })?
     .into_string();
-    Ok(OpusEnvironment {
+    Ok(ClaudeCodeEnvironment {
         cwd,
         is_git_repository: environment.is_git_repository,
         platform: environment.system.operating_system.platform().to_string(),
@@ -187,6 +200,29 @@ fn opus_environment(responses_metadata: &CodexResponsesMetadata) -> Result<OpusE
         shell: environment.shell.clone(),
         os_version: environment.system.os_version.clone(),
     })
+}
+
+struct CompatibilityAuthProvider {
+    inner: SharedAuthProvider,
+}
+
+impl AuthProvider for CompatibilityAuthProvider {
+    fn add_auth_headers(&self, headers: &mut ApiHeaderMap) {
+        self.inner.add_auth_headers(headers);
+        headers.remove(CHATGPT_ACCOUNT_ID_HEADER);
+    }
+
+    fn apply_auth(&self, request: codex_http_client::Request) -> codex_api::AuthProviderFuture<'_> {
+        Box::pin(async move {
+            let mut request = self.inner.apply_auth(request).await?;
+            request.headers.remove(CHATGPT_ACCOUNT_ID_HEADER);
+            Ok(request)
+        })
+    }
+}
+
+fn compatibility_auth(auth: SharedAuthProvider) -> SharedAuthProvider {
+    Arc::new(CompatibilityAuthProvider { inner: auth })
 }
 
 fn native_system_and_history(prompt: &Prompt) -> Result<(Vec<SystemBlock>, Vec<ResponseItem>)> {

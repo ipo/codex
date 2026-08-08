@@ -7,14 +7,14 @@ use super::turn_context::TurnEnvironment;
 use crate::responses_metadata::TurnExecutionEnvironment;
 use crate::turn_metadata::local_model_visible_shell;
 
-pub(super) async fn collect_opus_turn_environment(
+pub(super) async fn collect_claude_code_turn_environment(
     model_info: &ModelInfo,
     primary: Option<&TurnEnvironment>,
 ) -> Option<TurnExecutionEnvironment> {
     if !matches!(
         model_info.inference.as_ref(),
         Some(ModelInferenceConfig::Anthropic { wire_model, .. })
-            if wire_model == "claude-opus-5"
+            if matches!(wire_model.as_str(), "claude-opus-5" | "claude-sonnet-5")
     ) {
         return None;
     }
@@ -37,7 +37,7 @@ pub(super) async fn collect_opus_turn_environment(
         Err(err) => {
             tracing::warn!(
                 environment_id = primary.environment_id,
-                "failed to detect Opus 5 repository state in selected environment: {err}"
+                "failed to detect Claude Code repository state in selected environment: {err}"
             );
             return None;
         }
