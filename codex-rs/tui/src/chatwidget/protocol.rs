@@ -1,3 +1,4 @@
+use super::kimi_reasoning::KimiReasoningOccurrence;
 use super::*;
 
 impl ChatWidget {
@@ -289,6 +290,7 @@ impl ChatWidget {
                         notification.turn.id.clone(),
                         replay_kind
                             .map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+                        None,
                     );
                 }
                 self.last_non_retry_error = None;
@@ -348,7 +350,9 @@ impl ChatWidget {
             self.retain_partial_kimi_reasoning();
         }
         match notification.item {
-            ThreadItem::Reasoning { id, .. } => self.start_kimi_reasoning(id),
+            ThreadItem::Reasoning { id, .. } => {
+                self.start_kimi_reasoning(KimiReasoningOccurrence::live(notification.turn_id, id))
+            }
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_started(item),
             ThreadItem::FileChange { id: _, changes, .. } => {
                 self.on_patch_apply_begin(file_update_changes_to_display(changes));
@@ -398,7 +402,10 @@ impl ChatWidget {
             && self.kimi_reasoning_model()
         {
             if self.kimi_reasoning_visible() {
-                self.finish_kimi_reasoning(id.clone(), content.clone());
+                self.finish_kimi_reasoning(
+                    KimiReasoningOccurrence::live(notification.turn_id, id.clone()),
+                    content.clone(),
+                );
             }
             return;
         }
@@ -406,6 +413,7 @@ impl ChatWidget {
             notification.item,
             notification.turn_id,
             replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+            None,
         );
     }
 }

@@ -10,8 +10,6 @@ use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
 
-const PREVIEW_LINES: usize = 2;
-
 #[derive(Debug)]
 pub(crate) struct KimiReasoningCell {
     text: String,
@@ -63,14 +61,9 @@ impl KimiReasoningCell {
             .collect()
     }
 
-    fn live_lines(&self, width: u16, transcript: bool) -> Vec<Line<'static>> {
+    fn live_lines(&self, width: u16) -> Vec<Line<'static>> {
         let width = usize::from(width.saturating_sub(2)).max(1);
         let wrapped = textwrap::wrap(&self.text, Options::new(width));
-        let preview = if transcript {
-            wrapped.as_slice()
-        } else {
-            &wrapped[wrapped.len().saturating_sub(PREVIEW_LINES)..]
-        };
         let indicator = activity_indicator(
             Some(self.started_at),
             self.motion_mode,
@@ -79,7 +72,7 @@ impl KimiReasoningCell {
         .unwrap_or_else(|| "•".dim());
         std::iter::once(Line::from(vec![indicator, " thinking…".dim()]))
             .chain(
-                preview
+                wrapped
                     .iter()
                     .map(|text| Line::from(vec!["  ".into(), text.to_string().dim().italic()])),
             )
@@ -90,7 +83,7 @@ impl KimiReasoningCell {
 impl HistoryCell for KimiReasoningCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.live {
-            self.live_lines(width, /*transcript*/ false)
+            self.live_lines(width)
         } else {
             self.final_lines(width)
         }
@@ -98,7 +91,7 @@ impl HistoryCell for KimiReasoningCell {
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.live {
-            self.live_lines(width, /*transcript*/ true)
+            self.live_lines(width)
         } else {
             self.final_lines(width)
         }
@@ -106,7 +99,7 @@ impl HistoryCell for KimiReasoningCell {
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
         if self.live {
-            plain_lines(self.live_lines(u16::MAX, /*transcript*/ true))
+            plain_lines(self.live_lines(u16::MAX))
         } else {
             plain_lines(self.final_lines(u16::MAX))
         }

@@ -88,6 +88,85 @@ async fn kimi_reasoning_lifecycle_uses_authoritative_item_once() {
 }
 
 #[tokio::test]
+async fn early_kimi_reasoning_completion_does_not_split_assistant_stream() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_kimi_reasoning(&mut chat, "neutral-model");
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: Vec::new(),
+                content: Vec::new(),
+            },
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ReasoningTextDelta(ReasoningTextDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "reasoning-1".to_string(),
+            delta: "thinking".to_string(),
+            content_index: 0,
+        }),
+        None,
+    );
+    for delta in ["first ", "second"] {
+        chat.handle_server_notification(
+            ServerNotification::AgentMessageDelta(
+                codex_app_server_protocol::AgentMessageDeltaNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "message-1".to_string(),
+                    delta: delta.to_string(),
+                },
+            ),
+            None,
+        );
+        if delta == "first " {
+            chat.handle_server_notification(
+                ServerNotification::ItemCompleted(ItemCompletedNotification {
+                    thread_id: "thread-1".to_string(),
+                    turn_id: "turn-1".to_string(),
+                    completed_at_ms: 0,
+                    item: AppServerThreadItem::Reasoning {
+                        id: "reasoning-1".to_string(),
+                        summary: Vec::new(),
+                        content: vec!["thinking".to_string()],
+                    },
+                }),
+                None,
+            );
+        }
+    }
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::AgentMessage {
+                id: "message-1".to_string(),
+                text: "first second".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+        }),
+        None,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert_eq!(rendered.len(), 2);
+    assert_eq!(rendered[0], "• thinking\n");
+    assert_eq!(rendered[1].trim(), "• first second");
+}
+
+#[tokio::test]
 async fn kimi_reasoning_retry_discards_draft_and_terminal_error_retains_it() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     enable_kimi_reasoning(&mut chat, "neutral-model");
@@ -177,12 +256,76 @@ async fn kimi_reasoning_is_finalized_before_tool_content() {
         "pwd",
         AppServerCommandExecutionSource::Agent,
     );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(ItemCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            completed_at_ms: 0,
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: Vec::new(),
+                content: vec!["partial before tool".to_string()],
+            },
+        }),
+        None,
+    );
 
     let rendered = drain_insert_history(&mut rx)
         .into_iter()
         .map(|lines| lines_to_single_string(&lines))
         .collect::<Vec<_>>();
     assert_eq!(rendered, vec!["• partial before tool\n"]);
+}
+
+#[tokio::test]
+async fn identical_kimi_reasoning_phases_in_one_turn_each_render_once() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_kimi_reasoning(&mut chat, "neutral-model");
+
+    for item_id in ["reasoning-1", "reasoning-2"] {
+        chat.handle_server_notification(
+            ServerNotification::ItemStarted(ItemStartedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                started_at_ms: 0,
+                item: AppServerThreadItem::Reasoning {
+                    id: item_id.to_string(),
+                    summary: Vec::new(),
+                    content: Vec::new(),
+                },
+            }),
+            None,
+        );
+        chat.handle_server_notification(
+            ServerNotification::ReasoningTextDelta(ReasoningTextDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: item_id.to_string(),
+                delta: "same reasoning".to_string(),
+                content_index: 0,
+            }),
+            None,
+        );
+        chat.handle_server_notification(
+            ServerNotification::ItemCompleted(ItemCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                completed_at_ms: 0,
+                item: AppServerThreadItem::Reasoning {
+                    id: item_id.to_string(),
+                    summary: Vec::new(),
+                    content: vec!["same reasoning".to_string()],
+                },
+            }),
+            None,
+        );
+    }
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines).trim().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(rendered, ["• same reasoning", "• same reasoning"]);
 }
 
 #[tokio::test]
@@ -213,6 +356,40 @@ async fn replayed_kimi_reasoning_uses_authoritative_content_once() {
         .map(|lines| lines_to_single_string(&lines))
         .collect::<Vec<_>>();
     assert_eq!(rendered, vec!["• persisted native reasoning\n"]);
+}
+
+#[tokio::test]
+async fn legacy_replay_distinguishes_repeated_reasoning_item_ids_by_ordinal() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_kimi_reasoning(&mut chat, "neutral-model");
+    let turn = AppServerTurn {
+        items: vec![
+            AppServerThreadItem::Reasoning {
+                id: "rs_kimi".to_string(),
+                summary: Vec::new(),
+                content: vec!["same reasoning".to_string()],
+            },
+            AppServerThreadItem::Reasoning {
+                id: "rs_kimi".to_string(),
+                summary: Vec::new(),
+                content: vec!["same reasoning".to_string()],
+            },
+        ],
+        ..app_server_turn(
+            "turn-legacy",
+            AppServerTurnStatus::Completed,
+            /*duration_ms*/ None,
+            /*error*/ None,
+        )
+    };
+    chat.replay_thread_turns(vec![turn.clone()], ReplayKind::ResumeInitialMessages);
+    chat.replay_thread_turns(vec![turn], ReplayKind::ThreadSnapshot);
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines).trim().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(rendered, ["• same reasoning", "• same reasoning"]);
 }
 
 #[tokio::test]

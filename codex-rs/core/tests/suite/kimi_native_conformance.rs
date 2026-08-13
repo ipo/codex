@@ -217,13 +217,21 @@ async fn ordered_parallel_loop_replays_reasoning_usage_and_matched_results() -> 
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        presented,
+        presented
+            .iter()
+            .map(|(kind, _, delta)| (*kind, *delta))
+            .collect::<Vec<_>>(),
         [
-            ("reasoning", "rs_kimi", "think "),
-            ("message", "msg_kimi", "working "),
-            ("message", "msg_kimi", "finished"),
+            ("reasoning", "think "),
+            ("message", "working "),
+            ("message", "finished"),
         ]
     );
+    assert!(presented[0].1.starts_with("rs_"));
+    assert!(presented[1].1.starts_with("msg_"));
+    assert!(presented[2].1.starts_with("msg_"));
+    assert_ne!(presented[1].1, presented[2].1);
+    assert_ne!(presented[0].1, presented[1].1);
     let mut executed = events
         .iter()
         .filter_map(|event| match event {

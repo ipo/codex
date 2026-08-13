@@ -1,6 +1,6 @@
 ---
 source: kimi-code/src/transport_tests.rs
-expression: outcomes
+expression: "normalize_opaque_item_ids(format!(\"{outcomes:#?}\"))"
 ---
 [
     [
@@ -9,7 +9,7 @@ expression: outcomes
                 Message {
                     id: Some(
                         ResponseItemId(
-                            "msg_kimi",
+                            "msg_opaque_3",
                         ),
                     ),
                     role: "assistant",
@@ -22,7 +22,7 @@ expression: outcomes
         Ok(
             OutputTextDelta {
                 item_id: Some(
-                    "msg_kimi",
+                    "msg_opaque_3",
                 ),
                 delta: "partial",
             },
@@ -32,7 +32,7 @@ expression: outcomes
                 Message {
                     id: Some(
                         ResponseItemId(
-                            "msg_kimi",
+                            "msg_opaque_3",
                         ),
                     ),
                     role: "assistant",
@@ -60,7 +60,7 @@ expression: outcomes
                 Reasoning {
                     id: Some(
                         ResponseItemId(
-                            "rs_kimi",
+                            "rs_opaque_0",
                         ),
                     ),
                     summary: [],
@@ -75,7 +75,7 @@ expression: outcomes
         Ok(
             ReasoningContentDelta {
                 item_id: Some(
-                    "rs_kimi",
+                    "rs_opaque_0",
                 ),
                 delta: "unsafe",
                 content_index: 0,
@@ -86,7 +86,7 @@ expression: outcomes
                 FunctionCall {
                     id: Some(
                         ResponseItemId(
-                            "fc_kimi_2",
+                            "fc_opaque_5",
                         ),
                     ),
                     name: "blocked",
@@ -99,7 +99,7 @@ expression: outcomes
         ),
         Ok(
             ToolCallInputDelta {
-                item_id: "fc_kimi_2",
+                item_id: "fc_opaque_5",
                 call_id: Some(
                     "call-x",
                 ),
@@ -111,7 +111,7 @@ expression: outcomes
                 Reasoning {
                     id: Some(
                         ResponseItemId(
-                            "rs_kimi",
+                            "rs_opaque_0",
                         ),
                     ),
                     summary: [],
@@ -132,7 +132,7 @@ expression: outcomes
                 FunctionCall {
                     id: Some(
                         ResponseItemId(
-                            "fc_kimi_2",
+                            "fc_opaque_5",
                         ),
                     ),
                     name: "blocked",
@@ -157,7 +157,7 @@ expression: outcomes
                 Reasoning {
                     id: Some(
                         ResponseItemId(
-                            "rs_kimi",
+                            "rs_opaque_1",
                         ),
                     ),
                     summary: [],
@@ -172,7 +172,7 @@ expression: outcomes
         Ok(
             ReasoningContentDelta {
                 item_id: Some(
-                    "rs_kimi",
+                    "rs_opaque_1",
                 ),
                 delta: "thought",
                 content_index: 0,
@@ -188,7 +188,7 @@ expression: outcomes
                 Message {
                     id: Some(
                         ResponseItemId(
-                            "msg_kimi",
+                            "msg_opaque_4",
                         ),
                     ),
                     role: "assistant",
@@ -201,7 +201,7 @@ expression: outcomes
         Ok(
             OutputTextDelta {
                 item_id: Some(
-                    "msg_kimi",
+                    "msg_opaque_4",
                 ),
                 delta: "answer",
             },
@@ -211,7 +211,7 @@ expression: outcomes
                 Reasoning {
                     id: Some(
                         ResponseItemId(
-                            "rs_kimi",
+                            "rs_opaque_2",
                         ),
                     ),
                     summary: [],
@@ -228,7 +228,7 @@ expression: outcomes
                 Reasoning {
                     id: Some(
                         ResponseItemId(
-                            "rs_kimi",
+                            "rs_opaque_2",
                         ),
                     ),
                     summary: [],
@@ -251,7 +251,7 @@ expression: outcomes
                 Message {
                     id: Some(
                         ResponseItemId(
-                            "msg_kimi",
+                            "msg_opaque_4",
                         ),
                     ),
                     role: "assistant",

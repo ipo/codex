@@ -3,6 +3,7 @@
 //! This module rehydrates turns and items into transcript state while avoiding
 //! live-only side effects.
 
+use super::kimi_reasoning::KimiReasoningOccurrence;
 use super::*;
 
 impl ChatWidget {
@@ -33,11 +34,16 @@ impl ChatWidget {
                 self.last_non_retry_error = None;
                 self.on_task_started();
             }
-            for item in items {
+            for (item_ordinal, item) in items.into_iter().enumerate() {
                 if hidden_nested_review_turn && matches!(item, ThreadItem::UserMessage { .. }) {
                     continue;
                 }
-                self.replay_thread_item(item, turn_id.clone(), replay_kind);
+                self.handle_thread_item(
+                    item,
+                    turn_id.clone(),
+                    ThreadItemRenderSource::Replay(replay_kind),
+                    Some(item_ordinal),
+                );
             }
             let status = if hidden_nested_review_turn {
                 TurnStatus::Completed
@@ -74,7 +80,12 @@ impl ChatWidget {
         turn_id: String,
         replay_kind: ReplayKind,
     ) {
-        self.handle_thread_item(item, turn_id, ThreadItemRenderSource::Replay(replay_kind));
+        self.handle_thread_item(
+            item,
+            turn_id,
+            ThreadItemRenderSource::Replay(replay_kind),
+            Some(/*item_ordinal*/ 0),
+        );
     }
 
     pub(super) fn handle_thread_item(
@@ -82,6 +93,7 @@ impl ChatWidget {
         item: ThreadItem,
         turn_id: String,
         render_source: ThreadItemRenderSource,
+        replay_ordinal: Option<usize>,
     ) {
         let from_replay = render_source.is_replay();
         let replay_kind = render_source.replay_kind();
@@ -129,7 +141,13 @@ impl ChatWidget {
                 content,
             } => {
                 if self.kimi_reasoning_visible() {
-                    self.finish_kimi_reasoning(id, content);
+                    let occurrence = replay_ordinal.map_or_else(
+                        || KimiReasoningOccurrence::live(turn_id.clone(), id.clone()),
+                        |ordinal| {
+                            KimiReasoningOccurrence::replay(turn_id.clone(), id.clone(), ordinal)
+                        },
+                    );
+                    self.finish_kimi_reasoning(occurrence, content);
                     return;
                 }
                 if from_replay {

@@ -2305,14 +2305,22 @@ fn reasoning_summary_block() {
 }
 
 #[test]
-fn kimi_reasoning_live_preview_and_transcript_tail() {
+fn kimi_reasoning_live_display_keeps_every_accumulated_line() {
     let cell = KimiReasoningCell::live(
         "first line\nsecond line wraps here\nthird line".to_string(),
         /*animations_enabled*/ false,
     );
 
+    insta::assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 80)).join("\n"), @r"
+    • thinking…
+      first line
+      second line wraps here
+      third line
+    ");
     insta::assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 16)).join("\n"), @r"
     • thinking…
+      first line
+      second line
       wraps here
       third line
     ");

@@ -8,12 +8,37 @@ use super::*;
 
 const FLUSH_INTERVAL: Duration = Duration::from_millis(50);
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct KimiReasoningOccurrence {
+    turn_id: String,
+    item_id: String,
+    replay_ordinal: Option<usize>,
+}
+
+impl KimiReasoningOccurrence {
+    pub(super) fn live(turn_id: String, item_id: String) -> Self {
+        Self {
+            turn_id,
+            item_id,
+            replay_ordinal: None,
+        }
+    }
+
+    pub(super) fn replay(turn_id: String, item_id: String, replay_ordinal: usize) -> Self {
+        Self {
+            turn_id,
+            item_id,
+            replay_ordinal: Some(replay_ordinal),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct KimiReasoningState {
-    item_id: Option<String>,
+    occurrence: Option<KimiReasoningOccurrence>,
     draft: String,
     last_flush: Option<Instant>,
-    inserted: HashSet<String>,
+    inserted: HashSet<KimiReasoningOccurrence>,
 }
 
 impl ChatWidget {
@@ -35,12 +60,12 @@ impl ChatWidget {
             && !self.config.kimi_hide_agent_reasoning
     }
 
-    pub(super) fn start_kimi_reasoning(&mut self, item_id: String) {
+    pub(super) fn start_kimi_reasoning(&mut self, occurrence: KimiReasoningOccurrence) {
         if !self.kimi_reasoning_visible() {
             return;
         }
         self.discard_kimi_reasoning_draft();
-        self.kimi_reasoning.item_id = Some(item_id);
+        self.kimi_reasoning.occurrence = Some(occurrence);
         self.kimi_reasoning.last_flush = Some(Instant::now());
         self.flush_active_cell();
         self.transcript.active_cell = Some(Box::new(history_cell::KimiReasoningCell::live(
@@ -51,7 +76,13 @@ impl ChatWidget {
     }
 
     pub(super) fn append_kimi_reasoning(&mut self, item_id: &str, delta: String) {
-        if self.kimi_reasoning.item_id.as_deref() != Some(item_id) {
+        if self
+            .kimi_reasoning
+            .occurrence
+            .as_ref()
+            .map(|occurrence| occurrence.item_id.as_str())
+            != Some(item_id)
+        {
             return;
         }
         self.kimi_reasoning.draft.push_str(&delta);
@@ -69,7 +100,7 @@ impl ChatWidget {
     }
 
     pub(super) fn publish_kimi_reasoning_draft(&mut self) {
-        if self.kimi_reasoning.item_id.is_none() {
+        if self.kimi_reasoning.occurrence.is_none() {
             return;
         }
         if self
@@ -90,34 +121,38 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn finish_kimi_reasoning(&mut self, item_id: String, content: Vec<String>) {
+    pub(super) fn finish_kimi_reasoning(
+        &mut self,
+        occurrence: KimiReasoningOccurrence,
+        content: Vec<String>,
+    ) {
         if !self.kimi_reasoning_visible() {
-            if self.kimi_reasoning.item_id.as_deref() == Some(item_id.as_str()) {
+            if self.kimi_reasoning.occurrence.as_ref() == Some(&occurrence) {
                 self.discard_kimi_reasoning_draft();
             }
             return;
         }
         let text = content.concat();
         if text.is_empty() {
-            if self.kimi_reasoning.item_id.as_deref() == Some(item_id.as_str()) {
+            if self.kimi_reasoning.occurrence.as_ref() == Some(&occurrence) {
                 self.discard_kimi_reasoning_draft();
             }
             return;
         }
-        if !self.kimi_reasoning.inserted.insert(item_id.clone()) {
-            if self.kimi_reasoning.item_id.as_deref() == Some(item_id.as_str()) {
+        if !self.kimi_reasoning.inserted.insert(occurrence.clone()) {
+            if self.kimi_reasoning.occurrence.as_ref() == Some(&occurrence) {
                 self.discard_kimi_reasoning_draft();
             }
             return;
         }
-        if self.kimi_reasoning.item_id.as_deref() == Some(item_id.as_str())
+        if self.kimi_reasoning.occurrence.as_ref() == Some(&occurrence)
             && let Some(cell) = self.transcript.active_cell.as_mut().and_then(|cell| {
                 cell.as_any_mut()
                     .downcast_mut::<history_cell::KimiReasoningCell>()
             })
         {
             cell.finalize(text);
-            self.kimi_reasoning.item_id = None;
+            self.kimi_reasoning.occurrence = None;
             self.kimi_reasoning.draft.clear();
             self.flush_active_cell();
         } else {
@@ -127,7 +162,7 @@ impl ChatWidget {
     }
 
     pub(super) fn retain_partial_kimi_reasoning(&mut self) {
-        if self.kimi_reasoning.item_id.is_some() {
+        if self.kimi_reasoning.occurrence.is_some() {
             if self.kimi_reasoning.draft.is_empty() {
                 self.discard_kimi_reasoning_draft();
                 return;
@@ -138,13 +173,15 @@ impl ChatWidget {
             }) {
                 cell.finalize(std::mem::take(&mut self.kimi_reasoning.draft));
             }
-            self.kimi_reasoning.item_id = None;
+            if let Some(occurrence) = self.kimi_reasoning.occurrence.take() {
+                self.kimi_reasoning.inserted.insert(occurrence);
+            }
             self.flush_active_cell();
         }
     }
 
     pub(super) fn discard_kimi_reasoning_draft(&mut self) {
-        if self.kimi_reasoning.item_id.take().is_some()
+        if self.kimi_reasoning.occurrence.take().is_some()
             && self
                 .transcript
                 .active_cell

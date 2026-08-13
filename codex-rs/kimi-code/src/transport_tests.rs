@@ -14,7 +14,6 @@ use codex_client::Request;
 use codex_client::Response;
 use codex_client::StreamResponse;
 use codex_client::TransportError;
-use codex_protocol::ResponseItemId;
 use codex_protocol::model_inference::KimiThinkingPolicy;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
@@ -32,6 +31,31 @@ use super::*;
 
 type BodySender = mpsc::UnboundedSender<Result<Bytes, TransportError>>;
 type BodyReceiver = mpsc::UnboundedReceiver<Result<Bytes, TransportError>>;
+
+fn normalize_opaque_item_ids(mut debug: String) -> String {
+    let mut replacements = Vec::new();
+    for prefix in ["rs_", "msg_", "fc_"] {
+        let mut search_from = 0;
+        while let Some(offset) = debug[search_from..].find(prefix) {
+            let start = search_from + offset;
+            let end = debug[start..]
+                .find(|character: char| {
+                    !(character.is_ascii_alphanumeric() || character == '_' || character == '-')
+                })
+                .map_or(debug.len(), |end| start + end);
+            let id = debug[start..end].to_string();
+            if !replacements.iter().any(|(seen, _)| seen == &id) {
+                let normalized = format!("{prefix}opaque_{}", replacements.len());
+                replacements.push((id, normalized));
+            }
+            search_from = end;
+        }
+    }
+    for (id, normalized) in replacements {
+        debug = debug.replace(&id, &normalized);
+    }
+    debug
+}
 
 #[derive(Clone)]
 struct CaptureTransport {
@@ -212,7 +236,10 @@ async fn interleaved_events_are_immediate_and_done_waits_for_finish_and_done() {
     );
     send_body(&mut sender, ": keepalive\n\ndata: [DONE]\n\n").await;
     let terminal = stream.collect::<Vec<_>>().await;
-    insta::assert_debug_snapshot!((early, terminal));
+    insta::assert_snapshot!(normalize_opaque_item_ids(format!(
+        "{:#?}",
+        (early, terminal)
+    )));
 }
 
 async fn stream_result(body: &str) -> Vec<Result<ResponseEvent, KimiStreamError>> {
@@ -271,10 +298,12 @@ async fn authoritative_final_usage_completes_observed_tool_stream() -> Result<()
             _ => None,
         })
         .collect::<Vec<_>>();
+    let tool_item_id = completed_tools[0].id().expect("tool item id").clone();
+    assert!(tool_item_id.as_str().starts_with("fc_"));
     assert_eq!(
         completed_tools,
         [ResponseItem::FunctionCall {
-            id: Some(ResponseItemId::from_server("fc_kimi_0".to_string())),
+            id: Some(tool_item_id),
             name: "exec_command".to_string(),
             namespace: None,
             arguments: r#"{"cmd":"pwd","yield_time_ms":1000,"max_output_tokens":1000}"#.to_string(),
@@ -308,6 +337,50 @@ async fn authoritative_final_usage_completes_observed_tool_stream() -> Result<()
 }
 
 #[tokio::test]
+async fn presentation_item_ids_are_stable_within_requests_and_distinct_between_requests() {
+    let body = "data: {\"id\":\"chat-ids\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"think \"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chat-ids\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"more\",\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+    let requests = futures::future::join_all([stream_result(body), stream_result(body)]).await;
+    let request_ids = requests
+        .iter()
+        .map(|events| {
+            let events = events
+                .iter()
+                .map(Result::as_ref)
+                .collect::<Result<Vec<_>, _>>()
+                .expect("successful stream");
+            let reasoning = events
+                .iter()
+                .filter_map(|event| match event {
+                    ResponseEvent::OutputItemAdded(ResponseItem::Reasoning { id, .. })
+                    | ResponseEvent::OutputItemDone(ResponseItem::Reasoning { id, .. }) => {
+                        id.as_ref().map(ToString::to_string)
+                    }
+                    ResponseEvent::ReasoningContentDelta { item_id, .. } => item_id.clone(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let message = events
+                .iter()
+                .filter_map(|event| match event {
+                    ResponseEvent::OutputItemAdded(ResponseItem::Message { id, .. })
+                    | ResponseEvent::OutputItemDone(ResponseItem::Message { id, .. }) => {
+                        id.as_ref().map(ToString::to_string)
+                    }
+                    ResponseEvent::OutputTextDelta { item_id, .. } => item_id.clone(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(reasoning.iter().all(|id| id == &reasoning[0]));
+            assert!(message.iter().all(|id| id == &message[0]));
+            assert!(reasoning[0].starts_with("rs_"));
+            assert!(message[0].starts_with("msg_"));
+            (reasoning[0].clone(), message[0].clone())
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(request_ids[0], request_ids[1]);
+}
+
+#[tokio::test]
 async fn noncommittable_terminals_close_partial_presentation_without_committing_it() {
     let outcomes = futures::future::join_all([
         "data: {\"id\":\"chat-57\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n",
@@ -315,7 +388,7 @@ async fn noncommittable_terminals_close_partial_presentation_without_committing_
         "data: {\"id\":\"chat-57\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chat-57\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"thought\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
         "data: {\"id\":\"chat-57\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chat-57\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
     ].map(stream_result)).await;
-    insta::assert_debug_snapshot!(outcomes);
+    insta::assert_snapshot!(normalize_opaque_item_ids(format!("{outcomes:#?}")));
 }
 
 #[tokio::test]

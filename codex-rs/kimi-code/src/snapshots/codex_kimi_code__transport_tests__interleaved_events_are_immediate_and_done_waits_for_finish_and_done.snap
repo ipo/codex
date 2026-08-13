@@ -1,6 +1,6 @@
 ---
 source: kimi-code/src/transport_tests.rs
-expression: "(early, terminal)"
+expression: "normalize_opaque_item_ids(format!(\"{:#?}\", (early, terminal)))"
 ---
 (
     [
@@ -8,7 +8,7 @@ expression: "(early, terminal)"
             Reasoning {
                 id: Some(
                     ResponseItemId(
-                        "rs_kimi",
+                        "rs_opaque_0",
                     ),
                 ),
                 summary: [],
@@ -21,7 +21,7 @@ expression: "(early, terminal)"
         ),
         ReasoningContentDelta {
             item_id: Some(
-                "rs_kimi",
+                "rs_opaque_0",
             ),
             delta: "think ",
             content_index: 0,
@@ -30,7 +30,7 @@ expression: "(early, terminal)"
             Message {
                 id: Some(
                     ResponseItemId(
-                        "msg_kimi",
+                        "msg_opaque_1",
                     ),
                 ),
                 role: "assistant",
@@ -41,7 +41,7 @@ expression: "(early, terminal)"
         ),
         OutputTextDelta {
             item_id: Some(
-                "msg_kimi",
+                "msg_opaque_1",
             ),
             delta: "answer ",
         },
@@ -49,7 +49,7 @@ expression: "(early, terminal)"
             FunctionCall {
                 id: Some(
                     ResponseItemId(
-                        "fc_kimi_4",
+                        "fc_opaque_2",
                     ),
                 ),
                 name: "alpha",
@@ -60,14 +60,14 @@ expression: "(early, terminal)"
             },
         ),
         ToolCallInputDelta {
-            item_id: "fc_kimi_4",
+            item_id: "fc_opaque_2",
             call_id: Some(
                 "call-a",
             ),
             delta: "{\"a\":",
         },
         ToolCallInputDelta {
-            item_id: "fc_kimi_4",
+            item_id: "fc_opaque_2",
             call_id: Some(
                 "call-a",
             ),
@@ -80,7 +80,7 @@ expression: "(early, terminal)"
                 Reasoning {
                     id: Some(
                         ResponseItemId(
-                            "rs_kimi",
+                            "rs_opaque_0",
                         ),
                     ),
                     summary: [],
@@ -103,7 +103,7 @@ expression: "(early, terminal)"
                 Message {
                     id: Some(
                         ResponseItemId(
-                            "msg_kimi",
+                            "msg_opaque_1",
                         ),
                     ),
                     role: "assistant",
@@ -122,7 +122,7 @@ expression: "(early, terminal)"
                 FunctionCall {
                     id: Some(
                         ResponseItemId(
-                            "fc_kimi_4",
+                            "fc_opaque_2",
                         ),
                     ),
                     name: "alpha",

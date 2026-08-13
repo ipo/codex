@@ -229,6 +229,8 @@ fn classify_decode_error(error: DecodeError, reached_done: bool) -> KimiStreamEr
 #[derive(Default)]
 struct PresentationState {
     started: Vec<(String, ResponseItem)>,
+    reasoning_item_id: Option<ResponseItemId>,
+    message_item_id: Option<ResponseItemId>,
     tool_items: BTreeMap<String, String>,
 }
 
@@ -238,7 +240,10 @@ impl PresentationState {
             PresentationDelta::Content(delta) if delta.is_empty() => Vec::new(),
             PresentationDelta::Reasoning(delta) if delta.is_empty() => Vec::new(),
             PresentationDelta::Content(delta) => {
-                let id = item_id("msg", None);
+                let id = self
+                    .message_item_id
+                    .get_or_insert_with(|| ResponseItemId::new("msg"))
+                    .clone();
                 let item = ResponseItem::Message {
                     id: Some(id.clone()),
                     role: "assistant".to_string(),
@@ -255,7 +260,10 @@ impl PresentationState {
                 events
             }
             PresentationDelta::Reasoning(delta) => {
-                let id = item_id("rs", None);
+                let id = self
+                    .reasoning_item_id
+                    .get_or_insert_with(|| ResponseItemId::new("rs"))
+                    .clone();
                 let item = ResponseItem::Reasoning {
                     id: Some(id.clone()),
                     summary: Vec::new(),
@@ -273,13 +281,17 @@ impl PresentationState {
                 events
             }
             PresentationDelta::Tool {
-                index,
+                index: _,
                 id,
                 name,
                 delta,
             } => {
-                let item_id = item_id("fc", Some(index));
                 let call_id = id.clone();
+                let item_id = self
+                    .tool_items
+                    .get(&call_id)
+                    .map(|id| ResponseItemId::from_server(id.clone()))
+                    .unwrap_or_else(|| ResponseItemId::new("fc"));
                 let item = ResponseItem::FunctionCall {
                     id: Some(item_id.clone()),
                     name,
@@ -290,7 +302,7 @@ impl PresentationState {
                 };
                 let id = item_id.to_string();
                 let mut events = self.added(id.clone(), item);
-                if events.len() == 1 {
+                if !events.is_empty() {
                     self.tool_items.insert(call_id.clone(), id.clone());
                 }
                 if !delta.is_empty() {
@@ -357,8 +369,14 @@ fn canonical_events(
     if let Some(pending) = decoded.pending {
         for mut item in response_items(dialect, pending)? {
             let id = match &item {
-                ResponseItem::Reasoning { .. } => item_id("rs", None).to_string(),
-                ResponseItem::Message { .. } => item_id("msg", None).to_string(),
+                ResponseItem::Reasoning { .. } => state
+                    .reasoning_item_id
+                    .get_or_insert_with(|| ResponseItemId::new("rs"))
+                    .to_string(),
+                ResponseItem::Message { .. } => state
+                    .message_item_id
+                    .get_or_insert_with(|| ResponseItemId::new("msg"))
+                    .to_string(),
                 ResponseItem::FunctionCall { call_id, .. } => {
                     state.tool_items.get(call_id).cloned().ok_or_else(|| {
                         KimiStreamError::InvalidRequest(
@@ -403,11 +421,6 @@ fn empty_item(item: &ResponseItem) -> ResponseItem {
         _ => unreachable!("Kimi response conversion emitted an unsupported item"),
     }
     item
-}
-
-fn item_id(prefix: &str, index: Option<usize>) -> ResponseItemId {
-    let suffix = index.map_or_else(|| "kimi".to_string(), |index| format!("kimi_{index}"));
-    ResponseItemId::with_suffix(prefix, suffix)
 }
 
 fn map_usage(
