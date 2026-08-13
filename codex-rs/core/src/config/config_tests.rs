@@ -221,6 +221,24 @@ async fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
 }
 
 #[tokio::test]
+async fn load_config_resolves_kimi_reasoning_hide_flag() -> std::io::Result<()> {
+    for (configured, expected) in [(None, false), (Some(false), false), (Some(true), true)] {
+        let codex_home = tempdir()?;
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                kimi_hide_agent_reasoning: configured,
+                ..ConfigToml::default()
+            },
+            ConfigOverrides::default(),
+            codex_home.abs(),
+        )
+        .await?;
+        assert_eq!(config.kimi_hide_agent_reasoning, expected);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_toml_parsing() {
     let history_with_persistence = r#"
 [history]

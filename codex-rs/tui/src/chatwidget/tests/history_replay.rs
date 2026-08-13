@@ -10,6 +10,267 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
+fn enable_kimi_reasoning(chat: &mut ChatWidget, slug: &str) {
+    use codex_protocol::openai_models::ModelReasoningDisplay;
+
+    let mut preset = chat
+        .model_catalog
+        .try_list_models()
+        .expect("catalog")
+        .into_iter()
+        .next()
+        .expect("preset");
+    preset.id = slug.to_string();
+    preset.model = slug.to_string();
+    preset.reasoning_display = ModelReasoningDisplay::KimiRaw;
+    chat.model_catalog = Arc::new(ModelCatalog::new(vec![preset]));
+    chat.set_model(slug);
+}
+
+#[tokio::test]
+async fn kimi_reasoning_lifecycle_uses_authoritative_item_once() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_kimi_reasoning(&mut chat, "neutral-model");
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: Vec::new(),
+                content: Vec::new(),
+            },
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ReasoningTextDelta(ReasoningTextDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "other-item".to_string(),
+            delta: "ignored".to_string(),
+            content_index: 0,
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ReasoningTextDelta(ReasoningTextDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "reasoning-1".to_string(),
+            delta: "draft".to_string(),
+            content_index: 0,
+        }),
+        None,
+    );
+    let completed = ItemCompletedNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        completed_at_ms: 0,
+        item: AppServerThreadItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec!["summary must not replace native content".to_string()],
+            content: vec!["authoritative".to_string()],
+        },
+    };
+    chat.handle_server_notification(ServerNotification::ItemCompleted(completed.clone()), None);
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(completed),
+        Some(ReplayKind::ResumeInitialMessages),
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert_eq!(rendered, vec!["• authoritative\n"]);
+}
+
+#[tokio::test]
+async fn kimi_reasoning_retry_discards_draft_and_terminal_error_retains_it() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_kimi_reasoning(&mut chat, "neutral-model");
+
+    for (item_id, text, will_retry) in [
+        ("retry-reasoning", "discarded draft", true),
+        ("failed-reasoning", "retained draft", false),
+    ] {
+        chat.handle_server_notification(
+            ServerNotification::ItemStarted(ItemStartedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                started_at_ms: 0,
+                item: AppServerThreadItem::Reasoning {
+                    id: item_id.to_string(),
+                    summary: Vec::new(),
+                    content: Vec::new(),
+                },
+            }),
+            None,
+        );
+        chat.handle_server_notification(
+            ServerNotification::ReasoningTextDelta(ReasoningTextDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: item_id.to_string(),
+                delta: text.to_string(),
+                content_index: 0,
+            }),
+            None,
+        );
+        chat.handle_server_notification(
+            ServerNotification::Error(ErrorNotification {
+                error: AppServerTurnError {
+                    message: "stream failed".to_string(),
+                    codex_error_info: None,
+                    additional_details: None,
+                },
+                will_retry,
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+            }),
+            None,
+        );
+    }
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<String>();
+    assert!(!rendered.contains("discarded draft"));
+    assert!(rendered.contains("retained draft"));
+    assert!(rendered.contains("stream failed"));
+}
+
+#[tokio::test]
+async fn kimi_reasoning_is_finalized_before_tool_content() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_kimi_reasoning(&mut chat, "neutral-model");
+    chat.handle_server_notification(
+        ServerNotification::ItemStarted(ItemStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            item: AppServerThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: Vec::new(),
+                content: Vec::new(),
+            },
+        }),
+        None,
+    );
+    chat.handle_server_notification(
+        ServerNotification::ReasoningTextDelta(ReasoningTextDeltaNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "reasoning-1".to_string(),
+            delta: "partial before tool".to_string(),
+            content_index: 0,
+        }),
+        None,
+    );
+
+    begin_exec_with_source(
+        &mut chat,
+        "call-1",
+        "pwd",
+        AppServerCommandExecutionSource::Agent,
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert_eq!(rendered, vec!["• partial before tool\n"]);
+}
+
+#[tokio::test]
+async fn replayed_kimi_reasoning_uses_authoritative_content_once() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_kimi_reasoning(&mut chat, "neutral-model");
+    let notification = ItemCompletedNotification {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        completed_at_ms: 0,
+        item: AppServerThreadItem::Reasoning {
+            id: "persisted-reasoning".to_string(),
+            summary: vec!["ignored summary".to_string()],
+            content: vec!["persisted native reasoning".to_string()],
+        },
+    };
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(notification.clone()),
+        Some(ReplayKind::ResumeInitialMessages),
+    );
+    chat.handle_server_notification(
+        ServerNotification::ItemCompleted(notification),
+        Some(ReplayKind::ThreadSnapshot),
+    );
+
+    let rendered = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>();
+    assert_eq!(rendered, vec!["• persisted native reasoning\n"]);
+}
+
+#[tokio::test]
+async fn kimi_reasoning_hide_flags_and_model_switch_take_precedence() {
+    let (mut chat, _rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    enable_kimi_reasoning(&mut chat, "neutral-model");
+    chat.config.show_raw_agent_reasoning = true;
+    assert!(chat.kimi_reasoning_visible());
+    chat.config.kimi_hide_agent_reasoning = true;
+    assert!(!chat.kimi_reasoning_visible());
+    chat.config.kimi_hide_agent_reasoning = false;
+    chat.config.hide_agent_reasoning = true;
+    assert!(!chat.kimi_reasoning_visible());
+    chat.config.hide_agent_reasoning = false;
+    chat.set_model("non-kimi-model");
+    assert!(!chat.kimi_reasoning_visible());
+}
+
+#[tokio::test]
+async fn kimi_reasoning_hide_flags_suppress_raw_delta_and_completion() {
+    let mut rendered_by_flags = Vec::new();
+    for (hide_agent_reasoning, kimi_hide_agent_reasoning) in [(true, false), (false, true)] {
+        let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        enable_kimi_reasoning(&mut chat, "neutral-model");
+        chat.config.show_raw_agent_reasoning = true;
+        chat.config.hide_agent_reasoning = hide_agent_reasoning;
+        chat.config.kimi_hide_agent_reasoning = kimi_hide_agent_reasoning;
+
+        chat.handle_server_notification(
+            ServerNotification::ReasoningTextDelta(ReasoningTextDeltaNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                item_id: "hidden-reasoning".to_string(),
+                delta: "hidden live reasoning".to_string(),
+                content_index: 0,
+            }),
+            None,
+        );
+        chat.handle_server_notification(
+            ServerNotification::ItemCompleted(ItemCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                completed_at_ms: 0,
+                item: AppServerThreadItem::Reasoning {
+                    id: "hidden-reasoning".to_string(),
+                    summary: Vec::new(),
+                    content: vec!["hidden completed reasoning".to_string()],
+                },
+            }),
+            None,
+        );
+
+        rendered_by_flags.push(drain_insert_history(&mut rx));
+    }
+    let expected: Vec<Vec<Vec<ratatui::text::Line<'static>>>> = vec![Vec::new(), Vec::new()];
+    assert_eq!(rendered_by_flags, expected);
+}
+
 #[tokio::test]
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;

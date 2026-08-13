@@ -342,6 +342,10 @@ pub struct ConfigToml {
     #[serde(default = "default_hide_agent_reasoning")]
     pub hide_agent_reasoning: Option<bool>,
 
+    /// When set to `true`, native Kimi reasoning will be hidden from the UI/output.
+    /// Defaults to `false`.
+    pub kimi_hide_agent_reasoning: Option<bool>,
+
     /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: Option<bool>,

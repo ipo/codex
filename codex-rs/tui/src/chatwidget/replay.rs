@@ -124,8 +124,14 @@ impl ChatWidget {
             }
             ThreadItem::Plan { text, .. } => self.on_plan_item_completed(text),
             ThreadItem::Reasoning {
-                summary, content, ..
+                id,
+                summary,
+                content,
             } => {
+                if self.kimi_reasoning_visible() {
+                    self.finish_kimi_reasoning(id, content);
+                    return;
+                }
                 if from_replay {
                     let reasoning_parts = summary.into_iter().chain(
                         self.config

@@ -257,6 +257,7 @@ impl ChatWidget {
             external_editor_state: ExternalEditorState::Closed,
             last_rendered_user_message_display: None,
             last_non_retry_error: None,
+            kimi_reasoning: KimiReasoningState::default(),
         };
 
         widget.bottom_pane.set_cwd(widget.config.cwd.clone());

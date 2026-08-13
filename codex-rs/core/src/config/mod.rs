@@ -675,6 +675,9 @@ pub struct Config {
     /// users are only interested in the final agent responses.
     pub hide_agent_reasoning: bool,
 
+    /// When `true`, native Kimi reasoning is suppressed from frontend output.
+    pub kimi_hide_agent_reasoning: bool,
+
     /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: bool,
@@ -4159,6 +4162,7 @@ impl Config {
             zsh_path,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            kimi_hide_agent_reasoning: cfg.kimi_hide_agent_reasoning.unwrap_or(false),
             show_raw_agent_reasoning: cfg
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)

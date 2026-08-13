@@ -254,6 +254,7 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
+        self.retain_partial_kimi_reasoning();
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(model.to_string()),
             /*effort*/ None,

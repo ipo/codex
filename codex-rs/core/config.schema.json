@@ -5503,6 +5503,10 @@
       "description": "System instructions.",
       "type": "string"
     },
+    "kimi_hide_agent_reasoning": {
+      "description": "When set to `true`, native Kimi reasoning will be hidden from the UI/output. Defaults to `false`.",
+      "type": "boolean"
+    },
     "log_dir": {
       "allOf": [
         {

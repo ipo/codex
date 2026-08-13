@@ -201,6 +201,16 @@ pub struct ModelServiceTier {
     pub description: String,
 }
 
+/// Catalog-owned policy for presenting a model's reasoning output.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum ModelReasoningDisplay {
+    #[default]
+    Summary,
+    KimiRaw,
+}
+
 /// Metadata describing a Codex-supported model.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelPreset {
@@ -215,6 +225,9 @@ pub struct ModelPreset {
     pub display_name: String,
     /// Short human description shown in UIs.
     pub description: String,
+    /// How clients should present reasoning emitted by this model.
+    #[serde(default)]
+    pub reasoning_display: ModelReasoningDisplay,
     /// Reasoning effort applied when none is explicitly chosen.
     pub default_reasoning_effort: ReasoningEffort,
     /// Supported reasoning effort options.
@@ -646,12 +659,19 @@ pub struct ModelsResponse {
 impl From<ModelInfo> for ModelPreset {
     fn from(info: ModelInfo) -> Self {
         let supports_personality = info.supports_personality();
+        let reasoning_display = match info.inference {
+            Some(ModelInferenceConfig::Kimi(_)) => ModelReasoningDisplay::KimiRaw,
+            Some(ModelInferenceConfig::OpenAi { .. })
+            | Some(ModelInferenceConfig::Anthropic { .. })
+            | None => ModelReasoningDisplay::Summary,
+        };
         ModelPreset {
             id: info.slug.clone(),
             model: info.slug.clone(),
             aliases: info.aliases,
             display_name: info.display_name,
             description: info.description.unwrap_or_default(),
+            reasoning_display,
             default_reasoning_effort: info
                 .default_reasoning_level
                 .unwrap_or(ReasoningEffort::None),
@@ -1271,6 +1291,41 @@ mod tests {
         assert_eq!(
             preset.default_service_tier,
             Some(ServiceTier::Fast.request_value().to_string())
+        );
+    }
+
+    #[test]
+    fn model_reasoning_display_comes_only_from_exact_kimi_inference() {
+        use crate::model_inference::KimiInferenceConfig;
+
+        let kimi = ModelPreset::from(ModelInfo {
+            slug: "neutral-model".to_string(),
+            inference: Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+                wire_api: crate::model_inference::WireApi::ChatCompletions,
+                dialect: crate::model_inference::InferenceDialect::Kimi,
+                route: "native".to_string(),
+                wire_model: "neutral-wire-model".to_string(),
+                max_output_tokens: 32_768,
+                thinking: crate::model_inference::KimiThinkingPolicy::Required,
+            })),
+            ..test_model(/*spec*/ None)
+        });
+        let misleading_slug = ModelPreset::from(ModelInfo {
+            slug: "kimi-looking-name".to_string(),
+            inference: None,
+            ..test_model(/*spec*/ None)
+        });
+
+        assert_eq!(
+            (kimi.reasoning_display, misleading_slug.reasoning_display),
+            (
+                ModelReasoningDisplay::KimiRaw,
+                ModelReasoningDisplay::Summary
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(kimi.reasoning_display).expect("serialize reasoning display"),
+            serde_json::json!("kimiRaw")
         );
     }
 

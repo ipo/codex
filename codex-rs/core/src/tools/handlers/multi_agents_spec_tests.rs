@@ -23,6 +23,7 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
         aliases: Vec::new(),
         display_name: format!("{id} display"),
         description: format!("{id} description"),
+        reasoning_display: Default::default(),
         default_reasoning_effort: ReasoningEffort::Medium,
         supported_reasoning_efforts: vec![ReasoningEffortPreset {
             effort: ReasoningEffort::Medium,

@@ -3,6 +3,11 @@ use chrono::Utc;
 use codex_core::test_support::all_model_presets;
 use codex_models_manager::client_version_to_whole;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::KimiInferenceConfig;
+use codex_protocol::model_inference::KimiThinkingPolicy;
+use codex_protocol::model_inference::ModelInferenceConfig;
+use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
@@ -16,6 +21,19 @@ use std::path::Path;
 fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
     ModelInfo {
         slug: preset.id.clone(),
+        inference: match preset.reasoning_display {
+            codex_protocol::openai_models::ModelReasoningDisplay::Summary => None,
+            codex_protocol::openai_models::ModelReasoningDisplay::KimiRaw => {
+                Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    route: "native".to_string(),
+                    wire_model: preset.model.clone(),
+                    max_output_tokens: 32_768,
+                    thinking: KimiThinkingPolicy::Required,
+                }))
+            }
+        },
         aliases: preset.aliases.clone(),
         display_name: preset.display_name.clone(),
         description: Some(preset.description.clone()),

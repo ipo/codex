@@ -44,6 +44,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
         availability_nux: preset.availability_nux.clone().map(Into::into),
         display_name: preset.display_name.clone(),
         description: preset.description.clone(),
+        reasoning_display: preset.reasoning_display,
         hidden: !preset.show_in_picker,
         supported_reasoning_efforts: preset
             .supported_reasoning_efforts
