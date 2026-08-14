@@ -19,7 +19,7 @@ expression: failures
         },
     ),
     RetryableStream(
-        "Chat Completions finish reason was missing",
+        "Chat Completions stream ended before [DONE]",
     ),
     RetryableStream(
         "Chat Completions stream ended before [DONE]",

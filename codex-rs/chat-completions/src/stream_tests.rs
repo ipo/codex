@@ -150,6 +150,39 @@ fn maps_finish_reasons_and_discards_noncommittable_output() {
 
 #[test]
 #[rustfmt::skip]
+fn derives_terminal_outcome_when_finish_reason_is_omitted_or_null() {
+    let cases = [
+        (json!({"content":"answer"}), None, TerminalOutcome::Completed),
+        (json!({"reasoning_content":"thought"}), Some(Value::Null), TerminalOutcome::Completed),
+        (json!({"tool_calls":[{"index":0,"id":"call","type":"function","function":{"name":"run","arguments":"{}"}}]}), None, TerminalOutcome::ToolsReady),
+        (json!({"tool_calls":[{"index":0,"id":"call","type":"function","function":{"name":"run","arguments":"{}"}}]}), Some(Value::Null), TerminalOutcome::ToolsReady),
+    ];
+    for (delta, finish_reason, expected) in cases {
+        let mut raw_choice = json!({"index":0,"delta":delta});
+        if let Some(finish_reason) = finish_reason { raw_choice["finish_reason"] = finish_reason; }
+        let body = frame(json!({"id":"chat-1","choices":[raw_choice]})) + "data: [DONE]\n\n";
+        let decoded = decode(&body, &TestDialect::default()).0.unwrap();
+        assert_eq!(decoded.terminal_outcome, expected);
+        assert!(decoded.pending.is_some());
+    }
+}
+
+#[test]
+#[rustfmt::skip]
+fn optional_finish_reason_still_requires_done_and_usable_output() {
+    let missing = frame(json!({"id":"chat-1","choices":[{"index":0,"delta":{"content":"answer"}}]}));
+    let null = chunk(vec![choice(json!({"content":"answer"}), Value::Null, None)], None);
+    for body in [missing, null] {
+        assert_eq!(decode(&body, &TestDialect::default()).0, Err(DecodeError::PrematureEof { expected:"[DONE]".into() }));
+    }
+    for choice in [json!({"index":0,"delta":{}}), json!({"index":0,"delta":{},"finish_reason":null})] {
+        let body = frame(json!({"id":"chat-1","choices":[choice]})) + "data: [DONE]\n\n";
+        assert_eq!(decode(&body, &TestDialect::default()).0, Err(DecodeError::InvalidTransition("successful terminal had no content".into())));
+    }
+}
+
+#[test]
+#[rustfmt::skip]
 fn rejects_every_strict_failure_without_returning_pending_tools() {
     let valid_tool = json!({"tool_calls":[{"index":0,"id":"c","type":"function","function":{"name":"f","arguments":"{}"}}]});
     let incomplete_tool = json!({"tool_calls":[{"index":0,"id":"c","type":"function","function":{"arguments":"{}"}}]});
@@ -160,8 +193,6 @@ fn rejects_every_strict_failure_without_returning_pending_tools() {
         (&(chunk(vec![choice(json!({"tool_calls":[{"index":0,"id":"c","function":{"name":"f","arguments":"[1]"}}]}), "tool_calls".into(), None)], None) + "data: [DONE]\n\n"), DecodeError::InvalidToolJson { index:0, arguments:"[1]".into() }),
         (&(chunk(vec![choice(incomplete_tool, "tool_calls".into(), None)], None) + "data: [DONE]\n\n"), DecodeError::IncompleteTool { index:0, field:"name".into() }),
         (&(chunk(vec![choice(json!({"content":"x"}), "future".into(), None)], None) + "data: [DONE]\n\n"), DecodeError::UnknownFinishReason("future".into())),
-        (&(chunk(vec![choice(json!({"content":"x"}), Value::Null, None)], None) + "data: [DONE]\n\n"), DecodeError::NullFinishReason),
-        (&(frame(json!({"id":"chat-1","choices":[]})) + "data: [DONE]\n\n"), DecodeError::MissingFinishReason),
         (&chunk(vec![choice(json!({"content":"x"}), "stop".into(), None)], None), DecodeError::PrematureEof { expected:"[DONE]".into() }),
         (&(chunk(vec![choice(valid_tool.clone(), "tool_calls".into(), None)], None) + &chunk(vec![choice(valid_tool, "tool_calls".into(), None)], None) + "data: [DONE]\n\n"), DecodeError::DuplicateTerminal),
         (&(chunk(vec![choice(json!({"content":"x"}), "stop".into(), None)], None) + &chunk(vec![choice(json!({}), "length".into(), None)], None) + "data: [DONE]\n\n"), DecodeError::ConflictingTerminal),

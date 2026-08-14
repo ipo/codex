@@ -38,8 +38,6 @@ struct Decoder<'a, F> {
     usage: Option<ChunkUsage>,
     terminal: Option<(FinishReason, TerminalOutcome)>,
     recognized: bool,
-    saw_finish_field: bool,
-    saw_null_finish: bool,
     done: bool,
 }
 
@@ -64,8 +62,6 @@ impl<'a, F: FnMut(PresentationDelta)> IncrementalDecoder<'a, F> {
                 usage: None,
                 terminal: None,
                 recognized: false,
-                saw_finish_field: false,
-                saw_null_finish: false,
                 done: false,
             },
             framing: Framing::default(),
@@ -305,9 +301,7 @@ impl<F: FnMut(PresentationDelta)> Decoder<'_, F> {
         let Some(value) = raw_choice.get("finish_reason") else {
             return Ok(());
         };
-        self.saw_finish_field = true;
         if value.is_null() {
-            self.saw_null_finish = true;
             return Ok(());
         }
         let reason = value
@@ -338,23 +332,22 @@ impl<F: FnMut(PresentationDelta)> Decoder<'_, F> {
                 expected: "a recognized chunk".to_string(),
             });
         }
-        let Some((_, terminal_outcome)) = self.terminal else {
-            return Err(if self.saw_null_finish {
-                DecodeError::NullFinishReason
-            } else if !self.saw_finish_field {
-                DecodeError::MissingFinishReason
-            } else {
-                DecodeError::PrematureEof {
-                    expected: "a supported non-null finish reason".to_string(),
-                }
-            });
-        };
         if !self.done {
             return Err(DecodeError::PrematureEof {
                 expected: "[DONE]".to_string(),
             });
         }
         let tools = complete_tools(self.tools)?;
+        let terminal_outcome = self.terminal.map_or_else(
+            || {
+                if tools.is_empty() {
+                    TerminalOutcome::Completed
+                } else {
+                    TerminalOutcome::ToolsReady
+                }
+            },
+            |(_, outcome)| outcome,
+        );
         validate_terminal(terminal_outcome, &self.content, &self.reasoning, &tools)?;
         let usage_details = self
             .usage

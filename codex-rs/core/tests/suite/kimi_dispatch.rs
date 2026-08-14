@@ -694,36 +694,35 @@ async fn nonretryable_failures_and_overflow_preserve_stable_history() -> Result<
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn missing_and_null_finish_do_not_retry_or_poison_the_thread() -> Result<()> {
+async fn missing_and_null_finish_execute_tools_and_continue_normally() -> Result<()> {
     for (name, finish_reason) in [("missing", None), ("null", Some(Value::Null))] {
         let server = responses::start_mock_server().await;
-        let mut failure = json!({
+        let mut tool_response = json!({
             "id": format!("{name}-finish"),
             "choices": [{
                 "index": 0,
                 "delta": {
-                    "content": format!("{name} partial output"),
-                    "reasoning_content": format!("{name} partial reasoning"),
+                    "reasoning_content": format!("{name} accepted reasoning"),
                     "tool_calls": [{
                         "index": 0,
                         "id": format!("{name}-call"),
                         "type": "function",
                         "function": {
                             "name": "exec_command",
-                            "arguments": format!("{{\"cmd\":\"printf {name}-strict-tool-result\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}}")
+                            "arguments": "{\"cmd\":\"pwd\",\"yield_time_ms\":1000,\"max_output_tokens\":1000}"
                         }
                     }]
                 }
             }]
         });
         if let Some(finish_reason) = finish_reason {
-            failure["choices"][0]["finish_reason"] = finish_reason;
+            tool_response["choices"][0]["finish_reason"] = finish_reason;
         }
         mount_native(
             &server,
             vec![
-                format!("data: {failure}\n\ndata: [DONE]\n\n"),
-                text_terminal("later", "valid later response", "stop"),
+                format!("data: {tool_response}\n\ndata: [DONE]\n\n"),
+                text_terminal("continued", "tool completed", "stop"),
             ],
         )
         .await;
@@ -731,48 +730,20 @@ async fn missing_and_null_finish_do_not_retry_or_poison_the_thread() -> Result<(
             .build_with_auto_env(&server)
             .await?;
 
-        submit(&test, &format!("{name} strict failure"), None).await?;
-        let error = completion(&test).await.expect_err("strict finish failure");
-        assert!(error.to_string().contains("finish reason"));
-        wait_for_event_match(&test.codex, |event| match event {
-            EventMsg::ExecCommandBegin(event) => Some(Err(anyhow::anyhow!(
-                "strict failure executed {}",
-                event.call_id
-            ))),
-            EventMsg::TurnComplete(event) => Some(match &event.error {
-                Some(error) if error.message.contains("finish reason") => Ok(()),
-                Some(error) => Err(anyhow::anyhow!(error.message.clone())),
-                None => Err(anyhow::anyhow!("strict failure completed successfully")),
-            }),
-            _ => None,
-        })
-        .await?;
-        assert_eq!(server.received_requests().await.expect("requests").len(), 1);
-
-        submit(&test, "later stable turn", None).await?;
+        submit(&test, &format!("{name} optional finish"), None).await?;
         completion(&test).await?;
         let requests = server.received_requests().await.expect("requests");
         assert_eq!(requests.len(), 2);
-        let later: Value = requests[1].body_json()?;
-        assert_eq!(
-            later["messages"],
-            json!([
-                {"role": "system", "content": "Kimi system"},
-                {"role": "user", "content": format!("{name} strict failure")},
-                {"role": "user", "content": "later stable turn"},
-            ])
-        );
-        let later_text = later.to_string();
-        for leaked in [
-            format!("{name} partial output"),
-            format!("{name} partial reasoning"),
+        let continuation = requests[1].body_json::<Value>()?.to_string();
+        for expected in [
+            format!("{name} optional finish"),
+            format!("{name} accepted reasoning"),
             format!("{name}-call"),
-            format!("printf {name}-strict-tool-result"),
-            format!("{name}-strict-tool-result"),
+            "Process exited with code 0".to_string(),
         ] {
             assert!(
-                !later_text.contains(&leaked),
-                "later history leaked {leaked}"
+                continuation.contains(&expected),
+                "continuation omitted {expected}"
             );
         }
     }

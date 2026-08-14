@@ -9,7 +9,6 @@ use codex_api::Provider;
 use codex_api::ResponseEvent;
 use codex_api::RetryConfig;
 use codex_api::TerminalOutcome;
-use codex_chat_completions::DecodeError;
 use codex_client::Request;
 use codex_client::Response;
 use codex_client::StreamResponse;
@@ -425,22 +424,47 @@ async fn terminal_and_transport_failures_remain_typed() {
 }
 
 #[tokio::test]
-async fn missing_and_null_finish_after_done_are_nonretryable_decode_errors() {
-    let missing_finish = "data: {\"id\":\"chat-61\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\ndata: [DONE]\n\n";
-    let null_finish = "data: {\"id\":\"chat-61\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n";
+async fn optional_finish_reason_completes_content_and_tools() {
+    let bodies = [
+        (
+            "data: {\"id\":\"chat-missing\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n",
+            TerminalOutcome::Completed,
+        ),
+        (
+            "data: {\"id\":\"chat-null\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n",
+            TerminalOutcome::Completed,
+        ),
+        (
+            "data: {\"id\":\"chat-tool\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call\",\"type\":\"function\",\"function\":{\"name\":\"run\",\"arguments\":\"{}\"}}]}}]}\n\ndata: [DONE]\n\n",
+            TerminalOutcome::ToolsReady,
+        ),
+    ];
+    for (body, expected) in bodies {
+        let results = stream_result(body).await;
+        assert!(results.iter().all(Result::is_ok));
+        assert!(results.iter().any(|result| matches!(
+            result,
+            Ok(ResponseEvent::Completed { terminal_outcome, .. }) if terminal_outcome == &expected
+        )));
+    }
+}
 
-    let missing = stream_result(missing_finish).await;
+#[tokio::test]
+async fn optional_finish_reason_keeps_incomplete_and_unusable_streams_retryable() {
+    let cases = [
+        "data: {\"id\":\"chat-eof\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n",
+        "data: {\"id\":\"chat-empty\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n",
+    ];
+    for body in cases {
+        assert!(matches!(
+            stream_result(body).await.last(),
+            Some(Err(KimiStreamError::RetryableStream(_)))
+        ));
+    }
+    let thinking_only = "data: {\"id\":\"chat-think\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"thought\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n";
     assert!(matches!(
-        missing.last(),
-        Some(Err(KimiStreamError::Decode(
-            DecodeError::MissingFinishReason
-        )))
-    ));
-
-    let null = stream_result(null_finish).await;
-    assert!(matches!(
-        null.last(),
-        Some(Err(KimiStreamError::Decode(DecodeError::NullFinishReason)))
+        stream_result(thinking_only).await.last(),
+        Some(Err(KimiStreamError::ThinkingOnlyStop))
     ));
 }
 
