@@ -15,7 +15,7 @@ pub(crate) struct CodexImagesBackend {
 }
 
 impl CodexImagesBackend {
-    /// Creates a backend that sends image requests through the active model provider.
+    /// Creates a backend that sends image requests through the auxiliary OpenAI provider.
     pub(crate) fn new(provider: SharedModelProvider, originator: Option<String>) -> Self {
         Self {
             provider,
@@ -71,3 +71,7 @@ fn image_request_headers(originator: Option<&str>) -> HeaderMap {
     }
     headers
 }
+
+#[cfg(test)]
+#[path = "backend_tests.rs"]
+mod tests;

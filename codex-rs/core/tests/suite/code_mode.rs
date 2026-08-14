@@ -25,7 +25,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
-use codex_web_search_extension::install as install_web_search_extension;
+use codex_web_search_extension::install_with_openai_base_url as install_web_search_extension;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::AppsTestToolLoading;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_APP_ONLY_TOOL;
@@ -373,7 +373,11 @@ text(result);
     let auth = CodexAuth::from_api_key("dummy");
     let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
     let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
-    install_web_search_extension(&mut extension_builder, auth_manager);
+    install_web_search_extension(
+        &mut extension_builder,
+        auth_manager,
+        format!("{}/v1", server.uri()),
+    );
     let mut builder = test_codex()
         .with_auth(auth)
         .with_extensions(Arc::new(extension_builder.build()))
@@ -406,10 +410,7 @@ text(result);
     let search_body = search_request
         .body_json::<Value>()
         .expect("search request body should be JSON");
-    assert_eq!(
-        search_body["model"],
-        serde_json::json!("test-gpt-5.1-codex")
-    );
+    assert_eq!(search_body["model"], serde_json::json!("gpt-5.6-sol"));
     assert_eq!(
         search_body["commands"],
         serde_json::json!({

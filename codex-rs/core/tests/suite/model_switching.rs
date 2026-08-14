@@ -123,6 +123,7 @@ fn test_model_info(
         requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     }
 }
 
@@ -1027,6 +1028,7 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         requires_nonempty_assistant_messages: false,
         effective_context_window_percent,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     };
     let mut smaller_model = base_model.clone();
     smaller_model.slug = smaller_model_slug.to_string();

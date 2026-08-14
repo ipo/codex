@@ -42,6 +42,7 @@ const MODEL_INFO_FIELDS: &[&str] = &[
     "requires_nonempty_assistant_messages",
     "effective_context_window_percent",
     "experimental_supported_tools",
+    "disabled_tools",
     "input_modalities",
     "supports_search_tool",
     "use_responses_lite",

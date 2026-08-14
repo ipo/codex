@@ -1,5 +1,6 @@
 use super::*;
 use crate::bundled_models_response;
+use codex_protocol::openai_models::ModelToolCapability;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -75,6 +76,34 @@ fn explicitly_disables_responses_lite_for_an_enabled_model() {
             .first()
             .expect("patched model")
             .use_responses_lite
+    );
+}
+
+#[test]
+fn disabled_tools_validate_and_inherit_through_overlays() {
+    let original = bundled_models_response().expect("bundled catalog should parse");
+    let parent_slug = original.models.first().expect("bundled model").slug.clone();
+    let child_slug = "external/disabled-tools-child";
+    let applied = apply(json!({"models": [
+        {
+            "slug": parent_slug,
+            "disabled_tools": ["apply_patch", "codex_apps"]
+        },
+        {"slug": child_slug, "inherits": parent_slug}
+    ]}))
+    .expect("overlay should apply");
+
+    let expected = vec![
+        ModelToolCapability::ApplyPatch,
+        ModelToolCapability::CodexApps,
+    ];
+    assert_eq!(
+        applied.models.first().expect("parent").disabled_tools,
+        expected
+    );
+    assert_eq!(
+        applied.models.last().expect("child").disabled_tools,
+        expected
     );
 }
 

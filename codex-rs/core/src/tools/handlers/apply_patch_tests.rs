@@ -28,6 +28,86 @@ fn sample_patch() -> &'static str {
 *** End Patch"#
 }
 
+#[test]
+fn patch_command_accepts_freeform_and_function_payloads() {
+    let patch = sample_patch();
+    assert_eq!(
+        apply_patch_payload_command(&ToolPayload::Custom {
+            input: patch.to_string(),
+        })
+        .expect("freeform patch"),
+        patch
+    );
+    assert_eq!(
+        apply_patch_payload_command(&ToolPayload::Function {
+            arguments: serde_json::json!({
+                "patch": patch,
+                "environment_id": "remote-1",
+            })
+            .to_string(),
+        })
+        .expect("function patch"),
+        patch.replacen(
+            "*** Begin Patch\n",
+            "*** Begin Patch\n*** Environment ID: remote-1\n",
+            1,
+        )
+    );
+}
+
+#[tokio::test]
+async fn updated_function_hook_command_preserves_environment_id_without_duplication() {
+    let patch = sample_patch();
+    let invocation = invocation_for_payload(ToolPayload::Function {
+        arguments: serde_json::json!({
+            "patch": patch,
+            "environment_id": "remote-1",
+        })
+        .to_string(),
+    })
+    .await;
+    let handler = ApplyPatchHandler::function(/*multi_environment*/ true);
+    let updated_command = patch.replacen(
+        "*** Begin Patch\n",
+        "*** Begin Patch\n*** Environment ID: remote-2\n",
+        1,
+    );
+
+    let updated = handler
+        .with_updated_hook_input(invocation, json!({"command": updated_command}))
+        .expect("updated hook command should remain a function payload");
+
+    let ToolPayload::Function { arguments } = updated.payload else {
+        panic!("updated apply_patch payload should remain a function");
+    };
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&arguments).expect("valid function arguments"),
+        json!({
+            "patch": patch,
+            "environment_id": "remote-2",
+        })
+    );
+    assert_eq!(
+        apply_patch_payload_command(&ToolPayload::Function { arguments })
+            .expect("updated function payload should convert back to a patch command"),
+        updated_command
+    );
+}
+
+#[test]
+fn only_freeform_patch_uses_streaming_patch_diff_parser() {
+    assert!(
+        ApplyPatchHandler::freeform(/*multi_environment*/ false)
+            .create_diff_consumer()
+            .is_some()
+    );
+    assert!(
+        ApplyPatchHandler::function(/*multi_environment*/ false)
+            .create_diff_consumer()
+            .is_none()
+    );
+}
+
 async fn invocation_for_payload(payload: ToolPayload) -> ToolInvocation {
     let (session, turn) = make_session_and_context().await;
     let turn = Arc::new(turn);

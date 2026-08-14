@@ -2508,6 +2508,19 @@ impl AuthManager {
             .is_some_and(AuthMode::uses_codex_backend)
     }
 
+    /// Returns whether the cached credentials can authenticate first-party OpenAI APIs.
+    pub fn current_auth_supports_openai_apis(&self) -> bool {
+        self.get_api_auth_mode().is_some_and(|mode| match mode {
+            AuthMode::ApiKey
+            | AuthMode::Chatgpt
+            | AuthMode::ChatgptAuthTokens
+            | AuthMode::Headers
+            | AuthMode::AgentIdentity
+            | AuthMode::PersonalAccessToken => true,
+            AuthMode::BedrockApiKey => false,
+        })
+    }
+
     fn should_refresh_proactively(auth: &CodexAuth) -> bool {
         let chatgpt_auth = match auth {
             CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth,

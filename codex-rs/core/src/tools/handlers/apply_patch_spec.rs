@@ -1,6 +1,9 @@
 use codex_tools::FreeformTool;
 use codex_tools::FreeformToolFormat;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolSpec;
+use std::collections::BTreeMap;
 
 const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("apply_patch.lark");
 
@@ -23,6 +26,34 @@ pub fn create_apply_patch_freeform_tool(include_environment_id: bool) -> ToolSpe
             syntax: "lark".to_string(),
             definition,
         },
+    })
+}
+
+/// Returns the ordinary function adapter used by native Claude and Kimi wires.
+pub fn create_apply_patch_function_tool(include_environment_id: bool) -> ToolSpec {
+    let mut properties = BTreeMap::from([(
+        "patch".to_string(),
+        JsonSchema::string(Some("The complete apply_patch patch text.".to_string())),
+    )]);
+    if include_environment_id {
+        properties.insert(
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Environment that owns the files changed by the patch.".to_string(),
+            )),
+        );
+    }
+    ToolSpec::Function(ResponsesApiTool {
+        name: "apply_patch".to_string(),
+        description: "Apply a patch to files in the workspace.".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["patch".to_string()]),
+            Some(false.into()),
+        ),
+        local_result_schema: None,
     })
 }
 

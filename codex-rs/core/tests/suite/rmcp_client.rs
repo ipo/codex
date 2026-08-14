@@ -347,6 +347,15 @@ fn insert_mcp_server(
         .expect("test mcp servers should accept any configuration");
 }
 
+pub(super) fn configure_stdio_mcp(config: &mut Config, server_name: &str, command: String) {
+    insert_mcp_server(
+        config,
+        server_name,
+        stdio_transport(command, /*env*/ None, Vec::new()),
+        TestMcpServerOptions::default(),
+    );
+}
+
 async fn call_cwd_tool(
     server: &MockServer,
     fixture: &TestCodex,
@@ -1980,6 +1989,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 requires_nonempty_assistant_messages: false,
                 effective_context_window_percent: 95,
                 experimental_supported_tools: Vec::new(),
+                disabled_tools: Vec::new(),
                 input_modalities: vec![InputModality::Text],
                 used_fallback_model_metadata: false,
                 supports_search_tool: false,

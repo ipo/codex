@@ -73,6 +73,8 @@ pub use shell::ShellCommandHandler;
 pub(crate) use shell::ShellCommandHandlerOptions;
 pub use sleep::SleepHandler;
 pub use test_sync::TestSyncHandler;
+pub(crate) use tool_search::NativeToolSearchState;
+pub(crate) use tool_search::ToolSearchHandler;
 pub(crate) use tool_search::ToolSearchHandlerCache;
 pub use unified_exec::ExecCommandHandler;
 pub(crate) use unified_exec::ExecCommandHandlerOptions;

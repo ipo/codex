@@ -8,6 +8,7 @@ use codex_mcp::ToolInfo;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::model_inference::AnthropicThinkingPolicy;
@@ -19,6 +20,7 @@ use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ModelToolCapability;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_tools::DiscoverablePluginInfo;
@@ -191,6 +193,7 @@ async fn probe_with(
     inputs: ToolPlanInputs,
 ) -> ToolPlanProbe {
     let (_session, mut turn) = make_session_and_context().await;
+    turn.model_info.inference = None;
     configure_turn(&mut turn);
     let turn = Arc::new(turn);
     let step_context = StepContext::for_test(Arc::clone(&turn));
@@ -271,10 +274,12 @@ fn use_chatgpt_auth(turn: &mut TurnContext) {
     turn.auth_manager = Some(AuthManager::from_auth_for_testing(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     ));
-    turn.provider = create_model_provider(
-        turn.config.model_provider.clone(),
-        turn.auth_manager.clone(),
-    );
+    let provider_info = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    update_config(turn, |config| {
+        config.model_provider_id = OPENAI_PROVIDER_ID.to_string();
+        config.model_provider = provider_info.clone();
+    });
+    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
 }
 
 fn use_bedrock_provider(turn: &mut TurnContext) {
@@ -284,6 +289,31 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
         config.model_provider = provider_info.clone();
     });
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+}
+
+fn use_native_claude(turn: &mut TurnContext) {
+    turn.model_info.inference = Some(ModelInferenceConfig::Anthropic {
+        wire_api: WireApi::AnthropicMessages,
+        dialect: InferenceDialect::ClaudeCode,
+        route: "claude_code".to_string(),
+        wire_model: "claude-haiku-4-5-20251001".to_string(),
+        max_output_tokens: 32_000,
+        thinking: AnthropicThinkingPolicy::Budgeted {
+            budget_tokens: 31_999,
+        },
+        supports_disabled_thinking: false,
+    });
+}
+
+fn use_native_kimi(turn: &mut TurnContext) {
+    turn.model_info.inference = Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+        wire_api: WireApi::ChatCompletions,
+        dialect: InferenceDialect::Kimi,
+        route: "kimi_code".to_string(),
+        wire_model: "kimi-for-coding".to_string(),
+        max_output_tokens: 32_768,
+        thinking: KimiThinkingPolicy::Required,
+    }));
 }
 
 struct TestNamespaceExtensionTool {
@@ -1007,6 +1037,96 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 }
 
 #[tokio::test]
+async fn native_models_flatten_direct_mcp_when_tool_search_is_disabled() {
+    for configure_native in [
+        use_native_claude as fn(&mut TurnContext),
+        use_native_kimi as fn(&mut TurnContext),
+    ] {
+        let plan = probe_with(
+            |turn| {
+                configure_native(turn);
+                turn.model_info.disabled_tools = vec![ModelToolCapability::ToolSearch];
+            },
+            ToolPlanInputs {
+                tool_runtimes: vec![mcp_runtime(
+                    "direct",
+                    "mcp__direct",
+                    "lookup",
+                    ToolExposure::Direct,
+                )],
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        plan.assert_visible_contains(&["mcp__direct__lookup"]);
+        plan.assert_visible_lacks(&["mcp__direct", "tool_search"]);
+        plan.assert_registered_contains(&[
+            &ToolName::namespaced("mcp__direct", "lookup").to_string()
+        ]);
+    }
+}
+
+#[tokio::test]
+async fn disabled_apply_patch_policy_hides_responses_and_native_forms() {
+    let responses = probe(|turn| {
+        turn.model_info.disabled_tools = vec![ModelToolCapability::ApplyPatch];
+    })
+    .await;
+    let claude = probe(|turn| {
+        use_native_claude(turn);
+        turn.model_info.disabled_tools = vec![ModelToolCapability::ApplyPatch];
+    })
+    .await;
+    let kimi = probe(|turn| {
+        use_native_kimi(turn);
+        turn.model_info.disabled_tools = vec![ModelToolCapability::ApplyPatch];
+    })
+    .await;
+
+    for plan in [responses, claude, kimi] {
+        plan.assert_visible_lacks(&["apply_patch"]);
+        plan.assert_registered_lacks(&["apply_patch"]);
+    }
+}
+
+#[tokio::test]
+async fn legacy_responses_capabilities_do_not_disable_native_adapters() {
+    for configure_native in [
+        use_native_claude as fn(&mut TurnContext),
+        use_native_kimi as fn(&mut TurnContext),
+    ] {
+        let plan = probe_with(
+            |turn| {
+                configure_native(turn);
+                turn.model_info.apply_patch_tool_type = None;
+                turn.model_info.supports_search_tool = false;
+            },
+            ToolPlanInputs {
+                tool_runtimes: vec![mcp_runtime(
+                    "searchable",
+                    "mcp__searchable",
+                    "lookup",
+                    ToolExposure::Deferred,
+                )],
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        plan.assert_visible_contains(&["apply_patch", "tool_search"]);
+        assert!(matches!(
+            plan.visible_spec("apply_patch"),
+            ToolSpec::Function(_)
+        ));
+        assert!(matches!(
+            plan.visible_spec("tool_search"),
+            ToolSpec::Function(_)
+        ));
+    }
+}
+
+#[tokio::test]
 async fn deferred_extension_tools_are_discoverable_with_tool_search() {
     let plan = probe_with(
         |turn| {
@@ -1148,6 +1268,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
     for disabled_feature in [Feature::ToolSuggest, Feature::Apps, Feature::Plugins] {
         let plan = probe_with(
             |turn| {
+                use_chatgpt_auth(turn);
                 set_features(
                     turn,
                     &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
@@ -1166,6 +1287,26 @@ async fn request_plugin_install_requires_all_discovery_features() {
         ]);
     }
 
+    let model_denied_apps = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            set_features(
+                turn,
+                &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+            );
+            turn.model_info.disabled_tools = vec![ModelToolCapability::CodexApps];
+        },
+        ToolPlanInputs {
+            tool_suggest_candidates: Some(plugin_candidates(ToolSuggestPresentation::ListTool)),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    model_denied_apps.assert_visible_lacks(&[
+        "list_available_plugins_to_install",
+        "request_plugin_install",
+    ]);
+
     for tool_suggest_candidates in [
         None,
         Some(ToolSuggestCandidates {
@@ -1175,6 +1316,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
     ] {
         let plan = probe_with(
             |turn| {
+                use_chatgpt_auth(turn);
                 set_features(
                     turn,
                     &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
@@ -1194,6 +1336,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
 
     let enabled = probe_with(
         |turn| {
+            use_chatgpt_auth(turn);
             set_features(
                 turn,
                 &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
@@ -1215,6 +1358,7 @@ async fn request_plugin_install_requires_all_discovery_features() {
 async fn request_plugin_install_stays_visible_without_tool_search() {
     let plan = probe_with(
         |turn| {
+            use_chatgpt_auth(turn);
             turn.model_info.supports_search_tool = false;
             set_features(
                 turn,
@@ -1239,6 +1383,7 @@ async fn request_plugin_install_stays_visible_without_tool_search() {
 async fn request_plugin_install_description_requires_exhausting_tool_search() {
     let plan = probe_with(
         |turn| {
+            use_chatgpt_auth(turn);
             set_features(
                 turn,
                 &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
@@ -1741,29 +1886,12 @@ async fn multi_agent_v2_namespace_follows_resolved_model_inference_contract() {
     let responses = probe(configure_v2).await;
     let claude = probe(|turn| {
         configure_v2(turn);
-        turn.model_info.inference = Some(ModelInferenceConfig::Anthropic {
-            wire_api: WireApi::AnthropicMessages,
-            dialect: InferenceDialect::ClaudeCode,
-            route: "claude_code".to_string(),
-            wire_model: "claude-haiku-4-5-20251001".to_string(),
-            max_output_tokens: 32_000,
-            thinking: AnthropicThinkingPolicy::Budgeted {
-                budget_tokens: 31_999,
-            },
-            supports_disabled_thinking: false,
-        });
+        use_native_claude(turn);
     })
     .await;
     let kimi = probe(|turn| {
         configure_v2(turn);
-        turn.model_info.inference = Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
-            wire_api: WireApi::ChatCompletions,
-            dialect: InferenceDialect::Kimi,
-            route: "kimi_code".to_string(),
-            wire_model: "kimi-for-coding".to_string(),
-            max_output_tokens: 32_768,
-            thinking: KimiThinkingPolicy::Required,
-        }));
+        use_native_kimi(turn);
     })
     .await;
 
@@ -1783,10 +1911,14 @@ async fn multi_agent_v2_namespace_follows_resolved_model_inference_contract() {
     };
     for native in [&claude, &kimi] {
         native.assert_visible_lacks(&[MULTI_AGENT_V2_NAMESPACE]);
-        native.assert_visible_contains(&collaboration_tools);
+        let flattened_tools = collaboration_tools.map(|tool| format!("agents__{tool}"));
+        for tool in &flattened_tools {
+            native.assert_visible_contains(&[tool]);
+        }
         for tool_name in collaboration_tools {
-            let ToolSpec::Function(native_function) = native.visible_spec(tool_name) else {
-                panic!("expected visible function spec `{tool_name}`");
+            let flattened_name = format!("agents__{tool_name}");
+            let ToolSpec::Function(native_function) = native.visible_spec(&flattened_name) else {
+                panic!("expected visible function spec `{flattened_name}`");
             };
             let responses_function = responses_namespace
                 .tools
@@ -1800,13 +1932,17 @@ async fn multi_agent_v2_namespace_follows_resolved_model_inference_contract() {
                 .unwrap_or_else(|| {
                     panic!("expected `{tool_name}` in {MULTI_AGENT_V2_NAMESPACE} namespace")
                 });
-            assert_eq!(native_function, responses_function);
-            native.assert_registered_contains(&[tool_name]);
+            let mut expected = responses_function.clone();
+            expected.name = flattened_name.clone();
+            if let Some(properties) = expected.parameters.properties.as_mut() {
+                properties.retain(|_, property| property.encrypted != Some(true));
+            }
+            assert_eq!(native_function, &expected);
             assert!(
-                !native.registered_names.contains(
+                native.registered_names.contains(
                     &ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, tool_name).to_string()
                 ),
-                "native model should register `{tool_name}` without a namespace"
+                "native model should keep the configured `{tool_name}` runtime namespace"
             );
         }
     }
@@ -1908,6 +2044,31 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     .await;
     image_generation.assert_visible_contains(&["image_gen"]);
 
+    let model_denied_image_generation = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            turn.model_info.disabled_tools = vec![ModelToolCapability::ImageGeneration];
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![image_generation_tool.clone()],
+            ..Default::default()
+        },
+    )
+    .await;
+    model_denied_image_generation.assert_visible_lacks(&["image_gen"]);
+
+    let missing_openai_auth = probe_with(
+        |turn| {
+            turn.auth_manager = None;
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![image_generation_tool.clone()],
+            ..Default::default()
+        },
+    )
+    .await;
+    missing_openai_auth.assert_visible_lacks(&["image_gen"]);
+
     let extension_disabled = probe_with(
         |turn| {
             use_chatgpt_auth(turn);
@@ -1933,9 +2094,9 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
         },
     )
     .await;
-    text_only_model.assert_visible_lacks(&["image_gen"]);
+    text_only_model.assert_visible_contains(&["image_gen"]);
 
-    let unsupported_provider = probe_with(
+    let responses_provider = probe_with(
         |turn| {
             use_bedrock_provider(turn);
             turn.model_info.input_modalities = vec![InputModality::Image];
@@ -1946,7 +2107,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
         },
     )
     .await;
-    unsupported_provider.assert_visible_lacks(&["image_gen"]);
+    responses_provider.assert_visible_contains(&["image_gen"]);
 
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
@@ -2009,6 +2170,24 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     .await;
     standalone_web_search.assert_visible_lacks(&["web_search"]);
 
+    let model_denied_web_search = probe_with(
+        |turn| {
+            use_native_claude(turn);
+            use_chatgpt_auth(turn);
+            set_web_search_mode(turn, WebSearchMode::Live);
+            turn.model_info.disabled_tools = vec![ModelToolCapability::WebSearch];
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
+                namespace: "web",
+                tool_name: "run",
+            })],
+            ..Default::default()
+        },
+    )
+    .await;
+    model_denied_web_search.assert_visible_lacks(&["web_search", "web__run"]);
+
     let unsupported_provider = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
         use_bedrock_provider(turn);
@@ -2041,5 +2220,6 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
         },
     )
     .await;
-    anthropic_model.assert_visible_lacks(&["web_search", "image_gen"]);
+    anthropic_model.assert_visible_lacks(&["web_search"]);
+    anthropic_model.assert_visible_contains(&["image_gen__imagegen"]);
 }

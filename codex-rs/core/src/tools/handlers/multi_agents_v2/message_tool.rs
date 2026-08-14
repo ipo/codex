@@ -86,13 +86,14 @@ pub(crate) async fn handle_message_string_tool(
     message: Option<String>,
     plaintext_message: Option<String>,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
-    let message = message_content(message, plaintext_message)?;
     let ToolInvocation {
         session,
         turn,
         call_id,
         ..
     } = invocation;
+    reject_unsupported_encrypted_message(turn.as_ref(), message.as_deref())?;
+    let message = message_content(message, plaintext_message)?;
     let receiver_thread_id = resolve_agent_target(&session, &turn, &target).await?;
     let receiver_agent = session
         .services

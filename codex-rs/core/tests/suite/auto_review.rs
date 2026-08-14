@@ -273,5 +273,6 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     }
 }

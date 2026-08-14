@@ -3,12 +3,15 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
+use codex_config::Constrained;
 use codex_core::ForkSnapshot;
 use codex_core::StartThreadOptions;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
@@ -19,6 +22,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Map;
 use serde_json::Value;
@@ -74,6 +78,39 @@ fn native_parallel_tools() -> String {
         native_event("message_stop", json!({"type":"message_stop"})),
     ]
     .concat()
+}
+
+fn native_tool_call(id: &str, name: &str, arguments: Value) -> String {
+    [
+        native_start(id),
+        native_event(
+            "content_block_start",
+            json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":id,"name":name,"input":{}}}),
+        ),
+        native_event(
+            "content_block_delta",
+            json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":arguments.to_string()}}),
+        ),
+        native_event(
+            "content_block_stop",
+            json!({"type":"content_block_stop","index":0}),
+        ),
+        native_event(
+            "message_delta",
+            json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}),
+        ),
+        native_event("message_stop", json!({"type":"message_stop"})),
+    ]
+    .concat()
+}
+
+fn native_request_tool_names(body: &Value) -> Vec<&str> {
+    body["tools"]
+        .as_array()
+        .expect("Claude tools")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect()
 }
 
 fn native_response(body: String) -> ResponseTemplate {
@@ -575,6 +612,103 @@ fn normalize_responses_body(value: Value, home_path: &str) -> Value {
         Value::String(value) => Value::String(value.replace(home_path, "<codex_home>")),
         value => value,
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_claude_searches_loads_and_dispatches_flattened_mcp_tool() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    mount_native(
+        &server,
+        vec![
+            native_response(native_tool_call(
+                "search-call",
+                "tool_search",
+                json!({"query":"echo message and environment data","limit":20}),
+            )),
+            native_response(native_tool_call(
+                "echo-call",
+                "mcp__rmcp__echo",
+                json!({"message":"ping"}),
+            )),
+            native_response(native_text("done", "done", "end_turn")),
+        ],
+    )
+    .await;
+    let command = super::rmcp_client::remote_aware_stdio_server_bin()?;
+    let test = native_builder(&server)
+        .with_config(move |config| {
+            super::rmcp_client::configure_stdio_mcp(config, "rmcp", command);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
+
+    submit(&test.codex, "find and call the echo tool").await?;
+
+    let requests = server.received_requests().await.expect("native requests");
+    let bodies = requests
+        .iter()
+        .map(request_body)
+        .collect::<Result<Vec<_>>>()?;
+    assert!(native_request_tool_names(&bodies[0]).contains(&"tool_search"));
+    assert!(!native_request_tool_names(&bodies[0]).contains(&"mcp__rmcp__echo"));
+    assert!(native_request_tool_names(&bodies[1]).contains(&"mcp__rmcp__echo"));
+    assert!(bodies[1].to_string().contains("\"tools\""));
+    assert!(bodies[2].to_string().contains("ECHOING: ping"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_claude_executes_function_form_apply_patch() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let patch = "*** Begin Patch\n*** Add File: native-claude.txt\n+patched\n*** End Patch";
+    mount_native(
+        &server,
+        vec![
+            native_response(native_tool_call(
+                "patch-call",
+                "apply_patch",
+                json!({"patch":patch}),
+            )),
+            native_response(native_text("done", "done", "end_turn")),
+        ],
+    )
+    .await;
+    let workspace = TempDir::new_in(std::env::current_dir()?)?;
+    let cwd = codex_utils_absolute_path::AbsolutePathBuf::try_from(workspace.path().to_path_buf())?;
+    let test = native_builder(&server)
+        .with_config(move |config| {
+            config.cwd = cwd;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("test config should allow disabled permissions");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    let events = submit(&test.codex, "apply the patch").await?;
+    let requests = server.received_requests().await.expect("native requests");
+    let tool_result_request = request_body(&requests[1])?;
+    let patched_path = workspace.path().join("native-claude.txt");
+    assert!(
+        patched_path.exists(),
+        "apply_patch did not create {patched_path:?}; events: {events:#?}; follow-up request: {tool_result_request:#}"
+    );
+
+    assert_eq!(std::fs::read_to_string(patched_path)?, "patched\n");
+    let first = request_body(&requests[0])?;
+    let apply_patch = first["tools"]
+        .as_array()
+        .expect("Claude tools")
+        .iter()
+        .find(|tool| tool["name"] == "apply_patch")
+        .expect("apply_patch function");
+    assert_eq!(apply_patch["input_schema"]["required"], json!(["patch"]));
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

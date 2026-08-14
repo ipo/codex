@@ -28,12 +28,12 @@ use crate::tool::WebSearchTool;
 #[derive(Clone)]
 struct WebSearchExtension {
     auth_manager: Arc<AuthManager>,
+    auxiliary_provider: ModelProviderInfo,
 }
 
 #[derive(Clone)]
 struct WebSearchExtensionConfig {
     available: bool,
-    provider: ModelProviderInfo,
     settings: SearchSettings,
 }
 
@@ -42,11 +42,7 @@ impl From<&Config> for WebSearchExtensionConfig {
         let web_search_mode = config.web_search_mode.value();
         Self {
             // Core selects this executor per turn using the feature flag or model metadata.
-            available: (config.model_provider.is_openai()
-                || config.model_provider.uses_openai_actor_authorization()
-                || config.model_provider.supports_standalone_web_search)
-                && web_search_mode != WebSearchMode::Disabled,
-            provider: config.model_provider.clone(),
+            available: web_search_mode != WebSearchMode::Disabled,
             settings: search_settings(config, web_search_mode),
         }
     }
@@ -128,11 +124,14 @@ impl ToolContributor for WebSearchExtension {
         if !config.available {
             return Vec::new();
         }
+        if !self.auth_manager.current_auth_supports_openai_apis() {
+            return Vec::new();
+        }
 
         vec![Arc::new(WebSearchTool {
             session_id: session_store.level_id().to_string(),
             provider: create_model_provider(
-                config.provider.clone(),
+                self.auxiliary_provider.clone(),
                 Some(self.auth_manager.clone()),
             ),
             settings: config.settings.clone(),
@@ -144,7 +143,36 @@ impl ToolContributor for WebSearchExtension {
 }
 
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>, auth_manager: Arc<AuthManager>) {
-    let extension = Arc::new(WebSearchExtension { auth_manager });
+    install_with_auxiliary_provider(
+        registry,
+        auth_manager,
+        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+    );
+}
+
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn install_with_openai_base_url(
+    registry: &mut ExtensionRegistryBuilder<Config>,
+    auth_manager: Arc<AuthManager>,
+    base_url: String,
+) {
+    install_with_auxiliary_provider(
+        registry,
+        auth_manager,
+        ModelProviderInfo::create_openai_provider(Some(base_url)),
+    );
+}
+
+fn install_with_auxiliary_provider(
+    registry: &mut ExtensionRegistryBuilder<Config>,
+    auth_manager: Arc<AuthManager>,
+    auxiliary_provider: ModelProviderInfo,
+) {
+    let extension = Arc::new(WebSearchExtension {
+        auth_manager,
+        auxiliary_provider,
+    });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.tool_contributor(extension);
@@ -156,7 +184,7 @@ mod tests {
     use codex_extension_api::ExtensionRegistryBuilder;
     use codex_extension_api::ToolName;
     use codex_login::CodexAuth;
-    use codex_model_provider_info::ModelProviderInfo;
+    use codex_login::auth::BedrockApiKeyAuth;
     use pretty_assertions::assert_eq;
 
     use super::AuthManager;
@@ -201,7 +229,6 @@ mod tests {
         let thread_store = ExtensionData::new("11111111-1111-4111-8111-111111111111");
         thread_store.insert(WebSearchExtensionConfig {
             available: true,
-            provider: ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             settings: Default::default(),
         });
 
@@ -216,5 +243,32 @@ mod tests {
             tool_names,
             vec![(ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME), true)]
         );
+    }
+
+    #[test]
+    fn installed_extension_omits_web_run_without_first_party_auth() {
+        let mut builder = ExtensionRegistryBuilder::<Config>::new();
+        install(
+            &mut builder,
+            AuthManager::from_auth_for_testing(CodexAuth::BedrockApiKey(BedrockApiKeyAuth {
+                api_key: "bedrock-key".to_string(),
+                region: "us-east-1".to_string(),
+            })),
+        );
+        let registry = builder.build();
+        let session_store = ExtensionData::new("session");
+        let thread_store = ExtensionData::new("11111111-1111-4111-8111-111111111111");
+        thread_store.insert(WebSearchExtensionConfig {
+            available: true,
+            settings: Default::default(),
+        });
+
+        let tools = registry
+            .tool_contributors()
+            .iter()
+            .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
+            .collect::<Vec<_>>();
+
+        assert!(tools.is_empty());
     }
 }

@@ -1,4 +1,5 @@
 use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
 use codex_tools::TOOL_SEARCH_TOOL_NAME;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
@@ -74,6 +75,29 @@ pub(crate) fn create_tool_search_tool(
             Some(false.into()),
         ),
     }
+}
+
+pub(crate) fn create_native_tool_search_tool(
+    searchable_sources: &[ToolSearchSourceInfo],
+    default_limit: usize,
+    source_listing: ToolSearchSourceListing,
+) -> ToolSpec {
+    let ToolSpec::ToolSearch {
+        description,
+        parameters,
+        ..
+    } = create_tool_search_tool(searchable_sources, default_limit, source_listing)
+    else {
+        unreachable!("tool search builder must return a tool_search spec");
+    };
+    ToolSpec::Function(ResponsesApiTool {
+        name: TOOL_SEARCH_TOOL_NAME.to_string(),
+        description,
+        strict: false,
+        defer_loading: None,
+        parameters,
+        local_result_schema: None,
+    })
 }
 
 #[cfg(test)]

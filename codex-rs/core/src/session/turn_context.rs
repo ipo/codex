@@ -243,6 +243,14 @@ impl TurnContext {
     }
 
     pub(crate) fn apps_enabled(&self) -> bool {
+        if self
+            .model_info
+            .disables_tool(codex_protocol::openai_models::ModelToolCapability::CodexApps)
+            || self.model_info.wire_api(self.provider.info().wire_api)
+                != codex_protocol::model_inference::WireApi::Responses
+        {
+            return false;
+        }
         let uses_codex_backend = self
             .auth_manager
             .as_deref()

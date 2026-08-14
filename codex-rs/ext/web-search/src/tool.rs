@@ -41,6 +41,7 @@ pub(crate) const WEB_NAMESPACE: &str = "web";
 pub(crate) const RUN_TOOL_NAME: &str = "run";
 const WEB_RUN_DESCRIPTION: &str = include_str!("../web_run_description.md");
 const RESULTS_PAYLOAD_BYTES_METRIC: &str = "codex.web_search.results.payload_bytes";
+const STANDALONE_SEARCH_MODEL: &str = "gpt-5.6-sol";
 
 pub(crate) struct WebSearchTool {
     pub(crate) session_id: String,
@@ -109,7 +110,7 @@ impl WebSearchTool {
         );
         let request = SearchRequest {
             id: self.session_id.clone(),
-            model: call.model.clone(),
+            model: STANDALONE_SEARCH_MODEL.to_string(),
             reasoning: None,
             input: recent_input(call.conversation_history.items()),
             commands: Some(commands),
@@ -263,9 +264,30 @@ fn extension_turn_item(item: WebSearchItem, legacy_event: EventMsg) -> Extension
 #[cfg(test)]
 mod tests {
     use codex_api::SearchCommands;
+    use codex_extension_api::ConversationHistory;
+    use codex_extension_api::NoopTurnItemEmitter;
+    use codex_extension_api::ToolCall;
+    use codex_extension_api::ToolExecutor;
+    use codex_extension_api::ToolName;
+    use codex_extension_api::ToolPayload;
     use codex_extension_items::web_search::WebSearchAction;
+    use codex_login::AuthManager;
+    use codex_login::CodexAuth;
+    use codex_model_provider::create_model_provider;
+    use codex_model_provider_info::ModelProviderInfo;
+    use codex_utils_output_truncation::TruncationPolicy;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::sync::Arc;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
+    use super::STANDALONE_SEARCH_MODEL;
+    use super::WebSearchTool;
     use super::command_action;
     use super::search_request_headers;
     use codex_core::X_CODEX_TURN_METADATA_HEADER;
@@ -328,5 +350,73 @@ mod tests {
                 serde_json::from_str(arguments).expect("valid search command arguments");
             assert_eq!(command_action(&commands), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn native_model_search_uses_distinct_authenticated_openai_endpoint() {
+        let inference = MockServer::start().await;
+        let auxiliary = MockServer::start().await;
+        assert_ne!(inference.uri(), auxiliary.uri());
+        Mock::given(method("POST"))
+            .and(path("/alpha/search"))
+            .and(header("authorization", "Bearer sk-auxiliary"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "encrypted_output": "ignored-ciphertext",
+                "output": "plaintext search result",
+                "results": [],
+            })))
+            .expect(1)
+            .mount(&auxiliary)
+            .await;
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("sk-auxiliary"));
+        let tool = WebSearchTool {
+            session_id: "search-session".to_string(),
+            provider: create_model_provider(
+                ModelProviderInfo::create_openai_provider(Some(auxiliary.uri())),
+                Some(auth_manager),
+            ),
+            settings: Default::default(),
+            originator: None,
+        };
+        let payload = ToolPayload::Function {
+            arguments: json!({"search_query":[{"q":"provider independent tools"}]}).to_string(),
+        };
+
+        let output = tool
+            .handle(ToolCall {
+                turn_id: "turn-1".to_string(),
+                call_id: "search-call".to_string(),
+                tool_name: ToolName::namespaced("web", "run"),
+                model: "native-kimi-slug".to_string(),
+                codex_turn_metadata: None,
+                truncation_policy: TruncationPolicy::Bytes(4096),
+                conversation_history: ConversationHistory::default(),
+                turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+                environments: Vec::new(),
+                payload: payload.clone(),
+            })
+            .await
+            .expect("search should succeed");
+
+        let requests = auxiliary
+            .received_requests()
+            .await
+            .expect("auxiliary requests should be recorded");
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("search request body should be JSON");
+        assert_eq!(body["model"], STANDALONE_SEARCH_MODEL);
+        assert_ne!(body["model"], "native-kimi-slug");
+        assert!(
+            inference
+                .received_requests()
+                .await
+                .expect("inference requests should be recorded")
+                .is_empty()
+        );
+        let response = serde_json::to_string(&output.to_response_item("search-call", &payload))
+            .expect("tool output should serialize");
+        assert!(response.contains("plaintext search result"));
+        assert!(!response.contains("ignored-ciphertext"));
     }
 }

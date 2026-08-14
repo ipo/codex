@@ -17,6 +17,7 @@ use crate::tools::handlers::GetContextRemainingHandler;
 use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
+use crate::tools::handlers::NativeToolSearchState;
 use crate::tools::handlers::NewContextWindowHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
@@ -27,6 +28,7 @@ use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::SleepHandler;
 use crate::tools::handlers::TestSyncHandler;
+use crate::tools::handlers::ToolSearchHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WaitForEnvironmentHandler;
@@ -58,6 +60,10 @@ use crate::tools::registry::ToolRegistry;
 use crate::tools::registry::override_tool_exposure;
 use crate::tools::router::ToolRouter;
 use crate::tools::router::ToolRouterParams;
+use crate::tools::wire_adaptation::adapt_spec_for_wire;
+use crate::tools::wire_adaptation::namespace_tool_spec_mode;
+use crate::tools::wire_adaptation::native_wire;
+use crate::tools::wire_adaptation::validate_model_visible_function_names;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_protocol::account::PlanType;
@@ -65,7 +71,7 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
-use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ModelToolCapability;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_tools::ResponsesApiNamespace;
@@ -83,6 +89,7 @@ use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
 use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
 use codex_tools::request_user_input_available_modes;
+use codex_tools::serialize_tool_specs;
 use codex_tools::shell_command_backend_for_features;
 use codex_tools::shell_type_for_model_and_features;
 use std::collections::BTreeMap;
@@ -101,6 +108,7 @@ type PlannedRuntime = Arc<dyn CoreToolRuntime>;
 struct PlannedTools {
     runtimes: Vec<PlannedRuntime>,
     hosted_specs: Vec<ToolSpec>,
+    native_tool_search_state: Option<Arc<NativeToolSearchState>>,
 }
 
 impl PlannedTools {
@@ -162,14 +170,18 @@ pub(crate) fn build_tool_router(
     params: ToolRouterParams<'_>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
 ) -> ToolRouter {
-    let (model_visible_specs, registry) = build_tool_specs_and_registry(
+    let (model_visible_specs, registry, native_tool_search_state) = build_tool_specs_and_registry(
         turn_context,
         environments,
         mcp,
         params,
         tool_search_handler_cache,
     );
-    ToolRouter::from_parts(registry, model_visible_specs)
+    ToolRouter::from_parts_with_native_tool_search_state(
+        registry,
+        model_visible_specs,
+        native_tool_search_state,
+    )
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -179,7 +191,11 @@ fn build_tool_specs_and_registry(
     mcp: &codex_mcp::McpBinding,
     params: ToolRouterParams<'_>,
     tool_search_handler_cache: &ToolSearchHandlerCache,
-) -> (Vec<ToolSpec>, ToolRegistry) {
+) -> (
+    Vec<ToolSpec>,
+    ToolRegistry,
+    Option<Arc<NativeToolSearchState>>,
+) {
     let ToolRouterParams {
         tool_runtimes,
         tool_suggest_candidates,
@@ -243,10 +259,15 @@ fn apply_direct_model_only_namespace_overrides(
 fn build_model_visible_specs_and_registry(
     turn_context: &TurnContext,
     planned_tools: PlannedTools,
-) -> (Vec<ToolSpec>, ToolRegistry) {
+) -> (
+    Vec<ToolSpec>,
+    ToolRegistry,
+    Option<Arc<NativeToolSearchState>>,
+) {
     let PlannedTools {
         runtimes,
         hosted_specs,
+        native_tool_search_state,
     } = planned_tools;
     let mut specs = Vec::new();
     let mut seen_tool_names = HashSet::new();
@@ -269,15 +290,15 @@ fn build_model_visible_specs_and_registry(
     }
     specs.extend(hosted_specs);
 
-    let registry = ToolRegistry::from_tools(runtimes);
-    let model_visible_specs = merge_into_namespaces(specs)
-        .into_iter()
-        .filter(|spec| {
-            namespace_tools_enabled(turn_context) || !matches!(spec, ToolSpec::Namespace(_))
-        })
-        .collect();
+    let namespace_tool_spec_mode = namespace_tool_spec_mode(turn_context);
+    let registry =
+        ToolRegistry::from_tools_with_namespace_tool_spec_mode(runtimes, namespace_tool_spec_mode);
+    let model_visible_specs = validate_model_visible_function_names(serialize_tool_specs(
+        merge_into_namespaces(specs),
+        namespace_tool_spec_mode,
+    ));
 
-    (model_visible_specs, registry)
+    (model_visible_specs, registry, native_tool_search_state)
 }
 
 fn spec_for_model_request(
@@ -292,9 +313,12 @@ fn spec_for_model_request(
         && !is_excluded_from_code_mode(turn_context, tool_name)
         && codex_code_mode::is_code_mode_nested_tool(spec.name())
     {
-        codex_tools::augment_tool_spec_for_code_mode(spec)
+        adapt_spec_for_wire(
+            turn_context,
+            codex_tools::augment_tool_spec_for_code_mode(spec),
+        )
     } else {
-        spec
+        adapt_spec_for_wire(turn_context, spec)
     }
 }
 
@@ -306,6 +330,9 @@ fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
         || !turn_context
             .model_info
             .supports_responses_capabilities(turn_context.provider.info().wire_api)
+        || turn_context
+            .model_info
+            .disables_tool(ModelToolCapability::WebSearch)
     {
         return Vec::new();
     }
@@ -335,17 +362,21 @@ fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
 }
 
 pub(crate) fn search_tool_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.model_info.supports_search_tool && namespace_tools_enabled(turn_context)
+    !turn_context
+        .model_info
+        .disables_tool(ModelToolCapability::ToolSearch)
+        && (turn_context.model_info.supports_search_tool || native_wire(turn_context))
 }
 
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
     let features = turn_context.config.features.get();
-    features.enabled(Feature::ToolSuggest)
+    turn_context.apps_enabled()
+        && features.enabled(Feature::ToolSuggest)
         && features.enabled(Feature::Apps)
         && features.enabled(Feature::Plugins)
 }
 
-fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
+pub(super) fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.provider.capabilities().namespace_tools
         && turn_context
             .model_info
@@ -368,9 +399,9 @@ fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn image_generation_available(turn_context: &TurnContext) -> bool {
-    if !turn_context
+    if turn_context
         .model_info
-        .supports_responses_capabilities(turn_context.provider.info().wire_api)
+        .disables_tool(ModelToolCapability::ImageGeneration)
     {
         return false;
     }
@@ -394,26 +425,10 @@ fn image_generation_available(turn_context: &TurnContext) -> bool {
         return false;
     }
 
-    let capabilities = turn_context.provider.capabilities();
-    if !capabilities.image_generation || !capabilities.namespace_tools {
-        return false;
-    }
-
-    if !turn_context
-        .model_info
-        .input_modalities
-        .contains(&InputModality::Image)
-    {
-        return false;
-    }
-
-    let provider = turn_context.provider.info();
-    provider.uses_openai_actor_authorization()
-        || (provider.requires_openai_auth
-            && turn_context
-                .auth_manager
-                .as_deref()
-                .is_some_and(AuthManager::current_auth_uses_codex_backend))
+    turn_context
+        .auth_manager
+        .as_deref()
+        .is_some_and(AuthManager::current_auth_supports_openai_apis)
 }
 
 fn wait_agent_timeout_options(turn_context: &TurnContext) -> WaitAgentTimeoutOptions {
@@ -662,9 +677,11 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
 }
 
 fn standalone_web_search_enabled(turn_context: &TurnContext) -> bool {
-    namespace_tools_enabled(turn_context)
-        && turn_context.provider.capabilities().web_search
-        && (turn_context.model_info.use_responses_lite
+    !turn_context
+        .model_info
+        .disables_tool(ModelToolCapability::WebSearch)
+        && (native_wire(turn_context)
+            || turn_context.model_info.use_responses_lite
             || turn_context
                 .config
                 .features
@@ -809,10 +826,18 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         ));
     }
 
-    if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()
+    if environment_mode.has_environment()
+        && !turn_context
+            .model_info
+            .disables_tool(ModelToolCapability::ApplyPatch)
+        && (native_wire(turn_context) || turn_context.model_info.apply_patch_tool_type.is_some())
     {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-        planned_tools.add(ApplyPatchHandler::new(include_environment_id));
+        if native_wire(turn_context) {
+            planned_tools.add(ApplyPatchHandler::function(include_environment_id));
+        } else {
+            planned_tools.add(ApplyPatchHandler::freeform(include_environment_id));
+        }
     }
 
     if turn_context
@@ -845,9 +870,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
             } else {
                 ToolExposure::Direct
             };
-            let tool_namespace = namespace_tools_enabled(turn_context)
-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
-                .flatten();
+            let tool_namespace = turn_context.config.multi_agent_v2.tool_namespace.as_deref();
             let agent_type_description =
                 agent_type_description(turn_context, context.default_agent_type_description);
             let hide_spawn_agent_metadata =
@@ -1001,10 +1024,20 @@ fn append_tool_search_executor(
     } else {
         ToolSearchSourceListing::Include
     };
-    let handler: PlannedRuntime = context
-        .tool_search_handler_cache
-        .get_or_build(search_infos, source_listing);
-    planned_tools.add_arc(handler);
+    let index = context.tool_search_handler_cache.get_or_build(search_infos);
+    let native_tool_search_state = native_wire(turn_context).then(|| {
+        context
+            .tool_search_handler_cache
+            .native_loaded_tools_for_turn(&turn_context.sub_id)
+    });
+    let handler = ToolSearchHandler::new(
+        index,
+        source_listing,
+        namespace_tool_spec_mode(turn_context),
+        native_tool_search_state.clone(),
+    );
+    planned_tools.native_tool_search_state = native_tool_search_state;
+    planned_tools.add(handler);
 }
 
 fn prepend_code_mode_executors(

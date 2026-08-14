@@ -47,6 +47,7 @@ fn model_with_shell_type(shell_type: ConfigShellToolType) -> ModelInfo {
         requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
         input_modalities: codex_protocol::openai_models::default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,

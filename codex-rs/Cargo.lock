@@ -3340,6 +3340,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "wiremock",
 ]
 
 [[package]]
@@ -4592,11 +4593,14 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-tools",
+ "codex-utils-output-truncation",
  "http 1.4.0",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde_json",
+ "tokio",
  "url",
+ "wiremock",
 ]
 
 [[package]]

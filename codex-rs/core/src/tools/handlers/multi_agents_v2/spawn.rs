@@ -55,6 +55,7 @@ async fn handle_spawn_agent(
         .map(str::trim)
         .filter(|role| !role.is_empty());
 
+    reject_unsupported_encrypted_message(turn.as_ref(), args.message.as_deref())?;
     let message = message_content(args.message, args.plaintext_message)?;
     let environments = resolve_spawn_agent_environments(turn.as_ref(), args.cwd.as_deref()).await?;
     let session_source = turn.session_source.clone();

@@ -321,12 +321,12 @@ async fn responses_lite_exposes_standalone_web_search_for_opted_in_custom_provid
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_lite_does_not_expose_standalone_web_search_for_custom_provider_by_default()
+async fn responses_lite_exposes_auxiliary_web_search_without_inference_provider_capability()
 -> Result<()> {
     assert_responses_lite_custom_provider_web_search(
         WebSearchMode::Live,
         /*supports_standalone_web_search*/ false,
-        /*expect_web_run*/ false,
+        /*expect_web_run*/ true,
     )
     .await
 }

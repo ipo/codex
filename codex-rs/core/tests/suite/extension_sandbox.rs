@@ -7,7 +7,7 @@ use codex_core::config::Constrained;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
-use codex_image_generation_extension::install as install_image_generation_extension;
+use codex_image_generation_extension::install_with_openai_base_url as install_image_generation_extension;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::WebSearchMode;
@@ -51,11 +51,17 @@ const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA
 
 fn image_generation_extensions(
     auth: &CodexAuth,
+    auxiliary_base_url: String,
     resolve_save_root: impl Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync + 'static,
 ) -> Arc<ExtensionRegistry<Config>> {
     let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
     let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
-    install_image_generation_extension(&mut extension_builder, auth_manager, resolve_save_root);
+    install_image_generation_extension(
+        &mut extension_builder,
+        auth_manager,
+        auxiliary_base_url,
+        resolve_save_root,
+    );
     Arc::new(extension_builder.build())
 }
 
@@ -65,7 +71,9 @@ async fn extension_tool_receives_turn_environment_sandbox() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let extensions = image_generation_extensions(&auth, |config| Some(config.codex_home.clone()));
+    let extensions = image_generation_extensions(&auth, format!("{}/v1", server.uri()), |config| {
+        Some(config.codex_home.clone())
+    });
     let mut builder = test_codex()
         .with_auth(auth)
         .with_extensions(extensions)
@@ -160,7 +168,8 @@ async fn extension_tool_uses_granted_turn_permissions_without_local_persistence(
         .await;
 
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let extensions = image_generation_extensions(&auth, |_config| None);
+    let extensions =
+        image_generation_extensions(&auth, format!("{}/v1", server.uri()), |_config| None);
     let base_permission_profile = PermissionProfile::workspace_write_with(
         &[],
         NetworkSandboxPolicy::Restricted,

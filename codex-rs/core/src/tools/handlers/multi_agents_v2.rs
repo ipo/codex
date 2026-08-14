@@ -94,3 +94,18 @@ fn validate_tool_message_family(
     }
     Ok(())
 }
+
+fn reject_unsupported_encrypted_message(
+    turn: &crate::session::turn_context::TurnContext,
+    message: Option<&str>,
+) -> Result<(), FunctionCallError> {
+    if message.is_some()
+        && !crate::tools::wire_adaptation::wire_supports_encrypted_tool_content(turn)
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "Encrypted collaboration arguments are unavailable on this inference wire; retry with plaintext_message."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}

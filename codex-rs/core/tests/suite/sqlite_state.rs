@@ -23,7 +23,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
-use codex_web_search_extension::install as install_web_search_extension;
+use codex_web_search_extension::install_with_openai_base_url as install_web_search_extension;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -586,7 +586,11 @@ async fn standalone_web_search_marks_thread_memory_mode_polluted_when_configured
     let auth = CodexAuth::from_api_key("dummy");
     let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
     let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
-    install_web_search_extension(&mut extension_builder, auth_manager);
+    install_web_search_extension(
+        &mut extension_builder,
+        auth_manager,
+        format!("{}/v1", server.uri()),
+    );
     let mut builder = test_codex()
         .with_auth(auth)
         .with_extensions(Arc::new(extension_builder.build()))

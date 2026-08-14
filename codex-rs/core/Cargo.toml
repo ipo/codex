@@ -141,13 +141,13 @@ codex-shell-escalation = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-exec-server-test-support = { workspace = true }
-codex-image-generation-extension = { workspace = true }
+codex-image-generation-extension = { workspace = true, features = ["test-support"] }
 codex-home = { workspace = true }
 codex-otel = { workspace = true }
 codex-skills-extension = { workspace = true }
 codex-test-binary-support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
-codex-web-search-extension = { workspace = true }
+codex-web-search-extension = { workspace = true, features = ["test-support"] }
 core_test_support = { workspace = true }
 ctor = { workspace = true }
 insta = { workspace = true }

@@ -9,6 +9,9 @@ name = "codex_web_search_extension"
 path = "src/lib.rs"
 doctest = false
 
+[features]
+test-support = []
+
 [lints]
 workspace = true
 
@@ -29,4 +32,7 @@ serde_json = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+codex-utils-output-truncation = { workspace = true }
 pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = { workspace = true }

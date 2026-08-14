@@ -1393,6 +1393,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     };
     mount_models_once(
         &server,

@@ -153,6 +153,15 @@ impl McpHandler {
         )
         .await;
 
+        if result.result.contains_encrypted_content()
+            && !crate::tools::wire_adaptation::wire_supports_encrypted_tool_content(turn.as_ref())
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "This MCP tool returned encrypted content that cannot be represented on the active inference wire."
+                    .to_string(),
+            ));
+        }
+
         Ok(boxed_tool_output(McpToolOutput {
             result: result.result,
             tool_input: result.tool_input,

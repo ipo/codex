@@ -510,6 +510,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     };
 
     let models_mock = mount_models_once(
@@ -768,6 +769,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     };
     mount_models_once(
         &server,
@@ -1299,5 +1301,6 @@ fn test_remote_model_with_policy(
         requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     }
 }

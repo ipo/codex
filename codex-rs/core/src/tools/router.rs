@@ -6,6 +6,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::NativeToolSearchState;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::registry::AnyToolResult;
 use crate::tools::registry::CoreToolRuntime;
@@ -38,6 +39,7 @@ pub struct ToolCall {
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Vec<ToolSpec>,
+    native_tool_search_state: Option<Arc<NativeToolSearchState>>,
 }
 
 pub(crate) struct ToolRouterParams<'a> {
@@ -77,15 +79,33 @@ impl ToolRouter {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn from_parts(registry: ToolRegistry, model_visible_specs: Vec<ToolSpec>) -> Self {
         Self {
             registry,
             model_visible_specs,
+            native_tool_search_state: None,
+        }
+    }
+
+    pub(crate) fn from_parts_with_native_tool_search_state(
+        registry: ToolRegistry,
+        model_visible_specs: Vec<ToolSpec>,
+        native_tool_search_state: Option<Arc<NativeToolSearchState>>,
+    ) -> Self {
+        Self {
+            registry,
+            model_visible_specs,
+            native_tool_search_state,
         }
     }
 
     pub(crate) fn model_visible_specs(&self) -> Vec<ToolSpec> {
-        self.model_visible_specs.clone()
+        let mut specs = self.model_visible_specs.clone();
+        if let Some(state) = &self.native_tool_search_state {
+            specs.extend(state.loaded_tools());
+        }
+        specs
     }
 
     pub(crate) fn deferred_tool_namespaces(&self) -> BTreeMap<String, String> {

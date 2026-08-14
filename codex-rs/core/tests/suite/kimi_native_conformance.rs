@@ -3,23 +3,34 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
+use codex_config::Constrained;
 use codex_core::ForkSnapshot;
 use codex_core::StartThreadOptions;
+use codex_core::config::Config;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_features::Feature;
+use codex_image_generation_extension::install_with_openai_base_url as install_image_generation_extension;
+use codex_login::CodexAuth;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
+use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
+use codex_web_search_extension::install_with_openai_base_url as install_web_search_extension;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -30,6 +41,7 @@ use wiremock::Request;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::http::Method;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -71,6 +83,28 @@ fn parallel_tools() -> String {
         "data: [DONE]\n\n".to_string(),
     ]
     .concat()
+}
+
+fn function_tool_call(id: &str, call_id: &str, name: &str, arguments: Value) -> String {
+    terminal(
+        id,
+        json!({"tool_calls":[{
+            "index":0,
+            "id":call_id,
+            "type":"function",
+            "function":{"name":name,"arguments":arguments.to_string()}
+        }]}),
+        "tool_calls",
+    )
+}
+
+fn native_request_tool_names(body: &Value) -> Vec<&str> {
+    body["tools"]
+        .as_array()
+        .expect("Kimi tools")
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str())
+        .collect()
 }
 
 fn native_response(body: String) -> ResponseTemplate {
@@ -178,6 +212,214 @@ fn assert_no_private_leak(value: &str) {
     ] {
         assert!(!value.contains(private), "leaked {private}");
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_kimi_searches_loads_and_dispatches_flattened_mcp_tool() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    mount_native(
+        &server,
+        vec![
+            native_response(function_tool_call(
+                "search",
+                "search-call",
+                "tool_search",
+                json!({"query":"echo message and environment data","limit":20}),
+            )),
+            native_response(function_tool_call(
+                "echo",
+                "echo-call",
+                "mcp__rmcp__echo",
+                json!({"message":"ping"}),
+            )),
+            native_response(text_terminal("done", "done")),
+        ],
+    )
+    .await;
+    let command = super::rmcp_client::remote_aware_stdio_server_bin()?;
+    let test = native_builder(&server)
+        .with_config(move |config| {
+            super::rmcp_client::configure_stdio_mcp(config, "rmcp", command);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
+
+    submit(&test.codex, "find and call the echo tool").await?;
+
+    let requests = server.received_requests().await.expect("native requests");
+    let bodies = requests.iter().map(body).collect::<Result<Vec<_>>>()?;
+    assert!(native_request_tool_names(&bodies[0]).contains(&"tool_search"));
+    assert!(!native_request_tool_names(&bodies[0]).contains(&"mcp__rmcp__echo"));
+    assert!(native_request_tool_names(&bodies[1]).contains(&"mcp__rmcp__echo"));
+    assert!(bodies[2].to_string().contains("ECHOING: ping"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_kimi_executes_function_form_apply_patch() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let patch = "*** Begin Patch\n*** Add File: native-kimi.txt\n+patched\n*** End Patch";
+    mount_native(
+        &server,
+        vec![
+            native_response(function_tool_call(
+                "patch",
+                "patch-call",
+                "apply_patch",
+                json!({"patch":patch}),
+            )),
+            native_response(text_terminal("done", "done")),
+        ],
+    )
+    .await;
+    let workspace = TempDir::new_in(std::env::current_dir()?)?;
+    let cwd = codex_utils_absolute_path::AbsolutePathBuf::try_from(workspace.path().to_path_buf())?;
+    let test = native_builder(&server)
+        .with_config(move |config| {
+            config.cwd = cwd;
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::Never);
+            config
+                .permissions
+                .set_permission_profile(PermissionProfile::Disabled)
+                .expect("test config should allow disabled permissions");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    let events = submit(&test.codex, "apply the patch").await?;
+    let requests = server.received_requests().await.expect("native requests");
+    let tool_result_request = body(&requests[1])?;
+    let patched_path = workspace.path().join("native-kimi.txt");
+    assert!(
+        patched_path.exists(),
+        "apply_patch did not create {patched_path:?}; events: {events:#?}; follow-up request: {tool_result_request:#}"
+    );
+
+    assert_eq!(std::fs::read_to_string(patched_path)?, "patched\n");
+    let first = body(&requests[0])?;
+    let apply_patch = first["tools"]
+        .as_array()
+        .expect("Kimi tools")
+        .iter()
+        .find(|tool| tool["function"]["name"] == "apply_patch")
+        .expect("apply_patch function");
+    assert_eq!(
+        apply_patch["function"]["parameters"]["required"],
+        json!(["patch"])
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_kimi_uses_first_party_auxiliary_web_and_image_endpoints() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let inference = responses::start_mock_server().await;
+    let auxiliary = responses::start_mock_server().await;
+    assert_ne!(inference.uri(), auxiliary.uri());
+    mount_native(
+        &inference,
+        vec![
+            native_response(function_tool_call(
+                "web",
+                "web-call",
+                "web__run",
+                json!({"search_query":[{"q":"provider independent tools"}]}),
+            )),
+            native_response(function_tool_call(
+                "image",
+                "image-call",
+                "image_gen__imagegen",
+                json!({"prompt":"a tiny blue square"}),
+            )),
+            native_response(text_terminal("done", "done")),
+        ],
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path("/alpha/search"))
+        .and(header("authorization", "Bearer sk-auxiliary"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "encrypted_output": "ignored-ciphertext",
+            "output": "plaintext search result",
+            "results": [],
+        })))
+        .expect(1)
+        .mount(&auxiliary)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/images/generations"))
+        .and(header("authorization", "Bearer sk-auxiliary"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "created": 1,
+            "data": [{"b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="}],
+        })))
+        .expect(1)
+        .mount(&auxiliary)
+        .await;
+
+    let auth = CodexAuth::from_api_key("sk-auxiliary");
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    install_web_search_extension(&mut extensions, Arc::clone(&auth_manager), auxiliary.uri());
+    install_image_generation_extension(&mut extensions, auth_manager, auxiliary.uri(), |config| {
+        Some(config.cwd.clone())
+    });
+    let test = native_builder(&inference)
+        .with_auth(auth)
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(|config| {
+            config
+                .web_search_mode
+                .set(WebSearchMode::Live)
+                .expect("live web search should be configurable");
+            config
+                .features
+                .enable(Feature::ImageGeneration)
+                .expect("image generation feature should be configurable");
+        })
+        .build_with_auto_env(&inference)
+        .await?;
+
+    submit(&test.codex, "search the web, then generate an image").await?;
+
+    auxiliary.verify().await;
+    let auxiliary_requests = auxiliary
+        .received_requests()
+        .await
+        .expect("auxiliary requests should be recorded");
+    let search_request = auxiliary_requests
+        .iter()
+        .find(|request| request.url.path() == "/alpha/search")
+        .expect("standalone search request");
+    assert_eq!(body(search_request)?["model"], "gpt-5.6-sol");
+    let inference_requests = inference
+        .received_requests()
+        .await
+        .expect("native inference requests should be recorded");
+    assert!(
+        inference_requests
+            .iter()
+            .all(|request| request.url.path() == "/v1/kimi/chat/completions")
+    );
+    let first = body(&inference_requests[0])?;
+    let tool_names = native_request_tool_names(&first);
+    assert!(tool_names.contains(&"web__run"));
+    assert!(tool_names.contains(&"image_gen__imagegen"));
+    assert!(
+        body(&inference_requests[1])?
+            .to_string()
+            .contains("plaintext search result")
+    );
+    let image_result_request = body(&inference_requests[2])?.to_string();
+    assert!(
+        image_result_request.contains("Generated images are saved")
+            || image_result_request
+                .contains("image content omitted because you do not support image input")
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
