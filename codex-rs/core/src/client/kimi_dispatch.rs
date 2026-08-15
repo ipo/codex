@@ -209,7 +209,14 @@ fn partition_collaboration_mode_blocks(text: &str) -> (String, Vec<String>) {
                 .find(COLLABORATION_MODE_CLOSE_TAG)
                 .map(|offset| search_start + offset);
             match (next_open, next_close) {
-                (_, Some(close)) if next_open.is_none_or(|open| close < open) => {
+                (None, Some(close)) => {
+                    depth -= 1;
+                    search_start = close + COLLABORATION_MODE_CLOSE_TAG.len();
+                    if depth == 0 {
+                        break Some(search_start);
+                    }
+                }
+                (Some(open), Some(close)) if close < open => {
                     depth -= 1;
                     search_start = close + COLLABORATION_MODE_CLOSE_TAG.len();
                     if depth == 0 {
