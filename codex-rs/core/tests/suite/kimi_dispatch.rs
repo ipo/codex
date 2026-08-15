@@ -8,12 +8,17 @@ use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderWireRoute;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
+use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
@@ -305,6 +310,84 @@ async fn managed_profiles_post_complete_native_requests() -> Result<()> {
         "kimi_managed_profiles_complete_requests",
         serde_json::to_string_pretty(&json!({"profiles":profiles,"common":common}))?
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_kimi_preserves_collaboration_mode_transitions_as_reminders() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    mount_native(
+        &server,
+        vec![
+            text_terminal("default", "first assistant output", "stop"),
+            text_terminal("plan", "second assistant output", "stop"),
+            text_terminal("default", "third assistant output", "stop"),
+        ],
+    )
+    .await;
+    let test = native_builder(&server, "kimi/k3")
+        .with_config(|config| {
+            config.include_collaboration_mode_instructions = true;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    for (mode, instructions, prompt) in [
+        (
+            ModeKind::Default,
+            "default instructions",
+            "first user input",
+        ),
+        (ModeKind::Plan, "plan instructions", "second user input"),
+        (
+            ModeKind::Default,
+            "default instructions",
+            "current user input",
+        ),
+    ] {
+        submit_thread_settings(
+            &test.codex,
+            ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode,
+                    settings: Settings {
+                        model: "kimi/k3".to_string(),
+                        reasoning_effort: None,
+                        developer_instructions: Some(instructions.to_string()),
+                    },
+                }),
+                ..Default::default()
+            },
+        )
+        .await?;
+        submit(&test, prompt, None).await?;
+        completion(&test).await?;
+    }
+
+    let requests = server.received_requests().await.expect("requests");
+    assert_eq!(requests.len(), 3);
+    let body: Value = requests[2].body_json()?;
+    let messages = body["messages"].as_array().expect("Kimi messages");
+    let system = messages[0]["content"].as_str().expect("system content");
+    assert!(system.contains("Kimi system"));
+    assert!(system.contains("Host-generated <system-reminder>"));
+    assert!(!system.contains("<collaboration_mode>default instructions</collaboration_mode>"));
+    assert!(!system.contains("<collaboration_mode>plan instructions</collaboration_mode>"));
+    assert_eq!(
+        messages[1..],
+        [
+            json!({"role":"user","content":"first user input"}),
+            json!({"role":"user","content":"<system-reminder><collaboration_mode>default instructions</collaboration_mode></system-reminder>"}),
+            json!({"role":"assistant","content":"first assistant output"}),
+            json!({"role":"user","content":"second user input"}),
+            json!({"role":"user","content":"<system-reminder><collaboration_mode>plan instructions</collaboration_mode></system-reminder>"}),
+            json!({"role":"assistant","content":"second assistant output"}),
+            json!({"role":"user","content":"current user input"}),
+            json!({"role":"user","content":"<system-reminder><collaboration_mode>default instructions</collaboration_mode></system-reminder>"}),
+        ]
+    );
+
     Ok(())
 }
 
