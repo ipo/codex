@@ -199,12 +199,33 @@ fn partition_collaboration_mode_blocks(text: &str) -> (String, Vec<String>) {
     let mut collaboration_blocks = Vec::new();
 
     while let Some(start) = remaining.find(COLLABORATION_MODE_OPEN_TAG) {
-        let after_start = &remaining[start + COLLABORATION_MODE_OPEN_TAG.len()..];
-        let Some(end) = after_start.find(COLLABORATION_MODE_CLOSE_TAG) else {
+        let mut depth = 1;
+        let mut search_start = start + COLLABORATION_MODE_OPEN_TAG.len();
+        let end = loop {
+            let next_open = remaining[search_start..]
+                .find(COLLABORATION_MODE_OPEN_TAG)
+                .map(|offset| search_start + offset);
+            let next_close = remaining[search_start..]
+                .find(COLLABORATION_MODE_CLOSE_TAG)
+                .map(|offset| search_start + offset);
+            match (next_open, next_close) {
+                (_, Some(close)) if next_open.is_none_or(|open| close < open) => {
+                    depth -= 1;
+                    search_start = close + COLLABORATION_MODE_CLOSE_TAG.len();
+                    if depth == 0 {
+                        break Some(search_start);
+                    }
+                }
+                (Some(open), _) => {
+                    depth += 1;
+                    search_start = open + COLLABORATION_MODE_OPEN_TAG.len();
+                }
+                (None, None) => break None,
+            }
+        };
+        let Some(end) = end else {
             break;
         };
-        let end =
-            start + COLLABORATION_MODE_OPEN_TAG.len() + end + COLLABORATION_MODE_CLOSE_TAG.len();
         non_collaboration_text.push_str(&remaining[..start]);
         collaboration_blocks.push(remaining[start..end].to_string());
         remaining = &remaining[end..];

@@ -72,6 +72,44 @@ fn collaboration_mode_transitions_are_reminders_in_chronological_history() {
 }
 
 #[test]
+fn nested_default_collaboration_mode_is_preserved_as_a_reminder() {
+    let default = r#"<collaboration_mode>
+## Default collaboration mode
+
+When showing the active mode, use this literal example:
+<collaboration_mode>...</collaboration_mode>
+
+Continue following the Default collaboration instructions.
+</collaboration_mode>"#;
+    let prompt = prompt(vec![
+        message("developer", "developer guidance"),
+        message("user", "user input"),
+        message("developer", default),
+        message("assistant", "assistant output"),
+    ]);
+
+    let (system, history) = native_system_and_history(&prompt).expect("projection succeeds");
+
+    assert_eq!(
+        system,
+        Some(format!(
+            "base instructions\n\ndeveloper guidance\n\n{KIMI_COLLABORATION_REMINDER_INSTRUCTIONS}"
+        ))
+    );
+    assert_eq!(
+        history,
+        vec![
+            message("user", "user input"),
+            message(
+                "user",
+                &format!("<system-reminder>{default}</system-reminder>")
+            ),
+            message("assistant", "assistant output"),
+        ]
+    );
+}
+
+#[test]
 fn collaboration_transitions_collapse_without_separating_tool_results() {
     let prompt = prompt(vec![
         message("user", "user input"),
@@ -128,11 +166,14 @@ fn collaboration_transitions_collapse_without_separating_tool_results() {
 fn partitioning_retains_unrelated_developer_text() {
     assert_eq!(
         partition_collaboration_mode_blocks(
-            "before<collaboration_mode>plan</collaboration_mode>after",
+            "before<collaboration_mode>plan</collaboration_mode>between<collaboration_mode>default</collaboration_mode>after",
         ),
         (
-            "beforeafter".to_string(),
-            vec!["<collaboration_mode>plan</collaboration_mode>".to_string()],
+            "beforebetweenafter".to_string(),
+            vec![
+                "<collaboration_mode>plan</collaboration_mode>".to_string(),
+                "<collaboration_mode>default</collaboration_mode>".to_string(),
+            ],
         )
     );
 }
