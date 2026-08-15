@@ -136,11 +136,9 @@ fn native_system_and_history(prompt: &Prompt) -> Result<(Option<String>, Vec<Res
     let mut pending_collaboration_reminder = None;
     let mut has_collaboration_mode = false;
     for (index, item) in prompt.input.iter().enumerate() {
-        let ResponseItem::Message { role, content, .. } = item else {
-            history.push(item.clone());
-            continue;
-        };
-        if matches!(role.as_str(), "developer" | "system") {
+        if let ResponseItem::Message { role, content, .. } = item
+            && matches!(role.as_str(), "developer" | "system")
+        {
             let mut text = String::new();
             for block in content {
                 match block {
@@ -167,20 +165,27 @@ fn native_system_and_history(prompt: &Prompt) -> Result<(Option<String>, Vec<Res
             continue;
         }
 
-        if matches!(
+        let is_assistant_boundary = matches!(
             item,
             ResponseItem::Message { role, .. } if role == "assistant"
-                | ResponseItem::Reasoning { .. }
-                | ResponseItem::FunctionCall { .. }
-        ) && let Some(collaboration_block) = pending_collaboration_reminder.take()
+        ) || matches!(
+            item,
+            ResponseItem::Reasoning { .. } | ResponseItem::FunctionCall { .. }
+        );
+        if is_assistant_boundary
+            && let Some(collaboration_block) = pending_collaboration_reminder.take()
         {
-            history.push(KimiCollaborationModeReminder::new(collaboration_block).into());
+            history.push(ContextualUserFragment::into(
+                KimiCollaborationModeReminder::new(collaboration_block),
+            ));
         }
 
         history.push(item.clone());
     }
     if let Some(collaboration_block) = pending_collaboration_reminder {
-        history.push(KimiCollaborationModeReminder::new(collaboration_block).into());
+        history.push(ContextualUserFragment::into(
+            KimiCollaborationModeReminder::new(collaboration_block),
+        ));
     }
     if has_collaboration_mode {
         system.push(KIMI_COLLABORATION_REMINDER_INSTRUCTIONS.to_string());
