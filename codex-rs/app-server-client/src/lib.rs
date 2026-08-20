@@ -129,11 +129,11 @@ fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
 
 /// Returns `true` for notifications that must survive backpressure.
 ///
-/// Transcript events (`AgentMessageDelta`, `PlanDelta`, reasoning deltas) and
-/// the authoritative `ItemCompleted` / `TurnCompleted` form the lossless tier
-/// of the event stream. Dropping any of these corrupts the visible assistant
-/// output or leaves surfaces waiting for a completion signal that already
-/// fired. Everything else (`CommandExecutionOutputDelta`, progress, etc.) is
+/// Transcript events (`AgentMessageDelta`, `PlanDelta`, reasoning deltas), MCP
+/// startup state, and the authoritative `ItemCompleted` / `TurnCompleted` form
+/// the lossless tier of the event stream. Dropping any of these corrupts visible
+/// state or leaves surfaces waiting for a completion signal that already fired.
+/// Everything else (`CommandExecutionOutputDelta`, progress, etc.) is
 /// best-effort and may be dropped with only cosmetic impact.
 ///
 /// Both the in-process and remote transports delegate to this function so the
@@ -143,6 +143,7 @@ pub(crate) fn server_notification_requires_delivery(notification: &ServerNotific
         notification,
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
+            | ServerNotification::McpServerStatusUpdated(_)
             | ServerNotification::ItemCompleted(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::AgentMessageDelta(_)
@@ -2156,6 +2157,19 @@ mod tests {
                     codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification {
                         import_id: "import".to_string(),
                         item_type_results: Vec::new(),
+                    },
+                )
+            )
+        ));
+        assert!(event_requires_delivery(
+            &InProcessServerEvent::ServerNotification(
+                codex_app_server_protocol::ServerNotification::McpServerStatusUpdated(
+                    codex_app_server_protocol::McpServerStatusUpdatedNotification {
+                        thread_id: Some("thread".to_string()),
+                        name: "docs".to_string(),
+                        status: codex_app_server_protocol::McpServerStartupState::Ready,
+                        error: None,
+                        failure_reason: None,
                     },
                 )
             )

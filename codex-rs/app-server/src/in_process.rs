@@ -109,6 +109,7 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
         notification,
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadSettingsUpdated(_)
+            | ServerNotification::McpServerStatusUpdated(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
     )
 }
@@ -770,6 +771,8 @@ mod tests {
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+    use codex_app_server_protocol::McpServerStartupState;
+    use codex_app_server_protocol::McpServerStatusUpdatedNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
@@ -994,6 +997,15 @@ mod tests {
                     item_type_results: Vec::new(),
                 },
             )
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some("thread-1".to_string()),
+                name: "docs".to_string(),
+                status: McpServerStartupState::Ready,
+                error: None,
+                failure_reason: None,
+            })
         ));
     }
 }
