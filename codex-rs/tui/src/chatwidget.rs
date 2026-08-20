@@ -626,8 +626,6 @@ pub(crate) struct ChatWidget {
     mcp_startup_expected_servers: Option<HashSet<String>>,
     /// After startup settles, ignore stale updates until enough notifications confirm a new round.
     mcp_startup_ignore_updates_until_next_start: bool,
-    /// A lag signal for the next round means terminal-only updates are enough to settle it.
-    mcp_startup_allow_terminal_only_next_round: bool,
     /// Buffers post-settle MCP startup updates until they cover a full fresh round.
     mcp_startup_pending_next_round: HashMap<String, McpStartupStatus>,
     /// Tracks whether the buffered next round has seen any `Starting` update yet.

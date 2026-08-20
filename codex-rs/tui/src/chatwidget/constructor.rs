@@ -174,7 +174,6 @@ impl ChatWidget {
             mcp_startup_status: None,
             mcp_startup_expected_servers: None,
             mcp_startup_ignore_updates_until_next_start: false,
-            mcp_startup_allow_terminal_only_next_round: false,
             mcp_startup_pending_next_round: HashMap::new(),
             mcp_startup_pending_next_round_saw_starting: false,
             connectors: ConnectorsState::default(),

@@ -4435,6 +4435,101 @@ async fn app_scoped_mcp_startup_notifications_do_not_render_in_active_thread() {
 }
 
 #[tokio::test]
+async fn app_server_lag_keeps_mcp_startup_visible_until_ready() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    let sentry_config = toml::from_str::<toml::Value>("command = 'true'")
+        .expect("test MCP config should parse")
+        .try_into()
+        .expect("test MCP config should deserialize");
+    app.config
+        .mcp_servers
+        .set(std::collections::HashMap::from([(
+            "sentry".to_string(),
+            sentry_config,
+        )]))
+        .expect("test MCP servers should accept any configuration");
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let thread_id = ThreadId::new();
+    app.primary_thread_id = Some(thread_id);
+    app.ensure_thread_channel(thread_id);
+    app.activate_thread_channel(thread_id).await;
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some(thread_id.to_string()),
+                name: "sentry".to_string(),
+                status: McpServerStartupState::Starting,
+                error: None,
+                failure_reason: None,
+            }),
+        ),
+    )
+    .await;
+    let event = app
+        .active_thread_rx
+        .as_mut()
+        .expect("active thread receiver")
+        .try_recv()
+        .expect("MCP startup update should be queued for the active thread");
+    app.handle_thread_event_now(event);
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::Lagged { skipped: 1 },
+    )
+    .await;
+
+    assert!(app.chat_widget.is_task_running_for_test());
+    let height = app.chat_widget.desired_height(/*width*/ 80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| app.chat_widget.render(f.area(), f.buffer_mut()))
+        .expect("draw chat widget");
+    assert_app_snapshot!(
+        "app_server_lag_keeps_mcp_startup_visible_until_ready",
+        terminal.backend().to_string()
+    );
+
+    app.handle_app_server_event(
+        &app_server,
+        codex_app_server_client::AppServerEvent::ServerNotification(
+            ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some(thread_id.to_string()),
+                name: "sentry".to_string(),
+                status: McpServerStartupState::Ready,
+                error: None,
+                failure_reason: None,
+            }),
+        ),
+    )
+    .await;
+    let event = app
+        .active_thread_rx
+        .as_mut()
+        .expect("active thread receiver")
+        .try_recv()
+        .expect("MCP ready update should be queued for the active thread");
+    app.handle_thread_event_now(event);
+
+    assert!(!app.chat_widget.is_task_running_for_test());
+    let warnings = std::iter::from_fn(|| app_event_rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                Some(lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+            }
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(!warnings.contains("MCP startup interrupted"));
+}
+
+#[tokio::test]
 async fn active_side_thread_renders_live_mcp_startup_notifications() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     while app_event_rx.try_recv().is_ok() {}

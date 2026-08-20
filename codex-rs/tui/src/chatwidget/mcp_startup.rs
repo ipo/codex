@@ -4,8 +4,6 @@
 //! module keeps the TUI's buffered startup round state coherent and translates
 //! those updates into status headers, warnings, and queued-input release points.
 
-use std::collections::BTreeSet;
-
 use codex_app_server_protocol::McpServerStartupState;
 use codex_app_server_protocol::McpServerStatusUpdatedNotification;
 
@@ -26,12 +24,10 @@ impl ChatWidget {
     /// Record one MCP startup update, promoting it into either the active startup
     /// round or a buffered "next" round.
     ///
-    /// This path has to deal with lossy app-server delivery. After
-    /// `finish_mcp_startup()` or `finish_mcp_startup_after_lag()`, we briefly
-    /// ignore incoming updates so stale events from the just-finished round do not
-    /// reopen startup. While that guard is active we buffer updates for a possible
-    /// next round, and only reactivate once the buffered set is coherent enough to
-    /// treat as a fresh startup round.
+    /// After `finish_mcp_startup()`, we briefly ignore incoming updates so stale
+    /// events from the just-finished round do not reopen startup. While that guard
+    /// is active we buffer updates for a possible next round, and only reactivate
+    /// once the buffered set is coherent enough to treat as a fresh startup round.
     fn update_mcp_startup_status(
         &mut self,
         server: String,
@@ -49,7 +45,6 @@ impl ChatWidget {
                 && !self.mcp_startup_pending_next_round_saw_starting
             {
                 self.mcp_startup_pending_next_round.clear();
-                self.mcp_startup_allow_terminal_only_next_round = false;
             }
             self.mcp_startup_pending_next_round_saw_starting |=
                 matches!(status, McpStartupStatus::Starting);
@@ -65,16 +60,13 @@ impl ChatWidget {
                 .mcp_startup_pending_next_round
                 .values()
                 .any(|state| matches!(state, McpStartupStatus::Starting));
-            if !(saw_full_round
-                && (saw_starting || self.mcp_startup_allow_terminal_only_next_round))
-            {
+            if !(saw_full_round && saw_starting) {
                 return;
             }
 
             // The buffered map now looks like a complete next round, so promote it
             // to the active round and resume normal completion tracking.
             self.mcp_startup_ignore_updates_until_next_start = false;
-            self.mcp_startup_allow_terminal_only_next_round = false;
             self.mcp_startup_pending_next_round_saw_starting = false;
             activated_pending_round = true;
             std::mem::take(&mut self.mcp_startup_pending_next_round)
@@ -106,8 +98,7 @@ impl ChatWidget {
         self.update_task_running_state();
 
         // App-server-backed startup completes when every expected server has
-        // reported a non-Starting status. Lag handling can force an earlier
-        // settle via `finish_mcp_startup_after_lag()`.
+        // reported a non-Starting status.
         if complete_when_settled
             && let Some(current) = &self.mcp_startup_status
             && let Some(expected_servers) = &self.mcp_startup_expected_servers
@@ -200,7 +191,6 @@ impl ChatWidget {
         let mcp_startup_owned_status = self.status_header_is_mcp_startup_owned();
         self.mcp_startup_status = None;
         self.mcp_startup_ignore_updates_until_next_start = true;
-        self.mcp_startup_allow_terminal_only_next_round = false;
         self.mcp_startup_pending_next_round.clear();
         self.mcp_startup_pending_next_round_saw_starting = false;
         self.update_task_running_state();
@@ -209,43 +199,6 @@ impl ChatWidget {
         }
         self.maybe_send_next_queued_input();
         self.request_redraw();
-    }
-
-    pub(crate) fn finish_mcp_startup_after_lag(&mut self) {
-        if self.mcp_startup_ignore_updates_until_next_start {
-            if self.mcp_startup_pending_next_round.is_empty() {
-                self.mcp_startup_pending_next_round_saw_starting = false;
-            }
-            self.mcp_startup_allow_terminal_only_next_round = true;
-        }
-
-        let Some(current) = &self.mcp_startup_status else {
-            return;
-        };
-
-        let mut failed = Vec::new();
-        let mut cancelled = Vec::new();
-
-        let mut server_names: BTreeSet<String> = current.keys().cloned().collect();
-        if let Some(expected_servers) = &self.mcp_startup_expected_servers {
-            server_names.extend(expected_servers.iter().cloned());
-        }
-
-        for name in server_names {
-            match current.get(&name) {
-                Some(McpStartupStatus::Ready) => {}
-                Some(McpStartupStatus::Failed { .. }) => failed.push(name),
-                Some(McpStartupStatus::Cancelled | McpStartupStatus::Starting) | None => {
-                    cancelled.push(name);
-                }
-            }
-        }
-
-        failed.sort();
-        failed.dedup();
-        cancelled.sort();
-        cancelled.dedup();
-        self.finish_mcp_startup(failed, cancelled);
     }
 
     pub(super) fn status_header_is_mcp_startup_owned(&self) -> bool {
