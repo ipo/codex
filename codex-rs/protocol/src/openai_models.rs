@@ -686,7 +686,8 @@ impl From<ModelInfo> for ModelPreset {
         let supports_personality = info.supports_personality();
         let reasoning_display = match info.inference {
             Some(ModelInferenceConfig::Kimi(_)) => ModelReasoningDisplay::KimiRaw,
-            Some(ModelInferenceConfig::OpenAi { .. })
+            Some(ModelInferenceConfig::Grok(_))
+            | Some(ModelInferenceConfig::OpenAi { .. })
             | Some(ModelInferenceConfig::Anthropic { .. })
             | None => ModelReasoningDisplay::Summary,
         };

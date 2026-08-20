@@ -67,6 +67,7 @@ mod extension_sandbox;
 mod external_auth;
 mod fork_thread;
 mod git_enrichment;
+mod grok_responses;
 #[cfg(not(target_os = "windows"))]
 mod guardian_review;
 #[cfg(not(target_os = "windows"))]

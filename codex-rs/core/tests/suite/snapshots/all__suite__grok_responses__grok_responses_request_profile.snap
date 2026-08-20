@@ -1,0 +1,229 @@
+---
+source: core/tests/suite/grok_responses.rs
+expression: "serde_json::to_string_pretty(&json!({\"headers\":header_snapshot,\"body\":snapshot}))?"
+---
+{
+  "body": {
+    "include": [
+      "reasoning.encrypted_content"
+    ],
+    "input": [
+      {
+        "content": [
+          {
+            "text": "Use the plan tool once",
+            "type": "input_text"
+          }
+        ],
+        "id": "<item-id>",
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "instructions": "Grok conformance system",
+    "model": "grok-4.6",
+    "parallel_tool_calls": true,
+    "prompt_cache_key": "<session-id>",
+    "reasoning": {
+      "effort": "high",
+      "summary": "concise"
+    },
+    "store": false,
+    "stream": true,
+    "tool_choice": "auto",
+    "tools": [
+      {
+        "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+        "name": "exec_command",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "cmd": {
+              "description": "Shell command to execute.",
+              "type": "string"
+            },
+            "justification": {
+              "description": "User-facing approval question for `require_escalated`; omit otherwise.",
+              "type": "string"
+            },
+            "login": {
+              "description": "True runs the shell with -l/-i semantics; false disables them. Defaults to true.",
+              "type": "boolean"
+            },
+            "max_output_tokens": {
+              "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.",
+              "type": "number"
+            },
+            "prefix_rule": {
+              "description": "Reusable approval prefix for `cmd`, only with `sandbox_permissions: \"require_escalated\"`; for example [\"git\", \"pull\"].",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "sandbox_permissions": {
+              "description": "Per-command sandbox override. Defaults to `use_default`; use `require_escalated` for unsandboxed execution.",
+              "enum": [
+                "use_default",
+                "require_escalated"
+              ],
+              "type": "string"
+            },
+            "shell": {
+              "description": "Shell binary to launch. Defaults to the user's default shell.",
+              "type": "string"
+            },
+            "tty": {
+              "description": "True allocates a PTY for the command; false or omitted uses plain pipes.",
+              "type": "boolean"
+            },
+            "workdir": {
+              "description": "Working directory for the command. Defaults to the turn cwd.",
+              "type": "string"
+            },
+            "yield_time_ms": {
+              "description": "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms.",
+              "type": "number"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        "strict": false,
+        "type": "function"
+      },
+      {
+        "description": "Writes characters to an existing unified exec session and returns recent output.",
+        "name": "write_stdin",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "chars": {
+              "description": "Bytes to write to stdin. Defaults to empty, which polls without writing.",
+              "type": "string"
+            },
+            "max_output_tokens": {
+              "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy.",
+              "type": "number"
+            },
+            "session_id": {
+              "description": "Identifier of the running unified exec session.",
+              "type": "number"
+            },
+            "yield_time_ms": {
+              "description": "Wait before yielding output. Non-empty writes default to 250 ms and cap at 30000 ms; empty polls wait 5000-300000 ms by default.",
+              "type": "number"
+            }
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        },
+        "strict": false,
+        "type": "function"
+      },
+      {
+        "description": "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.\n",
+        "name": "update_plan",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "explanation": {
+              "description": "Optional explanation for this plan update.",
+              "type": "string"
+            },
+            "plan": {
+              "description": "The list of steps",
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "status": {
+                    "description": "Step status.",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed"
+                    ],
+                    "type": "string"
+                  },
+                  "step": {
+                    "description": "Task step text.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "step",
+                  "status"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "plan"
+          ],
+          "type": "object"
+        },
+        "strict": false,
+        "type": "function"
+      },
+      {
+        "description": "Apply a patch to files in the workspace.",
+        "name": "apply_patch",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "patch": {
+              "description": "The complete apply_patch patch text.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "patch"
+          ],
+          "type": "object"
+        },
+        "strict": false,
+        "type": "function"
+      },
+      {
+        "description": "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.",
+        "name": "view_image",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "detail": {
+              "description": "Image detail level. Defaults to `high`; use `original` to preserve exact resolution.",
+              "enum": [
+                "high",
+                "original"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "description": "Local filesystem path to an image file.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "strict": false,
+        "type": "function"
+      }
+    ]
+  },
+  "headers": {
+    "x-grok-agent-id": "<installation-id>",
+    "x-grok-conv-id": "<thread-id>",
+    "x-grok-model-override": "grok-4.6",
+    "x-grok-req-id": "<turn-id>",
+    "x-grok-session-id": "<session-id>"
+  }
+}

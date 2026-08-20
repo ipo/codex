@@ -7,6 +7,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::built_in_model_providers;
+use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentStatus;
 use codex_utils_path_uri::LegacyAppPathString;
@@ -39,6 +40,7 @@ const OPUS_BETAS: &str = "claude-code-20250219,context-1m-2025-08-07,interleaved
 enum NativeParent {
     Claude,
     Kimi,
+    Grok,
 }
 
 impl NativeParent {
@@ -46,6 +48,7 @@ impl NativeParent {
         match self {
             Self::Claude => "anthropic/claude-haiku-4-5-20251001",
             Self::Kimi => "kimi/kimi-for-coding",
+            Self::Grok => "xai/grok-4.6",
         }
     }
 
@@ -53,6 +56,7 @@ impl NativeParent {
         match self {
             Self::Claude => "/v1/messages",
             Self::Kimi => "/v1/kimi/chat/completions",
+            Self::Grok => "/v1/grok/responses",
         }
     }
 
@@ -100,6 +104,11 @@ impl NativeParent {
                     }],
                 })
             ),
+            Self::Grok => responses::sse(vec![
+                ev_response_created("grok-spawn"),
+                responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", arguments),
+                ev_completed("grok-spawn"),
+            ]),
         }
     }
 
@@ -140,6 +149,11 @@ impl NativeParent {
                     }],
                 })
             ),
+            Self::Grok => responses::sse(vec![
+                ev_response_created("grok-final"),
+                ev_assistant_message("grok-final-message", "spawned"),
+                ev_completed("grok-final"),
+            ]),
         }
     }
 }
@@ -151,6 +165,39 @@ fn claude_event(name: &str, data: Value) -> String {
 struct NativeSequence {
     next: AtomicUsize,
     responses: Vec<ResponseTemplate>,
+}
+
+struct GrokSameFamilySequence {
+    spawn_arguments: String,
+    child_task: &'static str,
+}
+
+impl Respond for GrokSameFamilySequence {
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let body = String::from_utf8_lossy(&request.body);
+        let events = if body.contains("function_call_output") {
+            vec![
+                ev_response_created("grok-root-complete"),
+                ev_assistant_message("grok-root-message", "spawned"),
+                ev_completed("grok-root-complete"),
+            ]
+        } else if body.contains(self.child_task) {
+            vec![
+                ev_response_created("grok-child"),
+                ev_assistant_message("grok-child-message", "grok child complete"),
+                ev_completed("grok-child"),
+            ]
+        } else {
+            vec![
+                ev_response_created("grok-root-spawn"),
+                responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", &self.spawn_arguments),
+                ev_completed("grok-root-spawn"),
+            ]
+        };
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(responses::sse(events))
+    }
 }
 
 impl Respond for NativeSequence {
@@ -199,6 +246,11 @@ fn native_parent_builder(server: &MockServer, parent: NativeParent) -> TestCodex
             .get_mut("kimi_code")
             .expect("Kimi route")
             .base_url = format!("{base_url}/v1/kimi");
+        provider
+            .wire_routes
+            .get_mut("grok")
+            .expect("Grok route")
+            .base_url = format!("{base_url}/v1/grok");
         config.model_provider = provider;
         config.model = Some(parent.model().to_string());
         config.base_instructions = Some("system".to_string());
@@ -211,6 +263,7 @@ fn native_parent_builder(server: &MockServer, parent: NativeParent) -> TestCodex
             .enable(Feature::MultiAgentV2)
             .expect("multi-agent V2 feature should be enableable");
         config.multi_agent_v2.expose_spawn_agent_model_overrides = true;
+        config.multi_agent_v2.tool_namespace = None;
         config.include_skill_instructions = false;
         config.include_permissions_instructions = false;
         config.include_apps_instructions = false;
@@ -222,6 +275,7 @@ fn plain_spawn_agent_tool(body: &Value, parent: NativeParent) -> Option<&Value> 
     body["tools"].as_array()?.iter().find(|tool| match parent {
         NativeParent::Claude => tool["name"] == "spawn_agent",
         NativeParent::Kimi => tool["function"]["name"] == "spawn_agent",
+        NativeParent::Grok => tool["name"] == "spawn_agent",
     })
 }
 
@@ -243,6 +297,32 @@ async fn wait_for_request_count(server: &MockServer, expected: usize) -> Result<
             );
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_child_completion(
+    test: &core_test_support::test_codex::TestCodex,
+    child_thread_id: ThreadId,
+    expected: &str,
+) -> Result<()> {
+    let child = test.thread_manager.get_thread(child_thread_id).await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.agent_status().await {
+            AgentStatus::Completed(message) => {
+                assert_eq!(message.as_deref(), Some(expected));
+                return Ok(());
+            }
+            AgentStatus::Errored(error) => anyhow::bail!("child errored: {error}"),
+            status if tokio::time::Instant::now() >= deadline => {
+                anyhow::bail!("timed out waiting for child completion: {status:?}")
+            }
+            AgentStatus::PendingInit
+            | AgentStatus::Running
+            | AgentStatus::Interrupted
+            | AgentStatus::Shutdown
+            | AgentStatus::NotFound => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
     }
 }
 
@@ -606,7 +686,7 @@ async fn opus_root_and_public_v2_subagent_use_claude_code_compatibility_profile(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_parents_route_plain_v2_spawn_agent_to_openai_child() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    for parent in [NativeParent::Claude, NativeParent::Kimi] {
+    for parent in [NativeParent::Claude, NativeParent::Kimi, NativeParent::Grok] {
         let server = responses::start_mock_server().await;
         let arguments = serde_json::to_string(&json!({
             "plaintext_message": CHILD_TASK,
@@ -628,7 +708,11 @@ async fn native_parents_route_plain_v2_spawn_agent_to_openai_child() -> Result<(
         let test = native_parent_builder(&server, parent)
             .build_with_auto_env(&server)
             .await?;
+        let mut created_threads = test.thread_manager.subscribe_thread_created();
         test.submit_turn("spawn a worker").await?;
+        let child_thread_id =
+            tokio::time::timeout(Duration::from_secs(10), created_threads.recv()).await??;
+        wait_for_child_completion(&test, child_thread_id, "acknowledged").await?;
 
         let requests = wait_for_request_count(&server, /*expected*/ 3).await?;
         let native_requests = requests
@@ -636,7 +720,9 @@ async fn native_parents_route_plain_v2_spawn_agent_to_openai_child() -> Result<(
             .filter(|request| request.url.path() == parent.path())
             .collect::<Vec<_>>();
         assert_eq!(native_requests.len(), 2);
-        assert!(native_requests[0].headers.contains_key("authorization"));
+        if !matches!(parent, NativeParent::Grok) {
+            assert!(native_requests[0].headers.contains_key("authorization"));
+        }
         let initial: Value = native_requests[0].body_json()?;
         let initial_text = initial.to_string();
         assert!(initial_text.contains("using the form shown in their tool definitions"));
@@ -645,7 +731,11 @@ async fn native_parents_route_plain_v2_spawn_agent_to_openai_child() -> Result<(
             .expect("native parent should receive plain spawn_agent function");
         assert!(!spawn_agent.to_string().contains("namespace"));
         let continuation: Value = native_requests[1].body_json()?;
-        let continuation_messages = continuation["messages"].to_string();
+        let continuation_messages = continuation
+            .get("messages")
+            .or_else(|| continuation.get("input"))
+            .expect("continuation history")
+            .to_string();
         for expected in [SPAWN_CALL_ID, "spawn_agent", "/root/worker"] {
             assert!(
                 continuation_messages.contains(expected),
@@ -661,5 +751,89 @@ async fn native_parents_route_plain_v2_spawn_agent_to_openai_child() -> Result<(
         assert_eq!(child_body["model"], CHILD_MODEL);
         assert!(child_body.to_string().contains(CHILD_TASK));
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_root_inherits_history_into_grok_child() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let root_prompt = "spawn a Grok child with inherited history";
+    let child_task = "confirm inherited Grok history";
+    let arguments = serde_json::to_string(&json!({
+        "plaintext_message": child_task,
+        "task_name": "grok_worker",
+        "fork_turns": "all",
+    }))?;
+    Mock::given(method("POST"))
+        .and(path("/v1/grok/responses"))
+        .respond_with(GrokSameFamilySequence {
+            spawn_arguments: arguments,
+            child_task,
+        })
+        .up_to_n_times(3)
+        .mount(&server)
+        .await;
+
+    let test = native_parent_builder(&server, NativeParent::Grok)
+        .build_with_auto_env(&server)
+        .await?;
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
+    test.submit_turn(root_prompt).await?;
+    let child_thread_id =
+        tokio::time::timeout(Duration::from_secs(10), created_threads.recv()).await??;
+    wait_for_child_completion(&test, child_thread_id, "grok child complete").await?;
+
+    let requests = wait_for_request_count(&server, /*expected*/ 3).await?;
+    let child_request = requests
+        .iter()
+        .find(|request| String::from_utf8_lossy(&request.body).contains(child_task))
+        .expect("Grok child request");
+    let child_body: Value = child_request.body_json()?;
+    assert_eq!(child_body["model"], "grok-4.6");
+    assert!(child_body.to_string().contains(root_prompt));
+    assert!(child_request.headers.contains_key("x-grok-conv-id"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_root_routes_plaintext_task_to_grok_child() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let arguments = serde_json::to_string(&json!({
+        "plaintext_message": CHILD_TASK,
+        "task_name": "grok_worker",
+        "model": "xai/grok-4.6",
+        "fork_turns": "none",
+    }))?;
+    mount_native_parent(&server, NativeParent::Claude, &arguments).await;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            ev_response_created("grok-child"),
+            ev_assistant_message("grok-child-message", "grok child complete"),
+            ev_completed("grok-child"),
+        ]),
+    )
+    .await;
+
+    let test = native_parent_builder(&server, NativeParent::Claude)
+        .build_with_auto_env(&server)
+        .await?;
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
+    test.submit_turn("spawn a Grok worker").await?;
+    let child_thread_id =
+        tokio::time::timeout(Duration::from_secs(10), created_threads.recv()).await??;
+    wait_for_child_completion(&test, child_thread_id, "grok child complete").await?;
+
+    let requests = wait_for_request_count(&server, /*expected*/ 3).await?;
+    let child_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/v1/grok/responses")
+        .expect("Grok child request");
+    let child_body: Value = child_request.body_json()?;
+    assert_eq!(child_body["model"], "grok-4.6");
+    assert!(child_body.to_string().contains(CHILD_TASK));
+    assert!(child_request.headers.contains_key("x-grok-conv-id"));
     Ok(())
 }

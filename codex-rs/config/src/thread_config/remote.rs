@@ -264,6 +264,7 @@ fn inference_dialect_from_proto(value: i32) -> Result<InferenceDialect, ThreadCo
         Ok(proto::InferenceDialect::OpenAi) => Ok(InferenceDialect::OpenAi),
         Ok(proto::InferenceDialect::ClaudeCode) => Ok(InferenceDialect::ClaudeCode),
         Ok(proto::InferenceDialect::Kimi) => Ok(InferenceDialect::Kimi),
+        Ok(proto::InferenceDialect::Grok) => Ok(InferenceDialect::Grok),
         Ok(proto::InferenceDialect::Unspecified) => Err(parse_error(
             "remote thread config omitted inference dialect",
         )),
@@ -356,6 +357,7 @@ fn proto_inference_dialect(dialect: InferenceDialect) -> proto::InferenceDialect
         InferenceDialect::OpenAi => proto::InferenceDialect::OpenAi,
         InferenceDialect::ClaudeCode => proto::InferenceDialect::ClaudeCode,
         InferenceDialect::Kimi => proto::InferenceDialect::Kimi,
+        InferenceDialect::Grok => proto::InferenceDialect::Grok,
     }
 }
 

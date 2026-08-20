@@ -74,6 +74,14 @@ fn model_family_controls_supported_wire_and_dialect_contracts() {
             thinking: KimiThinkingPolicy::Required,
         })
     };
+    let grok = |wire_api, dialect| {
+        ModelInferenceConfig::Grok(GrokInferenceConfig {
+            wire_api,
+            dialect,
+            route: "route".to_string(),
+            wire_model: "model".to_string(),
+        })
+    };
 
     assert_eq!(
         [
@@ -86,7 +94,25 @@ fn model_family_controls_supported_wire_and_dialect_contracts() {
             kimi(WireApi::ChatCompletions).route_contract_is_supported(),
             kimi(WireApi::AnthropicMessages).route_contract_is_supported(),
             kimi(WireApi::Responses).route_contract_is_supported(),
+            grok(WireApi::Responses, InferenceDialect::Grok).route_contract_is_supported(),
+            grok(WireApi::ChatCompletions, InferenceDialect::Grok).route_contract_is_supported(),
+            grok(WireApi::Responses, InferenceDialect::OpenAi).route_contract_is_supported(),
         ],
-        [true, false, true, false, true, true, false]
+        [
+            true, false, true, false, true, true, false, true, false, false
+        ]
     );
+}
+
+#[test]
+fn grok_is_not_classified_as_openai_responses_capable() {
+    let config = ModelInferenceConfig::Grok(GrokInferenceConfig {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::Grok,
+        route: "grok".to_string(),
+        wire_model: "grok-4.6".to_string(),
+    });
+
+    assert_eq!(config.family(), ModelFamily::Grok);
+    assert!(!config.supports_responses_capabilities());
 }

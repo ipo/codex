@@ -581,10 +581,61 @@ fn built_in_claudeflare_provider_has_managed_native_routes() {
                         stream_idle_timeout_ms: None,
                     },
                 ),
+                (
+                    "grok".to_string(),
+                    ModelProviderWireRoute {
+                        wire_api: WireApi::Responses,
+                        dialect: InferenceDialect::Grok,
+                        base_url: CLAUDEFLARE_GROK_BASE_URL.to_string(),
+                        request_path: "responses".to_string(),
+                        query_params: None,
+                        request_max_retries: Some(0),
+                        stream_max_retries: Some(10),
+                        stream_idle_timeout_ms: None,
+                    },
+                ),
             ]),
             stream_max_retries: Some(10),
             supports_websockets: false,
             ..ModelProviderInfo::default()
+        }
+    );
+}
+
+#[test]
+fn built_in_claudeflare_resolves_grok_route() {
+    let provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove(CLAUDEFLARE_PROVIDER_ID)
+        .expect("Claudeflare provider should be built in");
+    let inference = ModelInferenceConfig::Grok(GrokInferenceConfig {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::Grok,
+        route: "grok".to_string(),
+        wire_model: "grok-4.6".to_string(),
+    });
+
+    assert_eq!(
+        provider
+            .resolve_inference_contract("xai/grok-4.6", Some(&inference))
+            .expect("Grok route should resolve"),
+        ResolvedInferencePlan::Grok {
+            config: GrokInferenceConfig {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::Grok,
+                route: "grok".to_string(),
+                wire_model: "grok-4.6".to_string(),
+            },
+            route: ResolvedWireRoute {
+                name: Some("grok".to_string()),
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::Grok,
+                base_url: Some(CLAUDEFLARE_GROK_BASE_URL.to_string()),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: 0,
+                stream_max_retries: 10,
+                stream_idle_timeout: Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+            },
         }
     );
 }

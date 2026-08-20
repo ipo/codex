@@ -165,6 +165,7 @@ const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 
 mod claude_dispatch;
+mod grok_dispatch;
 pub(crate) mod kimi_dispatch;
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
@@ -1942,6 +1943,19 @@ impl ModelClientSession {
                     responses_metadata,
                     inference_trace,
                     kimi_dispatch::KimiPlan { config, route },
+                )
+                .await
+            }
+            codex_model_provider_info::ResolvedInferencePlan::Grok { config, route } => {
+                self.stream_grok(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    summary,
+                    responses_metadata,
+                    inference_trace,
+                    grok_dispatch::GrokPlan { config, route },
                 )
                 .await
             }

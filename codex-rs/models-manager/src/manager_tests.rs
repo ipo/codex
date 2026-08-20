@@ -1508,3 +1508,50 @@ fn bundled_kimi_profiles_resolve_exact_request_contracts() {
         ]
     );
 }
+
+#[test]
+fn bundled_grok_profiles_resolve_exact_request_contracts() {
+    let catalog = bundled_models_response().expect("bundled catalog should parse");
+    let actual = catalog
+        .models
+        .iter()
+        .filter(|model| model.history_compatibility_group.as_deref() == Some("grok"))
+        .map(|model| {
+            json!({
+                "slug": model.slug,
+                "aliases": model.aliases,
+                "context_window": model.context_window,
+                "max_context_window": model.max_context_window,
+                "auto_compact_token_limit": model.auto_compact_token_limit,
+                "default_reasoning_level": model.default_reasoning_level,
+                "supported_reasoning_levels": model.supported_reasoning_levels,
+                "default_reasoning_summary": model.default_reasoning_summary,
+                "tool_mode": model.tool_mode,
+                "multi_agent_version": model.multi_agent_version,
+                "inference": model.inference,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            json!({"slug":"xai/grok-4.6","aliases":["grok-4.6"],"context_window":500000,
+                "max_context_window":500000,"auto_compact_token_limit":400000,
+                "default_reasoning_level":"high","supported_reasoning_levels":[
+                    {"effort":"xhigh","description":"Highest thinking effort"},
+                    {"effort":"high","description":"Higher thinking effort"},
+                    {"effort":"medium","description":"Balanced thinking effort"},
+                    {"effort":"low","description":"Lower thinking effort"}],
+                "default_reasoning_summary":"concise","tool_mode":"direct","multi_agent_version":"v2",
+                "inference":{"family":"grok","wire_api":"responses","dialect":"grok","route":"grok","wire_model":"grok-4.6"}}),
+            json!({"slug":"xai/grok-4.5","aliases":["grok-4.5"],"context_window":500000,
+                "max_context_window":500000,"auto_compact_token_limit":400000,
+                "default_reasoning_level":"high","supported_reasoning_levels":[
+                    {"effort":"high","description":"Higher thinking effort"},
+                    {"effort":"medium","description":"Balanced thinking effort"},
+                    {"effort":"low","description":"Lower thinking effort"}],
+                "default_reasoning_summary":"concise","tool_mode":"direct","multi_agent_version":"v2",
+                "inference":{"family":"grok","wire_api":"responses","dialect":"grok","route":"grok","wire_model":"grok-4.5"}}),
+        ]
+    );
+}

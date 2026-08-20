@@ -3,6 +3,9 @@ use crate::session::tests::make_session_and_context;
 use chrono::TimeZone;
 use codex_api::TransportError;
 use codex_kimi_code::KimiStreamError;
+use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
+use codex_model_provider_info::built_in_model_providers;
+use codex_models_manager::bundled_models_response;
 use http::HeaderValue;
 use http::StatusCode;
 use pretty_assertions::assert_eq;
@@ -79,4 +82,28 @@ async fn live_native_retry_handler_uses_injected_headers_backoff_and_sleep() {
         [500, 1_000, 2_000, 4_000, 8_000, 16_000].map(Duration::from_millis)
     );
     assert_eq!(delays[10..], [Duration::from_secs(32); 14]);
+}
+
+#[test]
+fn grok_uses_route_scoped_responses_retry_policy_without_retrying_cancellation() {
+    let mut provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove(CLAUDEFLARE_PROVIDER_ID)
+        .expect("Claudeflare provider");
+    provider.stream_max_retries = Some(2);
+    provider
+        .wire_routes
+        .get_mut("grok")
+        .expect("Grok route")
+        .stream_max_retries = Some(7);
+    let model = bundled_models_response()
+        .expect("bundled models")
+        .models
+        .into_iter()
+        .find(|model| model.slug == "xai/grok-4.6")
+        .expect("Grok model");
+
+    let policy = SamplingRetryPolicy::resolve(&provider, &model).expect("Grok retry policy");
+    assert_eq!(policy, SamplingRetryPolicy::Responses { max_retries: 7 });
+    assert!(policy.is_retryable(&CodexErr::Stream("premature closure".to_string())));
+    assert!(!policy.is_retryable(&CodexErr::Interrupted));
 }

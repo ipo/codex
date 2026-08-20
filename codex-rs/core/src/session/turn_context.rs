@@ -234,6 +234,7 @@ impl TurnContext {
             }) => i64::from(*max_output_tokens),
             Some(ModelInferenceConfig::OpenAi { .. })
             | Some(ModelInferenceConfig::Kimi(_))
+            | Some(ModelInferenceConfig::Grok(_))
             | None => 0,
         };
         model.resolved_context_window().map(|window| {

@@ -89,7 +89,8 @@ fn encode_for(
         }
         ModelInferenceConfig::Anthropic { .. }
         | ModelInferenceConfig::OpenAi { .. }
-        | ModelInferenceConfig::Kimi(_) => None,
+        | ModelInferenceConfig::Kimi(_)
+        | ModelInferenceConfig::Grok(_) => None,
     };
     let sonnet_compatibility = match profile {
         ModelInferenceConfig::Anthropic { wire_model, .. } if wire_model == "claude-sonnet-5" => {
@@ -112,7 +113,8 @@ fn encode_for(
         }
         ModelInferenceConfig::Anthropic { .. }
         | ModelInferenceConfig::OpenAi { .. }
-        | ModelInferenceConfig::Kimi(_) => None,
+        | ModelInferenceConfig::Kimi(_)
+        | ModelInferenceConfig::Grok(_) => None,
     };
     encode_request(EncodeRequest {
         profile,

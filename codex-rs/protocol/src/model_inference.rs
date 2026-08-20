@@ -55,6 +55,7 @@ pub enum InferenceDialect {
     OpenAi,
     ClaudeCode,
     Kimi,
+    Grok,
 }
 
 impl fmt::Display for InferenceDialect {
@@ -63,6 +64,7 @@ impl fmt::Display for InferenceDialect {
             Self::OpenAi => "open_ai",
             Self::ClaudeCode => "claude_code",
             Self::Kimi => "kimi",
+            Self::Grok => "grok",
         })
     }
 }
@@ -72,6 +74,7 @@ pub enum ModelFamily {
     OpenAi,
     Anthropic,
     Kimi,
+    Grok,
 }
 
 impl fmt::Display for ModelFamily {
@@ -80,6 +83,7 @@ impl fmt::Display for ModelFamily {
             Self::OpenAi => "open_ai",
             Self::Anthropic => "anthropic",
             Self::Kimi => "kimi",
+            Self::Grok => "grok",
         })
     }
 }
@@ -111,6 +115,15 @@ pub struct KimiInferenceConfig {
     pub thinking: KimiThinkingPolicy,
 }
 
+/// Native Responses contract for the Grok model family.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct GrokInferenceConfig {
+    pub wire_api: WireApi,
+    pub dialect: InferenceDialect,
+    pub route: String,
+    pub wire_model: String,
+}
+
 /// Model-family specialization and the named provider route it requires.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "family", rename_all = "snake_case")]
@@ -131,6 +144,7 @@ pub enum ModelInferenceConfig {
         supports_disabled_thinking: bool,
     },
     Kimi(KimiInferenceConfig),
+    Grok(GrokInferenceConfig),
 }
 
 impl ModelInferenceConfig {
@@ -142,12 +156,15 @@ impl ModelInferenceConfig {
         (WireApi::ChatCompletions, InferenceDialect::Kimi),
         (WireApi::AnthropicMessages, InferenceDialect::Kimi),
     ];
+    const GROK_ROUTE_CONTRACTS: &'static [(WireApi, InferenceDialect)] =
+        &[(WireApi::Responses, InferenceDialect::Grok)];
 
     pub fn family(&self) -> ModelFamily {
         match self {
             Self::OpenAi { .. } => ModelFamily::OpenAi,
             Self::Anthropic { .. } => ModelFamily::Anthropic,
             Self::Kimi(_) => ModelFamily::Kimi,
+            Self::Grok(_) => ModelFamily::Grok,
         }
     }
 
@@ -166,6 +183,7 @@ impl ModelInferenceConfig {
                 ..
             } => (*wire_api, *dialect, route),
             Self::Kimi(config) => (config.wire_api, config.dialect, &config.route),
+            Self::Grok(config) => (config.wire_api, config.dialect, &config.route),
         }
     }
 
@@ -175,6 +193,7 @@ impl ModelInferenceConfig {
             Self::OpenAi { .. } => Self::OPEN_AI_ROUTE_CONTRACTS,
             Self::Anthropic { .. } => Self::ANTHROPIC_ROUTE_CONTRACTS,
             Self::Kimi(_) => Self::KIMI_ROUTE_CONTRACTS,
+            Self::Grok(_) => Self::GROK_ROUTE_CONTRACTS,
         }
     }
 

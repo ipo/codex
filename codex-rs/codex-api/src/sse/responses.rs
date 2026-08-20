@@ -186,6 +186,10 @@ pub struct ResponsesStreamEvent {
     summary_index: Option<i64>,
     content_index: Option<i64>,
     safety_buffering: Option<Value>,
+    code: Option<String>,
+    message: Option<String>,
+    plan_type: Option<String>,
+    resets_at: Option<i64>,
 }
 
 impl ResponsesStreamEvent {
@@ -404,40 +408,25 @@ pub fn process_responses_event(
             }
         }
         "response.failed" => {
-            if let Some(resp_val) = event.response {
-                let mut response_error = ApiError::Stream("response.failed event received".into());
-                if let Some(error) = resp_val.get("error")
-                    && let Ok(error) = serde_json::from_value::<Error>(error.clone())
-                {
-                    if is_context_window_error(&error) {
-                        response_error = ApiError::ContextWindowExceeded;
-                    } else if is_quota_exceeded_error(&error) {
-                        response_error = ApiError::QuotaExceeded;
-                    } else if is_usage_not_included(&error) {
-                        response_error = ApiError::UsageNotIncluded;
-                    } else if is_cyber_policy_error(&error) {
-                        let message = cyber_policy_message(error.message);
-                        response_error = ApiError::CyberPolicy { message };
-                    } else if matches!(error.code.as_deref(), Some("invalid_prompt" | "bio_policy"))
-                    {
-                        let message = error
-                            .message
-                            .unwrap_or_else(|| "Invalid request.".to_string());
-                        response_error = ApiError::InvalidRequest { message };
-                    } else if is_server_overloaded_error(&error) {
-                        response_error = ApiError::ServerOverloaded;
-                    } else {
-                        let delay = try_parse_retry_after(&error);
-                        let message = error.message.unwrap_or_default();
-                        response_error = ApiError::Retryable { message, delay };
-                    }
-                }
-                return Err(ResponsesEventError::Api(response_error));
+            if let Some(resp_val) = event.response
+                && let Some(error) = resp_val.get("error")
+                && let Ok(error) = serde_json::from_value::<Error>(error.clone())
+            {
+                return Err(ResponsesEventError::Api(classify_response_error(error)));
             }
 
             return Err(ResponsesEventError::Api(ApiError::Stream(
                 "response.failed event received".into(),
             )));
+        }
+        "error" => {
+            return Err(ResponsesEventError::Api(classify_response_error(Error {
+                r#type: Some("error".to_string()),
+                code: event.code,
+                message: event.message,
+                plan_type: event.plan_type,
+                resets_at: event.resets_at,
+            })));
         }
         "response.incomplete" => {
             let Some(resp_val) = event.response else {
@@ -660,6 +649,34 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
         }
     }
     None
+}
+
+fn classify_response_error(error: Error) -> ApiError {
+    if is_context_window_error(&error) {
+        ApiError::ContextWindowExceeded
+    } else if is_quota_exceeded_error(&error) {
+        ApiError::QuotaExceeded
+    } else if is_usage_not_included(&error) {
+        ApiError::UsageNotIncluded
+    } else if is_cyber_policy_error(&error) {
+        ApiError::CyberPolicy {
+            message: cyber_policy_message(error.message),
+        }
+    } else if matches!(error.code.as_deref(), Some("invalid_prompt" | "bio_policy")) {
+        ApiError::InvalidRequest {
+            message: error
+                .message
+                .unwrap_or_else(|| "Invalid request.".to_string()),
+        }
+    } else if is_server_overloaded_error(&error) {
+        ApiError::ServerOverloaded
+    } else {
+        let delay = try_parse_retry_after(&error);
+        ApiError::Retryable {
+            message: error.message.unwrap_or_default(),
+            delay,
+        }
+    }
 }
 
 fn is_context_window_error(error: &Error) -> bool {
@@ -1234,6 +1251,36 @@ mod tests {
                 }
                 other => panic!("unexpected event for {code}: {other:?}"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn standalone_error_events_use_responses_error_classification() {
+        for (code, expected) in [
+            ("context_length_exceeded", "context"),
+            ("insufficient_quota", "quota"),
+            ("server_is_overloaded", "overloaded"),
+            ("invalid_prompt", "invalid"),
+            ("rate_limit_exceeded", "retryable"),
+        ] {
+            let body = json!({
+                "type": "error",
+                "code": code,
+                "message": format!("standalone {code}"),
+            })
+            .to_string();
+            let sse = format!("event: error\ndata: {body}\n\n");
+            let events = collect_events(&[sse.as_bytes()]).await;
+            assert_eq!(events.len(), 1);
+            let classified = match &events[0] {
+                Err(ApiError::ContextWindowExceeded) => "context",
+                Err(ApiError::QuotaExceeded) => "quota",
+                Err(ApiError::ServerOverloaded) => "overloaded",
+                Err(ApiError::InvalidRequest { .. }) => "invalid",
+                Err(ApiError::Retryable { .. }) => "retryable",
+                other => panic!("unexpected standalone error for {code}: {other:?}"),
+            };
+            assert_eq!(classified, expected);
         }
     }
 

@@ -1,0 +1,57 @@
+{
+  "models": [
+    {
+      "slug": "xai/grok-4.6",
+      "inherits": "gpt-5.6-sol",
+      "display_name": "Grok 4.6",
+      "description": "xAI's frontier reasoning model.",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "xhigh", "description": "Highest thinking effort" },
+        { "effort": "high", "description": "Higher thinking effort" },
+        { "effort": "medium", "description": "Balanced thinking effort" },
+        { "effort": "low", "description": "Lower thinking effort" }
+      ],
+      "default_reasoning_summary": "concise",
+      "priority": 34,
+      "context_window": 500000,
+      "max_context_window": 500000,
+      "auto_compact_token_limit": 400000,
+      "visibility": "none",
+      "support_verbosity": false,
+      "default_verbosity": null,
+      "tool_mode": "direct",
+      "aliases": ["grok-4.6"],
+      "history_compatibility_group": "grok",
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "grok",
+        "wire_api": "responses",
+        "dialect": "grok",
+        "route": "grok",
+        "wire_model": "grok-4.6"
+      }
+    },
+    {
+      "slug": "xai/grok-4.5",
+      "inherits": "xai/grok-4.6",
+      "display_name": "Grok 4.5",
+      "description": "xAI's previous-generation reasoning model.",
+      "supported_reasoning_levels": [
+        { "effort": "high", "description": "Higher thinking effort" },
+        { "effort": "medium", "description": "Balanced thinking effort" },
+        { "effort": "low", "description": "Lower thinking effort" }
+      ],
+      "priority": 35,
+      "aliases": ["grok-4.5"],
+      "history_compatibility_group": "grok",
+      "inference": {
+        "family": "grok",
+        "wire_api": "responses",
+        "dialect": "grok",
+        "route": "grok",
+        "wire_model": "grok-4.5"
+      }
+    }
+  ]
+}

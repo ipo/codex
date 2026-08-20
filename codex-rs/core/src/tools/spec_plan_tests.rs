@@ -12,6 +12,7 @@ use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::model_inference::AnthropicThinkingPolicy;
+use codex_protocol::model_inference::GrokInferenceConfig;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::KimiInferenceConfig;
 use codex_protocol::model_inference::KimiThinkingPolicy;
@@ -313,6 +314,15 @@ fn use_native_kimi(turn: &mut TurnContext) {
         wire_model: "kimi-for-coding".to_string(),
         max_output_tokens: 32_768,
         thinking: KimiThinkingPolicy::Required,
+    }));
+}
+
+fn use_grok(turn: &mut TurnContext) {
+    turn.model_info.inference = Some(ModelInferenceConfig::Grok(GrokInferenceConfig {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::Grok,
+        route: "grok".to_string(),
+        wire_model: "grok-4.6".to_string(),
     }));
 }
 
@@ -1146,6 +1156,28 @@ async fn deferred_extension_tools_are_discoverable_with_tool_search() {
 }
 
 #[tokio::test]
+async fn grok_uses_function_forms_for_responses_incompatible_tools() {
+    let plan = probe_with(
+        |turn| {
+            use_grok(turn);
+            turn.model_info.supports_search_tool = true;
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(DeferredExtensionTool)],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    for tool_name in ["apply_patch", "tool_search"] {
+        assert!(
+            matches!(plan.visible_spec(tool_name), ToolSpec::Function(_)),
+            "expected `{tool_name}` to use a function spec"
+        );
+    }
+}
+
+#[tokio::test]
 async fn tool_search_cache_rebuilds_when_deferred_sources_change() {
     let cache = ToolSearchHandlerCache::default();
 
@@ -1894,6 +1926,11 @@ async fn multi_agent_v2_namespace_follows_resolved_model_inference_contract() {
         use_native_kimi(turn);
     })
     .await;
+    let grok = probe(|turn| {
+        configure_v2(turn);
+        use_grok(turn);
+    })
+    .await;
 
     let collaboration_tools = [
         "spawn_agent",
@@ -1909,7 +1946,7 @@ async fn multi_agent_v2_namespace_follows_resolved_model_inference_contract() {
     else {
         panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
     };
-    for native in [&claude, &kimi] {
+    for native in [&claude, &kimi, &grok] {
         native.assert_visible_lacks(&[MULTI_AGENT_V2_NAMESPACE]);
         let flattened_tools = collaboration_tools.map(|tool| format!("agents__{tool}"));
         for tool in &flattened_tools {

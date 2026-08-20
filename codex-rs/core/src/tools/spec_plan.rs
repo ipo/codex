@@ -63,6 +63,7 @@ use crate::tools::router::ToolRouterParams;
 use crate::tools::wire_adaptation::adapt_spec_for_wire;
 use crate::tools::wire_adaptation::namespace_tool_spec_mode;
 use crate::tools::wire_adaptation::native_wire;
+use crate::tools::wire_adaptation::requires_function_tool_specs;
 use crate::tools::wire_adaptation::validate_model_visible_function_names;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -826,14 +827,16 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         ));
     }
 
+    let requires_function_apply_patch = requires_function_tool_specs(turn_context);
     if environment_mode.has_environment()
         && !turn_context
             .model_info
             .disables_tool(ModelToolCapability::ApplyPatch)
-        && (native_wire(turn_context) || turn_context.model_info.apply_patch_tool_type.is_some())
+        && (requires_function_apply_patch
+            || turn_context.model_info.apply_patch_tool_type.is_some())
     {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-        if native_wire(turn_context) {
+        if requires_function_apply_patch {
             planned_tools.add(ApplyPatchHandler::function(include_environment_id));
         } else {
             planned_tools.add(ApplyPatchHandler::freeform(include_environment_id));
@@ -1025,7 +1028,7 @@ fn append_tool_search_executor(
         ToolSearchSourceListing::Include
     };
     let index = context.tool_search_handler_cache.get_or_build(search_infos);
-    let native_tool_search_state = native_wire(turn_context).then(|| {
+    let native_tool_search_state = requires_function_tool_specs(turn_context).then(|| {
         context
             .tool_search_handler_cache
             .native_loaded_tools_for_turn(&turn_context.sub_id)

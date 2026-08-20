@@ -14,6 +14,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::EnvVarError;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::model_inference::AnthropicThinkingPolicy;
+use codex_protocol::model_inference::GrokInferenceConfig;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::KimiInferenceConfig;
 use codex_protocol::model_inference::ModelInferenceConfig;
@@ -45,6 +46,7 @@ pub const CLAUDEFLARE_PROVIDER_ID: &str = "claudeflare";
 pub const CLAUDEFLARE_RESPONSES_BASE_URL: &str = "http://127.0.0.1:8080/v1/ccflare/openai";
 pub const CLAUDEFLARE_CLAUDE_BASE_URL: &str = "http://127.0.0.1:8080/v1/claude-code";
 pub const CLAUDEFLARE_KIMI_BASE_URL: &str = "http://127.0.0.1:8080/v1/kimi";
+pub const CLAUDEFLARE_GROK_BASE_URL: &str = "http://127.0.0.1:8080/v1/grok";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
@@ -109,6 +111,10 @@ pub enum ResolvedInferencePlan {
         config: KimiInferenceConfig,
         route: ResolvedWireRoute,
     },
+    Grok {
+        config: GrokInferenceConfig,
+        route: ResolvedWireRoute,
+    },
 }
 
 impl ResolvedInferencePlan {
@@ -117,7 +123,8 @@ impl ResolvedInferencePlan {
             Self::Legacy { route, .. }
             | Self::OpenAi { route, .. }
             | Self::Anthropic { route, .. }
-            | Self::Kimi { route, .. } => route,
+            | Self::Kimi { route, .. }
+            | Self::Grok { route, .. } => route,
         }
     }
 }
@@ -335,6 +342,10 @@ impl ModelProviderInfo {
                 route: self.resolve_named_route(model, inference)?,
             },
             ModelInferenceConfig::Kimi(config) => ResolvedInferencePlan::Kimi {
+                config: config.clone(),
+                route: self.resolve_named_route(model, inference)?,
+            },
+            ModelInferenceConfig::Grok(config) => ResolvedInferencePlan::Grok {
                 config: config.clone(),
                 route: self.resolve_named_route(model, inference)?,
             },
@@ -670,6 +681,19 @@ pub fn built_in_model_providers(
                     request_path: "chat/completions".to_string(),
                     query_params: None,
                     request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "grok".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::Grok,
+                    base_url: CLAUDEFLARE_GROK_BASE_URL.to_string(),
+                    request_path: "responses".to_string(),
+                    query_params: None,
+                    request_max_retries: Some(0),
                     stream_max_retries: Some(10),
                     stream_idle_timeout_ms: None,
                 },

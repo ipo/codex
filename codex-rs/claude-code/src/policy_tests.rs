@@ -145,7 +145,8 @@ fn assemble(
         }
         ModelInferenceConfig::Anthropic { .. }
         | ModelInferenceConfig::OpenAi { .. }
-        | ModelInferenceConfig::Kimi(_) => None,
+        | ModelInferenceConfig::Kimi(_)
+        | ModelInferenceConfig::Grok(_) => None,
     };
     assemble_request(AssembleRequest {
         profile,

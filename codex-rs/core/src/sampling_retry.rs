@@ -69,6 +69,9 @@ impl SamplingRetryPolicy {
             ResolvedInferencePlan::Kimi { route, .. } => Self::NativeKimi {
                 max_retries: route.stream_max_retries,
             },
+            ResolvedInferencePlan::Grok { route, .. } => Self::Responses {
+                max_retries: route.stream_max_retries,
+            },
             ResolvedInferencePlan::Legacy { .. } | ResolvedInferencePlan::OpenAi { .. } => {
                 Self::Responses {
                     max_retries: provider.stream_max_retries(),

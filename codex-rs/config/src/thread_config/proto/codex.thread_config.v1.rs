@@ -160,6 +160,7 @@ pub enum InferenceDialect {
     OpenAi = 1,
     ClaudeCode = 2,
     Kimi = 3,
+    Grok = 4,
 }
 impl InferenceDialect {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -172,6 +173,7 @@ impl InferenceDialect {
             Self::OpenAi => "INFERENCE_DIALECT_OPEN_AI",
             Self::ClaudeCode => "INFERENCE_DIALECT_CLAUDE_CODE",
             Self::Kimi => "INFERENCE_DIALECT_KIMI",
+            Self::Grok => "INFERENCE_DIALECT_GROK",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -181,6 +183,7 @@ impl InferenceDialect {
             "INFERENCE_DIALECT_OPEN_AI" => Some(Self::OpenAi),
             "INFERENCE_DIALECT_CLAUDE_CODE" => Some(Self::ClaudeCode),
             "INFERENCE_DIALECT_KIMI" => Some(Self::Kimi),
+            "INFERENCE_DIALECT_GROK" => Some(Self::Grok),
             _ => None,
         }
     }

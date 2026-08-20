@@ -1422,7 +1422,8 @@
       "enum": [
         "open_ai",
         "claude_code",
-        "kimi"
+        "kimi",
+        "grok"
       ],
       "type": "string"
     },
