@@ -13,5 +13,8 @@ expression: popup
                          real-world work.
   gpt-5.2 (current)      Optimized for professional work and long-running
                          agents.
+  xai/grok-4.6           Aliases: grok-4.6 — xAI's frontier reasoning model.
+  xai/grok-4.5           Aliases: grok-4.5 — xAI's previous-generation
+                         reasoning model.
 
   Press enter to confirm or esc to go back

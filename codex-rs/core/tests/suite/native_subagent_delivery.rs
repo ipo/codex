@@ -29,6 +29,7 @@ const SPAWN_CALL_ID: &str = "spawn-native-child";
 #[derive(Clone, Copy)]
 enum NativeChild {
     Claude,
+    Grok,
     Kimi,
 }
 
@@ -36,6 +37,7 @@ impl NativeChild {
     fn selector(self) -> &'static str {
         match self {
             Self::Claude => "haiku-4.5",
+            Self::Grok => "grok-4.6",
             Self::Kimi => "kimi-2.7",
         }
     }
@@ -43,6 +45,7 @@ impl NativeChild {
     fn task_name(self) -> &'static str {
         match self {
             Self::Claude => "claude_worker",
+            Self::Grok => "grok_worker",
             Self::Kimi => "kimi_worker",
         }
     }
@@ -50,6 +53,7 @@ impl NativeChild {
     fn path(self) -> &'static str {
         match self {
             Self::Claude => "/v1/messages",
+            Self::Grok => "/v1/grok/responses",
             Self::Kimi => "/v1/kimi/chat/completions",
         }
     }
@@ -57,6 +61,11 @@ impl NativeChild {
     fn response(self) -> String {
         match self {
             Self::Claude => claude_response(),
+            Self::Grok => responses::sse(vec![
+                responses::ev_response_created("grok-child"),
+                responses::ev_assistant_message("grok-child-message", CHILD_REPLY),
+                responses::ev_completed("grok-child"),
+            ]),
             Self::Kimi => format!(
                 "data: {}\n\ndata: [DONE]\n\n",
                 json!({
@@ -80,6 +89,11 @@ async fn public_v2_spawn_delivers_plaintext_agent_message_to_native_claude() -> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_v2_spawn_delivers_plaintext_agent_message_to_native_kimi() -> Result<()> {
     assert_native_child_delivery(NativeChild::Kimi).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn public_v2_spawn_delivers_plaintext_agent_message_to_native_grok() -> Result<()> {
+    assert_native_child_delivery(NativeChild::Grok).await
 }
 
 async fn assert_native_child_delivery(child: NativeChild) -> Result<()> {
@@ -153,6 +167,11 @@ async fn assert_native_child_delivery(child: NativeChild) -> Result<()> {
             .get_mut("kimi_code")
             .expect("Kimi route")
             .base_url = format!("{base_url}/v1/kimi");
+        provider
+            .wire_routes
+            .get_mut("grok")
+            .expect("Grok route")
+            .base_url = format!("{base_url}/v1/grok");
         config.model_provider = provider;
         config.model = Some("gpt-5.6-sol".to_string());
         let mut model_catalog = bundled_models_response().expect("bundled model catalog");
@@ -201,7 +220,12 @@ async fn assert_native_child_delivery(child: NativeChild) -> Result<()> {
     let visible = child_events
         .iter()
         .filter_map(|event| match event {
-            EventMsg::AgentMessageContentDelta(message) => Some(message.delta.as_str()),
+            EventMsg::AgentMessage(message) if matches!(child, NativeChild::Grok) => {
+                Some(message.message.as_str())
+            }
+            EventMsg::AgentMessageContentDelta(message) if !matches!(child, NativeChild::Grok) => {
+                Some(message.delta.as_str())
+            }
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -234,22 +258,30 @@ async fn assert_native_child_delivery(child: NativeChild) -> Result<()> {
         "Agent message from /root to /root/{}:\n{CHILD_PROMPT}",
         child.task_name()
     );
-    let delivered = body["messages"]
-        .as_array()
+    let messages = body
+        .get("messages")
+        .or_else(|| body.get("input"))
+        .and_then(Value::as_array)
         .expect("native messages")
-        .iter()
-        .find_map(|message| {
-            if message["role"] != "user" {
-                return None;
-            }
-            message["content"].as_str().map(str::to_string).or_else(|| {
-                message["content"].as_array().and_then(|blocks| {
-                    blocks
-                        .iter()
-                        .find_map(|block| block["text"].as_str().map(str::to_string))
-                })
+        .as_slice();
+    assert!(
+        messages
+            .iter()
+            .all(|message| message["type"] != "agent_message"),
+        "provider request must not contain private agent_message items: {body}"
+    );
+    let delivered = messages.iter().find_map(|message| {
+        if message["role"] != "user" {
+            return None;
+        }
+        message["content"].as_str().map(str::to_string).or_else(|| {
+            message["content"].as_array().and_then(|blocks| {
+                blocks
+                    .iter()
+                    .find_map(|block| block["text"].as_str().map(str::to_string))
             })
-        });
+        })
+    });
     assert_eq!(delivered, Some(rendered));
 
     Ok(())

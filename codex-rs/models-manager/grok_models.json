@@ -17,7 +17,7 @@
       "context_window": 500000,
       "max_context_window": 500000,
       "auto_compact_token_limit": 400000,
-      "visibility": "none",
+      "visibility": "list",
       "support_verbosity": false,
       "default_verbosity": null,
       "tool_mode": "direct",

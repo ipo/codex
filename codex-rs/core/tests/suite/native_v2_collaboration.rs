@@ -104,11 +104,7 @@ impl NativeParent {
                     }],
                 })
             ),
-            Self::Grok => responses::sse(vec![
-                ev_response_created("grok-spawn"),
-                responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", arguments),
-                ev_completed("grok-spawn"),
-            ]),
+            Self::Grok => grok_spawn_response(arguments),
         }
     }
 
@@ -188,16 +184,32 @@ impl Respond for GrokSameFamilySequence {
                 ev_completed("grok-child"),
             ]
         } else {
-            vec![
-                ev_response_created("grok-root-spawn"),
-                responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", &self.spawn_arguments),
-                ev_completed("grok-root-spawn"),
-            ]
+            return ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(grok_spawn_response(&self.spawn_arguments));
         };
         ResponseTemplate::new(200)
             .insert_header("content-type", "text/event-stream")
             .set_body_string(responses::sse(events))
     }
+}
+
+fn grok_spawn_response(arguments: &str) -> String {
+    responses::sse(vec![
+        ev_response_created("grok-root-spawn"),
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "id": "rs_grok_spawn",
+                "type": "reasoning",
+                "status": "completed",
+                "summary": [{"type": "summary_text", "text": "Spawning a worker"}],
+                "encrypted_content": format!("gAAAAAB{}", "A".repeat(1_459)),
+            }
+        }),
+        responses::ev_function_call(SPAWN_CALL_ID, "spawn_agent", arguments),
+        ev_completed("grok-root-spawn"),
+    ])
 }
 
 impl Respond for NativeSequence {
@@ -742,6 +754,16 @@ async fn native_parents_route_plain_v2_spawn_agent_to_openai_child() -> Result<(
                 "native continuation missing `{expected}`: {continuation_messages}"
             );
         }
+        if matches!(parent, NativeParent::Grok) {
+            let replayed_reasoning = continuation["input"]
+                .as_array()
+                .expect("Grok continuation input")
+                .iter()
+                .find(|item| item["type"] == "reasoning")
+                .expect("Grok continuation reasoning");
+            assert_eq!(replayed_reasoning["id"], "rs_grok_spawn");
+            assert!(replayed_reasoning.get("content").is_none());
+        }
 
         let child_request = requests
             .iter()
@@ -792,6 +814,14 @@ async fn grok_root_inherits_history_into_grok_child() -> Result<()> {
     let child_body: Value = child_request.body_json()?;
     assert_eq!(child_body["model"], "grok-4.6");
     assert!(child_body.to_string().contains(root_prompt));
+    assert!(
+        child_body["input"]
+            .as_array()
+            .expect("Grok child input")
+            .iter()
+            .filter(|item| item["type"] == "reasoning")
+            .all(|item| item.get("content").is_none())
+    );
     assert!(child_request.headers.contains_key("x-grok-conv-id"));
     Ok(())
 }

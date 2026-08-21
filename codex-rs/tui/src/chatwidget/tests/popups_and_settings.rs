@@ -3130,6 +3130,15 @@ async fn model_selection_popup_snapshot() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_selection_popup", popup);
+    assert_eq!(popup.matches("xai/grok-4.6").count(), 1);
+    assert_eq!(popup.matches("xai/grok-4.5").count(), 1);
+
+    for character in "grok-4.5".chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(character)));
+    }
+    let filtered = render_bottom_popup(&chat, /*width*/ 80);
+    assert_eq!(filtered.matches("xai/grok-4.5").count(), 1);
+    assert!(!filtered.contains("xai/grok-4.6"));
 }
 
 #[tokio::test]

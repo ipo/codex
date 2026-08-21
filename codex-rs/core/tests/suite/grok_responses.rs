@@ -49,18 +49,35 @@ async fn grok_responses_conformance_and_tool_continuation() -> Result<()> {
         "plan": [{"step":"Finish","status":"completed"}],
     })
     .to_string();
-    let reasoning = responses::ev_reasoning_item("rs-grok", &["Checked the plan"], &[]);
-    let encrypted_reasoning = reasoning["item"]["encrypted_content"]
-        .as_str()
-        .expect("encrypted reasoning")
-        .to_string();
+    let encrypted_reasoning = format!("gAAAAAB{}", "A".repeat(1_459));
+    let reasoning = json!({
+        "type": "response.output_item.done",
+        "item": {
+            "id": "rs_grok_replay",
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [{"type": "summary_text", "text": "Checked the plan"}],
+            "encrypted_content": encrypted_reasoning,
+        }
+    });
+    let function_call = json!({
+        "type": "response.output_item.done",
+        "item": {
+            "id": "fc_grok_replay",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call-plan",
+            "name": "update_plan",
+            "arguments": plan_args,
+        }
+    });
     let mock = responses::mount_sse_sequence(
         &server,
         vec![
             responses::sse(vec![
                 responses::ev_response_created("resp-grok-1"),
                 reasoning,
-                responses::ev_function_call("call-plan", "update_plan", &plan_args),
+                function_call,
                 responses::ev_completed("resp-grok-1"),
             ]),
             responses::sse(vec![
@@ -173,15 +190,31 @@ async fn grok_responses_conformance_and_tool_continuation() -> Result<()> {
         second["prompt_cache_key"],
         first.body_json()["prompt_cache_key"]
     );
+    let replay = second["input"].as_array().expect("second input");
+    let reasoning_index = replay
+        .iter()
+        .position(|item| item["type"] == "reasoning")
+        .expect("replayed reasoning");
     assert_eq!(
-        second["input"]
-            .as_array()
-            .expect("second input")
-            .iter()
-            .find(|item| item["type"] == "reasoning")
-            .and_then(|item| item["encrypted_content"].as_str()),
-        Some(encrypted_reasoning.as_str())
+        replay[reasoning_index],
+        json!({
+            "id": "rs_grok_replay",
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Checked the plan"}],
+            "encrypted_content": encrypted_reasoning,
+        })
     );
-    assert!(!requests[1].function_call_output("call-plan").is_null());
+    assert_eq!(
+        replay[reasoning_index + 1],
+        json!({
+            "id": "fc_grok_replay",
+            "type": "function_call",
+            "call_id": "call-plan",
+            "name": "update_plan",
+            "arguments": plan_args,
+        })
+    );
+    assert_eq!(replay[reasoning_index + 2]["type"], "function_call_output");
+    assert_eq!(replay[reasoning_index + 2]["call_id"], "call-plan");
     Ok(())
 }

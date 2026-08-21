@@ -1555,3 +1555,31 @@ fn bundled_grok_profiles_resolve_exact_request_contracts() {
         ]
     );
 }
+
+#[test]
+fn bundled_grok_profiles_are_visible_picker_rows_with_searchable_aliases() {
+    let catalog = bundled_models_response().expect("bundled catalog should parse");
+    let actual = catalog
+        .models
+        .into_iter()
+        .map(ModelPreset::from)
+        .filter(|preset| preset.model.starts_with("xai/grok-"))
+        .map(|preset| (preset.model, preset.aliases, preset.show_in_picker))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        actual,
+        vec![
+            (
+                "xai/grok-4.6".to_string(),
+                vec!["grok-4.6".to_string()],
+                true,
+            ),
+            (
+                "xai/grok-4.5".to_string(),
+                vec!["grok-4.5".to_string()],
+                true,
+            ),
+        ]
+    );
+}

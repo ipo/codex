@@ -2,6 +2,7 @@ use super::*;
 use codex_model_provider_info::ResolvedWireRoute;
 use codex_protocol::model_inference::GrokInferenceConfig;
 use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::models::render_plaintext_agent_message;
 
 const GROK_RESPONSES_ENDPOINT: &str = "/responses";
 
@@ -54,10 +55,52 @@ impl ModelClientSession {
             self.client.state.auth_env_telemetry.clone(),
         );
 
+        let mut input = Vec::with_capacity(prompt.input.len());
+        for (index, mut item) in prompt
+            .get_formatted_input_for_request(/*use_responses_lite*/ false)
+            .into_iter()
+            .enumerate()
+        {
+            if let ResponseItem::AgentMessage {
+                author,
+                recipient,
+                content,
+                ..
+            } = &item
+            {
+                let text = render_plaintext_agent_message(author, recipient, content).ok_or_else(
+                    || {
+                        CodexErr::InvalidRequest(format!(
+                            "Grok history item at index {index} contains a non-plaintext structured agent message"
+                        ))
+                    },
+                )?;
+                input.push(ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![ContentItem::InputText { text }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                });
+                continue;
+            }
+            if let ResponseItem::Reasoning { content, .. } = &mut item
+                && content.is_none()
+            {
+                // Grok binds encrypted reasoning to the exact surrounding item. The
+                // protocol's ordinary Responses serialization emits `content: null`
+                // for an absent field, but Grok's response omits it. An empty vector
+                // preserves that omission through the existing serializer without
+                // discarding the encrypted reasoning blob.
+                *content = Some(Vec::new());
+            }
+            input.push(item);
+        }
+
         let mut request = ResponsesApiRequest {
             model: plan.config.wire_model.clone(),
             instructions: prompt.base_instructions.text.clone(),
-            input: prompt.get_formatted_input_for_request(/*use_responses_lite*/ false),
+            input,
             tools: Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
             tool_choice: "auto".to_string(),
             parallel_tool_calls: prompt.parallel_tool_calls,
