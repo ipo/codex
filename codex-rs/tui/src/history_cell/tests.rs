@@ -2305,8 +2305,8 @@ fn reasoning_summary_block() {
 }
 
 #[test]
-fn kimi_reasoning_live_display_keeps_every_accumulated_line() {
-    let cell = KimiReasoningCell::live(
+fn raw_reasoning_live_display_keeps_every_accumulated_line() {
+    let cell = RawReasoningCell::live(
         "first line\nsecond line wraps here\nthird line".to_string(),
         /*animations_enabled*/ false,
     );
@@ -2334,8 +2334,8 @@ fn kimi_reasoning_live_display_keeps_every_accumulated_line() {
 }
 
 #[test]
-fn kimi_reasoning_completed_is_full_dim_italic_content() {
-    let cell = KimiReasoningCell::completed("first line\nsecond line\nthird line".to_string());
+fn raw_reasoning_completed_is_full_dim_italic_content() {
+    let cell = RawReasoningCell::completed("first line\nsecond line\nthird line".to_string());
     let lines = cell.display_lines(/*width*/ 12);
 
     insta::assert_snapshot!(render_lines(&lines).join("\n"), @r"

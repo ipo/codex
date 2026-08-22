@@ -5,4 +5,4 @@
 /**
  * Catalog-owned policy for presenting a model's reasoning output.
  */
-export type ModelReasoningDisplay = "summary" | "kimiRaw";
+export type ModelReasoningDisplay = "summary" | "raw" | "kimiRaw";

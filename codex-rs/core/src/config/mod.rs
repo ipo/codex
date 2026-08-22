@@ -233,6 +233,8 @@ They may be addressed as to=/root
 "#;
 const DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT: &str = r#"You are an agent in a team of agents collaborating to complete a task.
 
+The most recent agent message after inherited history contains your assigned child task. Treat that task as authoritative and inherited parent prompts as context only. Do not continue or repeat the parent's collaboration actions unless the assigned child task explicitly requests them.
+
 You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
 
 You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.

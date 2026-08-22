@@ -56,6 +56,7 @@ pub enum InferenceDialect {
     ClaudeCode,
     Kimi,
     Grok,
+    LlamaCpp,
 }
 
 impl fmt::Display for InferenceDialect {
@@ -65,6 +66,7 @@ impl fmt::Display for InferenceDialect {
             Self::ClaudeCode => "claude_code",
             Self::Kimi => "kimi",
             Self::Grok => "grok",
+            Self::LlamaCpp => "llama_cpp",
         })
     }
 }
@@ -75,6 +77,7 @@ pub enum ModelFamily {
     Anthropic,
     Kimi,
     Grok,
+    LlamaCpp,
 }
 
 impl fmt::Display for ModelFamily {
@@ -84,6 +87,7 @@ impl fmt::Display for ModelFamily {
             Self::Anthropic => "anthropic",
             Self::Kimi => "kimi",
             Self::Grok => "grok",
+            Self::LlamaCpp => "llama_cpp",
         })
     }
 }
@@ -124,6 +128,19 @@ pub struct GrokInferenceConfig {
     pub wire_model: String,
 }
 
+/// Direct Responses contract for a model hosted by the managed llama.cpp server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct LlamaCppInferenceConfig {
+    pub wire_api: WireApi,
+    pub dialect: InferenceDialect,
+    pub route: String,
+    pub expected_model_basename: String,
+    pub context_window: u32,
+    pub max_input_tokens: u32,
+    pub max_output_tokens: u32,
+    pub safety_margin_tokens: u32,
+}
+
 /// Model-family specialization and the named provider route it requires.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(tag = "family", rename_all = "snake_case")]
@@ -145,6 +162,7 @@ pub enum ModelInferenceConfig {
     },
     Kimi(KimiInferenceConfig),
     Grok(GrokInferenceConfig),
+    LlamaCpp(LlamaCppInferenceConfig),
 }
 
 impl ModelInferenceConfig {
@@ -158,6 +176,8 @@ impl ModelInferenceConfig {
     ];
     const GROK_ROUTE_CONTRACTS: &'static [(WireApi, InferenceDialect)] =
         &[(WireApi::Responses, InferenceDialect::Grok)];
+    const LLAMA_CPP_ROUTE_CONTRACTS: &'static [(WireApi, InferenceDialect)] =
+        &[(WireApi::Responses, InferenceDialect::LlamaCpp)];
 
     pub fn family(&self) -> ModelFamily {
         match self {
@@ -165,6 +185,7 @@ impl ModelInferenceConfig {
             Self::Anthropic { .. } => ModelFamily::Anthropic,
             Self::Kimi(_) => ModelFamily::Kimi,
             Self::Grok(_) => ModelFamily::Grok,
+            Self::LlamaCpp(_) => ModelFamily::LlamaCpp,
         }
     }
 
@@ -184,6 +205,7 @@ impl ModelInferenceConfig {
             } => (*wire_api, *dialect, route),
             Self::Kimi(config) => (config.wire_api, config.dialect, &config.route),
             Self::Grok(config) => (config.wire_api, config.dialect, &config.route),
+            Self::LlamaCpp(config) => (config.wire_api, config.dialect, &config.route),
         }
     }
 
@@ -194,6 +216,7 @@ impl ModelInferenceConfig {
             Self::Anthropic { .. } => Self::ANTHROPIC_ROUTE_CONTRACTS,
             Self::Kimi(_) => Self::KIMI_ROUTE_CONTRACTS,
             Self::Grok(_) => Self::GROK_ROUTE_CONTRACTS,
+            Self::LlamaCpp(_) => Self::LLAMA_CPP_ROUTE_CONTRACTS,
         }
     }
 

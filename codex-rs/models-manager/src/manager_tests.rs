@@ -1583,3 +1583,80 @@ fn bundled_grok_profiles_are_visible_picker_rows_with_searchable_aliases() {
         ]
     );
 }
+
+#[test]
+fn bundled_local_qwen_profile_has_exact_picker_and_inference_contract() {
+    let catalog = bundled_models_response().expect("bundled catalog should parse");
+    let model = catalog
+        .models
+        .iter()
+        .find(|model| model.slug == "local/qwen3.8-27b")
+        .expect("local Qwen model");
+    assert_eq!(
+        json!({
+            "slug": model.slug,
+            "display_name": model.display_name,
+            "aliases": model.aliases,
+            "context_window": model.context_window,
+            "max_context_window": model.max_context_window,
+            "auto_compact_token_limit": model.auto_compact_token_limit,
+            "default_reasoning_level": model.default_reasoning_level,
+            "supported_reasoning_levels": model.supported_reasoning_levels,
+            "default_reasoning_summary": model.default_reasoning_summary,
+            "input_modalities": model.input_modalities,
+            "tool_mode": model.tool_mode,
+            "disabled_tools": model.disabled_tools,
+            "history_compatibility_group": model.history_compatibility_group,
+            "multi_agent_version": model.multi_agent_version,
+            "inference": model.inference,
+        }),
+        json!({
+            "slug": "local/qwen3.8-27b",
+            "display_name": "Qwen3.8 27B Local",
+            "aliases": ["qwen3.8-27b"],
+            "context_window": 240128,
+            "max_context_window": 240128,
+            "auto_compact_token_limit": 230912,
+            "default_reasoning_level": "low",
+            "supported_reasoning_levels": [
+                {"effort":"none","description":"Disable thinking"},
+                {"effort":"low","description":"Brief focused thinking"},
+                {"effort":"medium","description":"Balanced thinking"},
+                {"effort":"xhigh","description":"Most extensive thinking"}
+            ],
+            "default_reasoning_summary": "none",
+            "input_modalities": ["text"],
+            "tool_mode": "direct",
+            "disabled_tools": ["tool_search", "web_search", "image_generation", "codex_apps"],
+            "history_compatibility_group": "local_llama_cpp_qwen3_8",
+            "multi_agent_version": "v2",
+            "inference": {
+                "family": "llama_cpp",
+                "wire_api": "responses",
+                "dialect": "llama_cpp",
+                "route": "llama_cpp",
+                "expected_model_basename": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+                "context_window": 240128,
+                "max_input_tokens": 230912,
+                "max_output_tokens": 8192,
+                "safety_margin_tokens": 1024
+            }
+        })
+    );
+
+    let preset = ModelPreset::from(model.clone());
+    assert_eq!(
+        (
+            preset.model,
+            preset.aliases,
+            preset.show_in_picker,
+            preset.reasoning_display,
+        ),
+        (
+            "local/qwen3.8-27b".to_string(),
+            vec!["qwen3.8-27b".to_string()],
+            true,
+            codex_protocol::openai_models::ModelReasoningDisplay::Raw,
+        )
+    );
+}

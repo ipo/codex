@@ -13436,6 +13436,7 @@
         "description": "Catalog-owned policy for presenting a model's reasoning output.",
         "enum": [
           "summary",
+          "raw",
           "kimiRaw"
         ],
         "type": "string"

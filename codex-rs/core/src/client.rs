@@ -167,6 +167,7 @@ const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 mod claude_dispatch;
 mod grok_dispatch;
 pub(crate) mod kimi_dispatch;
+mod llama_cpp_dispatch;
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -1956,6 +1957,18 @@ impl ModelClientSession {
                     responses_metadata,
                     inference_trace,
                     grok_dispatch::GrokPlan { config, route },
+                )
+                .await
+            }
+            codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { config, route } => {
+                self.stream_llama_cpp(
+                    prompt,
+                    model_info,
+                    session_telemetry,
+                    effort,
+                    responses_metadata,
+                    inference_trace,
+                    llama_cpp_dispatch::LlamaCppPlan { config, route },
                 )
                 .await
             }

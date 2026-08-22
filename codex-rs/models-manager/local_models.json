@@ -1,0 +1,44 @@
+{
+  "models": [
+    {
+      "slug": "local/qwen3.8-27b",
+      "inherits": "gpt-5.6-sol",
+      "display_name": "Qwen3.8 27B Local",
+      "description": "Locally hosted Qwen3.8 27B through llama.cpp.",
+      "default_reasoning_level": "low",
+      "supported_reasoning_levels": [
+        { "effort": "none", "description": "Disable thinking" },
+        { "effort": "low", "description": "Brief focused thinking" },
+        { "effort": "medium", "description": "Balanced thinking" },
+        { "effort": "xhigh", "description": "Most extensive thinking" }
+      ],
+      "default_reasoning_summary": "none",
+      "priority": 36,
+      "context_window": 240128,
+      "max_context_window": 240128,
+      "auto_compact_token_limit": 230912,
+      "effective_context_window_percent": 100,
+      "input_modalities": ["text"],
+      "visibility": "list",
+      "support_verbosity": false,
+      "default_verbosity": null,
+      "supports_parallel_tool_calls": true,
+      "tool_mode": "direct",
+      "disabled_tools": ["tool_search", "web_search", "image_generation", "codex_apps"],
+      "aliases": ["qwen3.8-27b"],
+      "history_compatibility_group": "local_llama_cpp_qwen3_8",
+      "multi_agent_version": "v2",
+      "inference": {
+        "family": "llama_cpp",
+        "wire_api": "responses",
+        "dialect": "llama_cpp",
+        "route": "llama_cpp",
+        "expected_model_basename": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+        "context_window": 240128,
+        "max_input_tokens": 230912,
+        "max_output_tokens": 8192,
+        "safety_margin_tokens": 1024
+      }
+    }
+  ]
+}

@@ -85,6 +85,11 @@ test *args:
 test *args:
     $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; $env:NEXTEST_PROFILE = "local"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
 
+# Build the MCP fixture required by the local llama.cpp integration suite before running it.
+test-llama-cpp:
+    cargo build -p codex-rmcp-client --bin test_stdio_server
+    just test -p codex-core llama_cpp
+
 # Run from the repository root so scripts that resolve paths from `cwd` see
 # the same layout they use in GitHub Actions.
 [no-cd]

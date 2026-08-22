@@ -23,7 +23,7 @@ impl ChatWidget {
         self.bottom_pane
             .set_queue_submissions(/*queue_submissions*/ false);
         if previous_thread_id != self.thread_id {
-            self.reset_kimi_reasoning_for_thread();
+            self.reset_raw_reasoning_for_thread();
             self.review.recent_auto_review_denials = RecentAutoReviewDenials::default();
         }
         self.refresh_plan_mode_nudge();

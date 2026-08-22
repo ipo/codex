@@ -6,6 +6,7 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::KimiInferenceConfig;
 use codex_protocol::model_inference::KimiThinkingPolicy;
+use codex_protocol::model_inference::LlamaCppInferenceConfig;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ConfigShellToolType;
@@ -13,7 +14,6 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::TruncationPolicyConfig;
-use codex_protocol::openai_models::default_input_modalities;
 use serde_json::json;
 use std::path::Path;
 
@@ -23,6 +23,18 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         slug: preset.id.clone(),
         inference: match preset.reasoning_display {
             codex_protocol::openai_models::ModelReasoningDisplay::Summary => None,
+            codex_protocol::openai_models::ModelReasoningDisplay::Raw => {
+                Some(ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::LlamaCpp,
+                    route: "llama_cpp".to_string(),
+                    expected_model_basename: "model.gguf".to_string(),
+                    context_window: 240_128,
+                    max_input_tokens: 230_912,
+                    max_output_tokens: 8_192,
+                    safety_margin_tokens: 1_024,
+                }))
+            }
             codex_protocol::openai_models::ModelReasoningDisplay::KimiRaw => {
                 Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
                     wire_api: WireApi::ChatCompletions,
@@ -73,7 +85,7 @@ fn preset_to_info(preset: &ModelPreset, priority: i32) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         disabled_tools: Vec::new(),
-        input_modalities: default_input_modalities(),
+        input_modalities: preset.input_modalities.clone(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         use_responses_lite: false,

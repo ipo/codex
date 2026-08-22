@@ -208,6 +208,7 @@ pub struct ModelServiceTier {
 pub enum ModelReasoningDisplay {
     #[default]
     Summary,
+    Raw,
     KimiRaw,
 }
 
@@ -686,6 +687,7 @@ impl From<ModelInfo> for ModelPreset {
         let supports_personality = info.supports_personality();
         let reasoning_display = match info.inference {
             Some(ModelInferenceConfig::Kimi(_)) => ModelReasoningDisplay::KimiRaw,
+            Some(ModelInferenceConfig::LlamaCpp(_)) => ModelReasoningDisplay::Raw,
             Some(ModelInferenceConfig::Grok(_))
             | Some(ModelInferenceConfig::OpenAi { .. })
             | Some(ModelInferenceConfig::Anthropic { .. })
@@ -1322,8 +1324,9 @@ mod tests {
     }
 
     #[test]
-    fn model_reasoning_display_comes_only_from_exact_kimi_inference() {
+    fn model_reasoning_display_comes_from_exact_native_inference_family() {
         use crate::model_inference::KimiInferenceConfig;
+        use crate::model_inference::LlamaCppInferenceConfig;
 
         let kimi = ModelPreset::from(ModelInfo {
             slug: "neutral-model".to_string(),
@@ -1342,17 +1345,37 @@ mod tests {
             inference: None,
             ..test_model(/*spec*/ None)
         });
+        let local = ModelPreset::from(ModelInfo {
+            slug: "neutral-local-model".to_string(),
+            inference: Some(ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
+                wire_api: crate::model_inference::WireApi::Responses,
+                dialect: crate::model_inference::InferenceDialect::LlamaCpp,
+                route: "llama_cpp".to_string(),
+                expected_model_basename: "model.gguf".to_string(),
+                context_window: 100,
+                max_input_tokens: 80,
+                max_output_tokens: 10,
+                safety_margin_tokens: 10,
+            })),
+            ..test_model(/*spec*/ None)
+        });
 
         assert_eq!(
-            (kimi.reasoning_display, misleading_slug.reasoning_display),
+            (
+                kimi.reasoning_display,
+                local.reasoning_display,
+                misleading_slug.reasoning_display,
+            ),
             (
                 ModelReasoningDisplay::KimiRaw,
+                ModelReasoningDisplay::Raw,
                 ModelReasoningDisplay::Summary
             )
         );
         assert_eq!(
-            serde_json::to_value(kimi.reasoning_display).expect("serialize reasoning display"),
-            serde_json::json!("kimiRaw")
+            serde_json::to_value((kimi.reasoning_display, local.reasoning_display))
+                .expect("serialize reasoning displays"),
+            serde_json::json!(["kimiRaw", "raw"])
         );
     }
 

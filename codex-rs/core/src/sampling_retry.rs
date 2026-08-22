@@ -52,6 +52,7 @@ pub(crate) enum SamplingRetryPolicy {
     Responses { max_retries: u64 },
     NativeClaude { max_retries: u64 },
     NativeKimi { max_retries: u64 },
+    LocalLlamaCpp { max_retries: u64 },
 }
 
 impl SamplingRetryPolicy {
@@ -72,6 +73,9 @@ impl SamplingRetryPolicy {
             ResolvedInferencePlan::Grok { route, .. } => Self::Responses {
                 max_retries: route.stream_max_retries,
             },
+            ResolvedInferencePlan::LlamaCpp { route, .. } => Self::LocalLlamaCpp {
+                max_retries: route.stream_max_retries,
+            },
             ResolvedInferencePlan::Legacy { .. } | ResolvedInferencePlan::OpenAi { .. } => {
                 Self::Responses {
                     max_retries: provider.stream_max_retries(),
@@ -82,7 +86,7 @@ impl SamplingRetryPolicy {
 
     pub(crate) fn is_retryable(self, error: &CodexErr) -> bool {
         match self {
-            Self::Responses { .. } => error.is_retryable(),
+            Self::Responses { .. } | Self::LocalLlamaCpp { .. } => error.is_retryable(),
             Self::NativeClaude { .. } | Self::NativeKimi { .. } => {
                 matches!(error.details(), CodexErrorDetails::Stream(_))
             }

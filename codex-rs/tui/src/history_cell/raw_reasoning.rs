@@ -11,14 +11,14 @@ use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
 
 #[derive(Debug)]
-pub(crate) struct KimiReasoningCell {
+pub(crate) struct RawReasoningCell {
     text: String,
     live: bool,
     motion_mode: MotionMode,
     started_at: Instant,
 }
 
-impl KimiReasoningCell {
+impl RawReasoningCell {
     pub(crate) fn live(text: String, animations_enabled: bool) -> Self {
         Self {
             text,
@@ -80,7 +80,7 @@ impl KimiReasoningCell {
     }
 }
 
-impl HistoryCell for KimiReasoningCell {
+impl HistoryCell for RawReasoningCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         if self.live {
             self.live_lines(width)

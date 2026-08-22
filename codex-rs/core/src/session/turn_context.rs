@@ -232,6 +232,11 @@ impl TurnContext {
             Some(ModelInferenceConfig::Anthropic {
                 max_output_tokens, ..
             }) => i64::from(*max_output_tokens),
+            Some(ModelInferenceConfig::LlamaCpp(config)) => i64::from(
+                config
+                    .max_output_tokens
+                    .saturating_add(config.safety_margin_tokens),
+            ),
             Some(ModelInferenceConfig::OpenAi { .. })
             | Some(ModelInferenceConfig::Kimi(_))
             | Some(ModelInferenceConfig::Grok(_))

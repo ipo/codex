@@ -82,6 +82,18 @@ fn model_family_controls_supported_wire_and_dialect_contracts() {
             wire_model: "model".to_string(),
         })
     };
+    let llama_cpp = |wire_api, dialect| {
+        ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
+            wire_api,
+            dialect,
+            route: "llama_cpp".to_string(),
+            expected_model_basename: "Qwen3.8-27B-UD-Q4_K_XL.gguf".to_string(),
+            context_window: 240_128,
+            max_input_tokens: 230_912,
+            max_output_tokens: 8_192,
+            safety_margin_tokens: 1_024,
+        })
+    };
 
     assert_eq!(
         [
@@ -97,11 +109,52 @@ fn model_family_controls_supported_wire_and_dialect_contracts() {
             grok(WireApi::Responses, InferenceDialect::Grok).route_contract_is_supported(),
             grok(WireApi::ChatCompletions, InferenceDialect::Grok).route_contract_is_supported(),
             grok(WireApi::Responses, InferenceDialect::OpenAi).route_contract_is_supported(),
+            llama_cpp(WireApi::Responses, InferenceDialect::LlamaCpp).route_contract_is_supported(),
+            llama_cpp(WireApi::ChatCompletions, InferenceDialect::LlamaCpp)
+                .route_contract_is_supported(),
+            llama_cpp(WireApi::Responses, InferenceDialect::OpenAi).route_contract_is_supported(),
         ],
         [
-            true, false, true, false, true, true, false, true, false, false
+            true, false, true, false, true, true, false, true, false, false, true, false, false,
         ]
     );
+}
+
+#[test]
+fn llama_cpp_metadata_round_trips_its_local_contract() {
+    let config = ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::LlamaCpp,
+        route: "llama_cpp".to_string(),
+        expected_model_basename: "Qwen3.8-27B-UD-Q4_K_XL.gguf".to_string(),
+        context_window: 240_128,
+        max_input_tokens: 230_912,
+        max_output_tokens: 8_192,
+        safety_margin_tokens: 1_024,
+    });
+
+    let value = serde_json::to_value(&config).expect("serialize llama.cpp inference config");
+    assert_eq!(
+        value,
+        json!({
+            "family": "llama_cpp",
+            "wire_api": "responses",
+            "dialect": "llama_cpp",
+            "route": "llama_cpp",
+            "expected_model_basename": "Qwen3.8-27B-UD-Q4_K_XL.gguf",
+            "context_window": 240128,
+            "max_input_tokens": 230912,
+            "max_output_tokens": 8192,
+            "safety_margin_tokens": 1024
+        })
+    );
+    assert_eq!(
+        serde_json::from_value::<ModelInferenceConfig>(value)
+            .expect("deserialize llama.cpp inference config"),
+        config
+    );
+    assert_eq!(config.family(), ModelFamily::LlamaCpp);
+    assert!(!config.supports_responses_capabilities());
 }
 
 #[test]

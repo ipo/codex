@@ -17,6 +17,7 @@ use codex_protocol::model_inference::AnthropicThinkingPolicy;
 use codex_protocol::model_inference::GrokInferenceConfig;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::KimiInferenceConfig;
+use codex_protocol::model_inference::LlamaCppInferenceConfig;
 use codex_protocol::model_inference::ModelInferenceConfig;
 pub use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ModelInfo;
@@ -47,6 +48,8 @@ pub const CLAUDEFLARE_RESPONSES_BASE_URL: &str = "http://127.0.0.1:8080/v1/ccfla
 pub const CLAUDEFLARE_CLAUDE_BASE_URL: &str = "http://127.0.0.1:8080/v1/claude-code";
 pub const CLAUDEFLARE_KIMI_BASE_URL: &str = "http://127.0.0.1:8080/v1/kimi";
 pub const CLAUDEFLARE_GROK_BASE_URL: &str = "http://127.0.0.1:8080/v1/grok";
+pub const LLAMA_CPP_QWEN_BASE_URL: &str =
+    "http://[fd01:1d12:c7b4:c69f:4a96:4849:f3e1:533a]:8080/v1";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 pub const AMAZON_BEDROCK_GPT_5_5_MODEL_ID: &str = "openai.gpt-5.5";
@@ -115,6 +118,10 @@ pub enum ResolvedInferencePlan {
         config: GrokInferenceConfig,
         route: ResolvedWireRoute,
     },
+    LlamaCpp {
+        config: LlamaCppInferenceConfig,
+        route: ResolvedWireRoute,
+    },
 }
 
 impl ResolvedInferencePlan {
@@ -124,7 +131,8 @@ impl ResolvedInferencePlan {
             | Self::OpenAi { route, .. }
             | Self::Anthropic { route, .. }
             | Self::Kimi { route, .. }
-            | Self::Grok { route, .. } => route,
+            | Self::Grok { route, .. }
+            | Self::LlamaCpp { route, .. } => route,
         }
     }
 }
@@ -346,6 +354,10 @@ impl ModelProviderInfo {
                 route: self.resolve_named_route(model, inference)?,
             },
             ModelInferenceConfig::Grok(config) => ResolvedInferencePlan::Grok {
+                config: config.clone(),
+                route: self.resolve_named_route(model, inference)?,
+            },
+            ModelInferenceConfig::LlamaCpp(config) => ResolvedInferencePlan::LlamaCpp {
                 config: config.clone(),
                 route: self.resolve_named_route(model, inference)?,
             },
@@ -695,6 +707,19 @@ pub fn built_in_model_providers(
                     query_params: None,
                     request_max_retries: Some(0),
                     stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "llama_cpp".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::LlamaCpp,
+                    base_url: LLAMA_CPP_QWEN_BASE_URL.to_string(),
+                    request_path: "responses".to_string(),
+                    query_params: None,
+                    request_max_retries: Some(0),
+                    stream_max_retries: Some(5),
                     stream_idle_timeout_ms: None,
                 },
             ),

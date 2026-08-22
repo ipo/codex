@@ -262,7 +262,8 @@ async fn run_compact_task_inner_impl(
     let max_retries = match retry_policy {
         SamplingRetryPolicy::Responses { max_retries }
         | SamplingRetryPolicy::NativeClaude { max_retries }
-        | SamplingRetryPolicy::NativeKimi { max_retries } => max_retries,
+        | SamplingRetryPolicy::NativeKimi { max_retries }
+        | SamplingRetryPolicy::LocalLlamaCpp { max_retries } => max_retries,
     };
     let mut retries = 0;
     let mut client_session = sess.services.model_client.new_session();
@@ -336,7 +337,8 @@ async fn run_compact_task_inner_impl(
                     let delay = match retry_policy {
                         SamplingRetryPolicy::Responses { .. } => crate::util::backoff(retries),
                         SamplingRetryPolicy::NativeClaude { .. }
-                        | SamplingRetryPolicy::NativeKimi { .. } => {
+                        | SamplingRetryPolicy::NativeKimi { .. }
+                        | SamplingRetryPolicy::LocalLlamaCpp { .. } => {
                             retry_scheduler.delay(&e, retries)
                         }
                     };

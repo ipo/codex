@@ -1305,6 +1305,7 @@ async fn run_sampling_request(
                         retry_policy,
                         SamplingRetryPolicy::NativeClaude { .. }
                             | SamplingRetryPolicy::NativeKimi { .. }
+                            | SamplingRetryPolicy::LocalLlamaCpp { .. }
                     ) && !overflow_compacted
                     {
                         run_auto_compact(
@@ -1360,7 +1361,8 @@ async fn run_sampling_request(
                 .await?;
             }
             SamplingRetryPolicy::NativeClaude { max_retries }
-            | SamplingRetryPolicy::NativeKimi { max_retries } => {
+            | SamplingRetryPolicy::NativeKimi { max_retries }
+            | SamplingRetryPolicy::LocalLlamaCpp { max_retries } => {
                 handle_native_sampling_retry(
                     max_retries,
                     &mut retries,
@@ -2338,6 +2340,12 @@ async fn try_run_sampling_request(
                 let provider_item_id = item.id().map(ToString::to_string);
                 assign_missing_streamed_response_item_id(&mut item, /*active_item*/ None);
                 if let ResponseItem::CustomToolCall {
+                    call_id,
+                    name,
+                    namespace,
+                    ..
+                }
+                | ResponseItem::FunctionCall {
                     call_id,
                     name,
                     namespace,

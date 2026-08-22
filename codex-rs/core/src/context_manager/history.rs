@@ -9,6 +9,7 @@ use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::turn_context::TurnContext;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -148,7 +149,20 @@ impl ContextManager {
 
     /// Returns model-projected history without changing the stored transcript.
     pub(crate) fn for_model_prompt(self, model_info: &ModelInfo) -> Vec<ResponseItem> {
-        let mut items = self.for_prompt(&model_info.input_modalities);
+        let preserved_local_modalities = [
+            InputModality::Text,
+            InputModality::Image,
+            InputModality::Audio,
+        ];
+        let input_modalities: &[InputModality] = if matches!(
+            model_info.inference.as_ref(),
+            Some(ModelInferenceConfig::LlamaCpp(_))
+        ) {
+            &preserved_local_modalities
+        } else {
+            &model_info.input_modalities
+        };
+        let mut items = self.for_prompt(input_modalities);
         if model_info.requires_nonempty_assistant_messages {
             items.retain(|item| !is_empty_assistant_message(item));
         }

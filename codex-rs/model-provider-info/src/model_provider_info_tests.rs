@@ -594,6 +594,19 @@ fn built_in_claudeflare_provider_has_managed_native_routes() {
                         stream_idle_timeout_ms: None,
                     },
                 ),
+                (
+                    "llama_cpp".to_string(),
+                    ModelProviderWireRoute {
+                        wire_api: WireApi::Responses,
+                        dialect: InferenceDialect::LlamaCpp,
+                        base_url: LLAMA_CPP_QWEN_BASE_URL.to_string(),
+                        request_path: "responses".to_string(),
+                        query_params: None,
+                        request_max_retries: Some(0),
+                        stream_max_retries: Some(5),
+                        stream_idle_timeout_ms: None,
+                    },
+                ),
             ]),
             stream_max_retries: Some(10),
             supports_websockets: false,
@@ -638,6 +651,48 @@ fn built_in_claudeflare_resolves_grok_route() {
             },
         }
     );
+}
+
+#[test]
+fn built_in_claudeflare_resolves_direct_unauthenticated_llama_cpp_route() {
+    let provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove(CLAUDEFLARE_PROVIDER_ID)
+        .expect("Claudeflare provider should be built in");
+    let config = LlamaCppInferenceConfig {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::LlamaCpp,
+        route: "llama_cpp".to_string(),
+        expected_model_basename: "Qwen3.8-27B-UD-Q4_K_XL.gguf".to_string(),
+        context_window: 240_128,
+        max_input_tokens: 230_912,
+        max_output_tokens: 8_192,
+        safety_margin_tokens: 1_024,
+    };
+
+    assert_eq!(
+        provider
+            .resolve_inference_contract(
+                "local/qwen3.8-27b",
+                Some(&ModelInferenceConfig::LlamaCpp(config.clone())),
+            )
+            .expect("llama.cpp route should resolve"),
+        ResolvedInferencePlan::LlamaCpp {
+            config,
+            route: ResolvedWireRoute {
+                name: Some("llama_cpp".to_string()),
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::LlamaCpp,
+                base_url: Some(LLAMA_CPP_QWEN_BASE_URL.to_string()),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: 0,
+                stream_max_retries: 5,
+                stream_idle_timeout: Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+            },
+        }
+    );
+    assert!(!provider.supports_websockets);
+    assert!(!provider.requires_openai_auth);
 }
 
 #[test]

@@ -82,6 +82,7 @@ mod json_result;
 mod kimi_dispatch;
 mod kimi_native_conformance;
 mod live_cli;
+mod llama_cpp;
 mod mcp_auth_elicitation;
 mod mcp_auth_refresh;
 #[cfg(unix)]

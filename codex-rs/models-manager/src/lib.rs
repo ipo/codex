@@ -25,7 +25,11 @@ pub fn bundled_models_response()
         .map_err(bundled_catalog_error)?
         .apply(catalog)
         .map_err(bundled_catalog_error)?;
-    ModelCatalogOverlay::from_json(include_str!("../grok_models.json"))
+    let catalog = ModelCatalogOverlay::from_json(include_str!("../grok_models.json"))
+        .map_err(bundled_catalog_error)?
+        .apply(catalog)
+        .map_err(bundled_catalog_error)?;
+    ModelCatalogOverlay::from_json(include_str!("../local_models.json"))
         .map_err(bundled_catalog_error)?
         .apply(catalog)
         .map_err(bundled_catalog_error)

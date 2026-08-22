@@ -112,7 +112,7 @@ pub(crate) fn requires_function_tool_specs(turn_context: &TurnContext) -> bool {
     native_wire(turn_context)
         || matches!(
             turn_context.model_info.inference,
-            Some(ModelInferenceConfig::Grok(_))
+            Some(ModelInferenceConfig::Grok(_) | ModelInferenceConfig::LlamaCpp(_))
         )
 }
 

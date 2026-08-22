@@ -3,7 +3,7 @@
 //! This module rehydrates turns and items into transcript state while avoiding
 //! live-only side effects.
 
-use super::kimi_reasoning::KimiReasoningOccurrence;
+use super::raw_reasoning::RawReasoningOccurrence;
 use super::*;
 
 impl ChatWidget {
@@ -140,14 +140,14 @@ impl ChatWidget {
                 summary,
                 content,
             } => {
-                if self.kimi_reasoning_visible() {
+                if self.raw_reasoning_visible() {
                     let occurrence = replay_ordinal.map_or_else(
-                        || KimiReasoningOccurrence::live(turn_id.clone(), id.clone()),
+                        || RawReasoningOccurrence::live(turn_id.clone(), id.clone()),
                         |ordinal| {
-                            KimiReasoningOccurrence::replay(turn_id.clone(), id.clone(), ordinal)
+                            RawReasoningOccurrence::replay(turn_id.clone(), id.clone(), ordinal)
                         },
                     );
-                    self.finish_kimi_reasoning(occurrence, content);
+                    self.finish_raw_reasoning(occurrence, content);
                     return;
                 }
                 if from_replay {

@@ -15,6 +15,7 @@ mod tool_config;
 mod tool_definition;
 mod tool_discovery;
 mod tool_executor;
+mod tool_input_validation;
 mod tool_output;
 mod tool_payload;
 mod tool_search;
@@ -99,6 +100,7 @@ pub use tool_discovery::filter_request_plugin_install_discoverable_tools_for_cli
 pub use tool_executor::ToolExecutor;
 pub use tool_executor::ToolExecutorFuture;
 pub use tool_executor::ToolExposure;
+pub use tool_input_validation::validate_tool_input;
 pub use tool_output::JsonToolOutput;
 pub use tool_output::ToolOutput;
 pub use tool_payload::ToolPayload;

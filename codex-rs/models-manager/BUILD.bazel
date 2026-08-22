@@ -6,6 +6,7 @@ codex_rust_crate(
         "claude_models.json",
         "grok_models.json",
         "kimi_models.json",
+        "local_models.json",
         "models.json",
         "prompt.md",
     ],
