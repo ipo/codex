@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::model_inference::WireApi;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -184,6 +185,10 @@ pub(crate) fn namespace_tool_spec_mode(
 
 pub(crate) fn native_wire(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
     model_info.wire_api(turn_context.provider.info().wire_api) != WireApi::Responses
+        || matches!(
+            model_info.inference.as_ref(),
+            Some(ModelInferenceConfig::Grok(_))
+        )
 }
 
 pub(crate) fn wire_supports_encrypted_tool_content(

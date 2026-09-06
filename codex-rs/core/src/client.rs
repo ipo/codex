@@ -173,6 +173,7 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 // period between stream events.
 const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
+mod grok_dispatch;
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -2040,10 +2041,23 @@ impl ModelClientSession {
             codex_model_provider_info::ResolvedInferencePlan::Legacy { route, .. } => {
                 route.wire_api
             }
+            codex_model_provider_info::ResolvedInferencePlan::Grok { config, route } => {
+                return self
+                    .stream_grok(
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                        effort,
+                        summary,
+                        responses_metadata,
+                        inference_trace,
+                        grok_dispatch::GrokPlan { config, route },
+                    )
+                    .await;
+            }
             codex_model_provider_info::ResolvedInferencePlan::OpenAi { .. }
             | codex_model_provider_info::ResolvedInferencePlan::Anthropic { .. }
             | codex_model_provider_info::ResolvedInferencePlan::Kimi { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::Grok { .. }
             | codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { .. } => {
                 return Err(CodexErr::InvalidRequest(format!(
                     "model `{}` declares explicit native inference routing, which is not active in this build",

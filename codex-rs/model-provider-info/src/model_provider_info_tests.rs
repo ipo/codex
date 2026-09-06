@@ -220,6 +220,63 @@ fn named_routes_resolve_every_typed_family_with_route_retry_policy() {
 }
 
 #[test]
+fn built_in_claudeflare_resolves_grok_route() {
+    let provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove(CLAUDEFLARE_PROVIDER_ID)
+        .expect("Claudeflare provider should be built in");
+    let model: ModelInfo = serde_json::from_value(serde_json::json!({
+        "slug": "xai/grok-4.6",
+        "inference": {
+            "family": "grok",
+            "wire_api": "responses",
+            "dialect": "grok",
+            "route": "grok",
+            "wire_model": "grok-4.6"
+        },
+        "display_name": "Grok 4.6",
+        "description": null,
+        "supported_reasoning_levels": [],
+        "shell_type": "unified_exec",
+        "visibility": "none",
+        "supported_in_api": true,
+        "priority": 1,
+        "availability_nux": null,
+        "upgrade": null,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "tokens", "limit": 10000},
+        "experimental_supported_tools": []
+    }))
+    .expect("Grok model fixture");
+
+    assert_eq!(
+        provider
+            .resolve_inference_plan(&model)
+            .expect("Grok route should resolve"),
+        ResolvedInferencePlan::Grok {
+            config: GrokInferenceConfig {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::Grok,
+                route: "grok".to_string(),
+                wire_model: "grok-4.6".to_string(),
+            },
+            route: ResolvedWireRoute {
+                name: Some("grok".to_string()),
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::Grok,
+                base_url: Some(CLAUDEFLARE_GROK_BASE_URL.to_string()),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: 0,
+                stream_max_retries: 10,
+                stream_idle_timeout: Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+            },
+        }
+    );
+}
+
+#[test]
 fn legacy_metadata_and_invalid_native_routes_resolve_before_sampling() {
     let provider = ModelProviderInfo {
         base_url: Some("https://legacy.example/v1".to_string()),

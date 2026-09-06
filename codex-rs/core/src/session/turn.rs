@@ -1402,7 +1402,12 @@ async fn run_sampling_request(
         Arc::clone(&step_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let max_retries = turn_context.provider.info().stream_max_retries();
+    let max_retries = turn_context
+        .provider
+        .info()
+        .resolve_inference_plan(step_context.settings.model_info.as_ref())
+        .map(|plan| plan.route().stream_max_retries)
+        .unwrap_or_else(|_| turn_context.provider.info().stream_max_retries());
     let mut retry_state = ResponsesStreamRetryState::default();
     let mut initial_input = Some(input);
     let mut original_input = None;

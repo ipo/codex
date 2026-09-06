@@ -1697,6 +1697,60 @@ fn bundled_models_json_roundtrips() {
 }
 
 #[test]
+fn bundled_grok_profiles_resolve_exact_request_contracts() {
+    let catalog = bundled_models_response().expect("bundled catalog should parse");
+    let actual = catalog
+        .models
+        .iter()
+        .filter(|model| model.slug.starts_with("xai/grok-"))
+        .map(|model| {
+            json!({
+                "slug": model.slug,
+                "aliases": model.aliases,
+                "context_window": model.context_window,
+                "max_context_window": model.max_context_window,
+                "auto_compact_token_limit": model.auto_compact_token_limit,
+                "history_compatibility_group": model.history_compatibility_group,
+                "default_reasoning_level": model.default_reasoning_level,
+                "supported_reasoning_levels": model.supported_reasoning_levels,
+                "default_reasoning_summary": model.default_reasoning_summary,
+                "supports_search_tool": model.supports_search_tool,
+                "support_verbosity": model.support_verbosity,
+                "tool_mode": model.tool_mode,
+                "multi_agent_version": model.multi_agent_version,
+                "inference": model.inference,
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        vec![
+            json!({"slug":"xai/grok-4.6","aliases":["grok-4.6"],"context_window":500000,
+                "max_context_window":500000,"auto_compact_token_limit":400000,
+                "history_compatibility_group":"grok",
+                "default_reasoning_level":"high","supported_reasoning_levels":[
+                    {"effort":"xhigh","description":"Highest thinking effort"},
+                    {"effort":"high","description":"Higher thinking effort"},
+                    {"effort":"medium","description":"Balanced thinking effort"},
+                    {"effort":"low","description":"Lower thinking effort"}],
+                "default_reasoning_summary":"concise","supports_search_tool":false,
+                "support_verbosity":false,"tool_mode":"direct","multi_agent_version":"v2",
+                "inference":{"family":"grok","wire_api":"responses","dialect":"grok","route":"grok","wire_model":"grok-4.6"}}),
+            json!({"slug":"xai/grok-4.5","aliases":["grok-4.5"],"context_window":500000,
+                "max_context_window":500000,"auto_compact_token_limit":400000,
+                "history_compatibility_group":"grok",
+                "default_reasoning_level":"high","supported_reasoning_levels":[
+                    {"effort":"high","description":"Higher thinking effort"},
+                    {"effort":"medium","description":"Balanced thinking effort"},
+                    {"effort":"low","description":"Lower thinking effort"}],
+                "default_reasoning_summary":"concise","supports_search_tool":false,
+                "support_verbosity":false,"tool_mode":"direct","multi_agent_version":"v2",
+                "inference":{"family":"grok","wire_api":"responses","dialect":"grok","route":"grok","wire_model":"grok-4.5"}}),
+        ]
+    );
+}
+
+#[test]
 fn inference_metadata_is_not_inherited_by_model_name_prefixes() {
     let mut candidate = remote_model("native-model", "Native", /*priority*/ 0);
     candidate.inference = Some(ModelInferenceConfig::Grok(GrokInferenceConfig {

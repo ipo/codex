@@ -45,6 +45,8 @@ const OPENAI_PROVIDER_NAME: &str = "OpenAI";
 const OPENAI_ACTOR_AUTHORIZATION_HEADER: &str = "x-openai-actor-authorization";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+pub const CLAUDEFLARE_PROVIDER_ID: &str = "claudeflare";
+pub const CLAUDEFLARE_GROK_BASE_URL: &str = "http://127.0.0.1:8080/v1/grok";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 const AMAZON_BEDROCK_RUNTIME_PROVIDER_NAME: &str = "Amazon Bedrock Runtime";
@@ -734,6 +736,28 @@ pub fn built_in_model_providers(
     let amazon_bedrock_provider = P::create_amazon_bedrock_provider(/*aws*/ None);
     let amazon_bedrock_runtime_provider =
         P::create_amazon_bedrock_runtime_provider(/*aws*/ None);
+    let claudeflare_provider = ModelProviderInfo {
+        name: "Claudeflare".to_string(),
+        base_url: Some(CLAUDEFLARE_GROK_BASE_URL.to_string()),
+        wire_api: WireApi::Responses,
+        wire_routes: HashMap::from([(
+            "grok".to_string(),
+            ModelProviderWireRoute {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::Grok,
+                base_url: CLAUDEFLARE_GROK_BASE_URL.to_string(),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: Some(0),
+                stream_max_retries: Some(10),
+                stream_idle_timeout_ms: None,
+            },
+        )]),
+        request_max_retries: Some(0),
+        stream_max_retries: Some(10),
+        supports_websockets: false,
+        ..ModelProviderInfo::default()
+    };
 
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
@@ -746,6 +770,7 @@ pub fn built_in_model_providers(
             AMAZON_BEDROCK_RUNTIME_PROVIDER_ID,
             amazon_bedrock_runtime_provider,
         ),
+        (CLAUDEFLARE_PROVIDER_ID, claudeflare_provider),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),

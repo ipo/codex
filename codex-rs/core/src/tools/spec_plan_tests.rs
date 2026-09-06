@@ -23,6 +23,7 @@ use codex_protocol::model_inference::GrokInferenceConfig;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::KimiInferenceConfig;
 use codex_protocol::model_inference::KimiThinkingPolicy;
+use codex_protocol::model_inference::LlamaCppInferenceConfig;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::model_inference::WireApi;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -373,6 +374,34 @@ fn use_native_kimi(turn: &mut TurnContext) {
                 wire_model: "kimi-for-coding".to_string(),
                 max_output_tokens: 32_768,
                 thinking: KimiThinkingPolicy::Required,
+            }));
+    });
+}
+
+fn use_grok(turn: &mut TurnContext) {
+    update_turn_settings_for_test(turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).inference =
+            Some(ModelInferenceConfig::Grok(GrokInferenceConfig {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::Grok,
+                route: "grok".to_string(),
+                wire_model: "grok-4.6".to_string(),
+            }));
+    });
+}
+
+fn use_local_llama(turn: &mut TurnContext) {
+    update_turn_settings_for_test(turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).inference =
+            Some(ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::LlamaCpp,
+                route: "llama_cpp".to_string(),
+                expected_model_basename: "local.gguf".to_string(),
+                context_window: 128_000,
+                max_input_tokens: 96_000,
+                max_output_tokens: 28_000,
+                safety_margin_tokens: 4_000,
             }));
     });
 }
@@ -1610,6 +1639,7 @@ async fn native_models_use_flat_functions_for_plain_patch_and_deferred_tools() {
     for configure_native in [
         use_native_claude as fn(&mut TurnContext),
         use_native_kimi as fn(&mut TurnContext),
+        use_grok as fn(&mut TurnContext),
     ] {
         let plan = probe_with(
             configure_native,
@@ -1642,6 +1672,42 @@ async fn native_models_use_flat_functions_for_plain_patch_and_deferred_tools() {
             &ToolName::namespaced("mcp__direct", "lookup").to_string(),
             &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
         ]);
+    }
+}
+
+#[tokio::test]
+async fn grok_tool_wire_extension_does_not_change_other_responses_families() {
+    for configure_responses in [
+        (|_turn: &mut TurnContext| {}) as fn(&mut TurnContext),
+        use_local_llama as fn(&mut TurnContext),
+    ] {
+        let plan = probe_with(
+            |turn| {
+                configure_responses(turn);
+                update_turn_settings_for_test(turn, |settings| {
+                    Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
+                });
+            },
+            ToolPlanInputs {
+                tool_runtimes: vec![mcp_runtime(
+                    "searchable",
+                    "mcp__searchable",
+                    "lookup",
+                    ToolExposure::Deferred,
+                )],
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        assert!(matches!(
+            plan.visible_spec("apply_patch"),
+            ToolSpec::Freeform(_)
+        ));
+        assert!(matches!(
+            plan.visible_spec("tool_search"),
+            ToolSpec::ToolSearch { .. }
+        ));
     }
 }
 
@@ -1707,6 +1773,7 @@ async fn model_tool_deny_list_hides_only_selected_native_capabilities() {
     for configure_native in [
         use_native_claude as fn(&mut TurnContext),
         use_native_kimi as fn(&mut TurnContext),
+        use_grok as fn(&mut TurnContext),
     ] {
         let plan = probe_with(
             |turn| {
@@ -3139,6 +3206,7 @@ async fn native_multi_agent_v2_message_schemas_require_plaintext() {
     for configure_native in [
         use_native_claude as fn(&mut TurnContext),
         use_native_kimi as fn(&mut TurnContext),
+        use_grok as fn(&mut TurnContext),
     ] {
         let plan = probe(|turn| {
             set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
@@ -3194,10 +3262,11 @@ fn native_collaboration_runtime_preserves_only_plaintext_message() {
 }
 
 #[tokio::test]
-async fn native_claude_and_kimi_plaintext_collaboration_calls_return_continuation_results() {
+async fn native_plaintext_collaboration_calls_return_continuation_results() {
     for configure_native in [
         use_native_claude as fn(&mut TurnContext),
         use_native_kimi as fn(&mut TurnContext),
+        use_grok as fn(&mut TurnContext),
     ] {
         let (session, mut turn) = make_session_and_context().await;
         configure_native(&mut turn);
