@@ -89,6 +89,7 @@ async fn safety_stops_from_both_replay_kinds_do_not_notify() {
                 AppServerTurnStatus::Failed,
                 /*duration_ms*/ None,
                 Some(AppServerTurnError {
+                    misalignment: None,
                     message: "server fallback message".to_string(),
                     codex_error_info: Some(CodexErrorInfo::CyberPolicy),
                     additional_details: None,
@@ -172,6 +173,7 @@ async fn unrelated_errors_and_cyber_verification_warning_do_not_notify() {
     retryable.handle_server_notification(
         ServerNotification::Error(ErrorNotification {
             error: AppServerTurnError {
+                misalignment: None,
                 message: "try again".to_string(),
                 codex_error_info: Some(CodexErrorInfo::CyberPolicy),
                 additional_details: None,
@@ -236,6 +238,7 @@ fn safety_error(
 ) -> ServerNotification {
     ServerNotification::Error(ErrorNotification {
         error: AppServerTurnError {
+            misalignment: None,
             message: message.to_string(),
             codex_error_info,
             additional_details: None,
@@ -258,6 +261,7 @@ fn failed_turn(
             AppServerTurnStatus::Failed,
             /*duration_ms*/ None,
             Some(AppServerTurnError {
+                misalignment: None,
                 message: message.to_string(),
                 codex_error_info,
                 additional_details: None,
