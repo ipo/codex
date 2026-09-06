@@ -106,14 +106,13 @@ async fn handle_spawn_agent(
         step_context,
         payload,
         call_id,
-        source,
         ..
     } = invocation;
     let turn = &step_context.turn;
     let arguments = function_arguments(payload)?;
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
-    let message = message_content(args.message)?;
+    let message = message_content(args.message, args.plaintext_message)?;
     let environments = resolve_spawn_agent_environments(turn.as_ref(), args.cwd.as_deref()).await?;
     let role_name = args
         .agent_type
@@ -126,27 +125,47 @@ async fn handle_spawn_agent(
     let mut config =
         build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
-    apply_requested_spawn_agent_model_overrides(
-        &session,
-        turn.as_ref(),
-        &mut config,
-        args.model.as_deref(),
-        args.reasoning_effort.clone(),
-    )
-    .await?;
-    if !is_full_history_fork || role_name.is_some() {
+    if is_full_history_fork {
+        reject_full_fork_agent_type_override(role_name)?;
+        validate_full_history_spawn_agent_overrides(
+            &session,
+            turn.as_ref(),
+            &config,
+            args.model.as_deref(),
+            args.reasoning_effort.clone(),
+        )
+        .await?;
+    } else {
+        apply_requested_spawn_agent_model_overrides(
+            &session,
+            turn.as_ref(),
+            &mut config,
+            args.model.as_deref(),
+            args.reasoning_effort.clone(),
+        )
+        .await?;
         apply_spawn_agent_role(&session, &mut config, role_name, turn.multi_agent_version).await?;
-        if is_full_history_fork && config.developer_instructions.is_none() {
-            config
-                .developer_instructions
-                .clone_from(&turn.developer_instructions);
-        }
     }
     apply_spawn_agent_service_tier(&session, &mut config).await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
     if args.cwd.is_some() {
         apply_spawn_agent_selected_cwd(&mut config, &environments)?;
     }
+    let child_model_info = if fork_mode.is_some() {
+        validate_inherited_history_compatibility(&session, turn.as_ref(), &config).await?
+    } else {
+        let child_model = config.model.as_deref().ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "spawn_agent could not resolve the child model for message validation".to_string(),
+            )
+        })?;
+        session
+            .services
+            .models_manager
+            .get_model_info(child_model, &config.to_models_manager_config())
+            .await
+    };
+    validate_tool_message_family(turn.model_info(), &child_model_info, &message)?;
 
     // Remember an applied configured default so cold reload reapplies its restrictions.
     let persisted_role_name = role_name.or_else(|| {
@@ -177,25 +196,12 @@ async fn handle_spawn_agent(
         author,
         new_agent_path.clone(),
         message,
-        &source,
         /*trigger_turn*/ true,
     );
     let context = AgentCommunicationContext::new(AgentCommunicationKind::Spawn, session.thread_id);
     let multi_agent_v2_usage_hints =
         if is_full_history_fork && turn.multi_agent_version == MultiAgentVersion::V2 {
-            let child_model_info = match config.model.as_deref() {
-                Some(model) if model != turn.model_info().slug => Some(
-                    session
-                        .services
-                        .models_manager
-                        .get_model_info(model, &config.to_models_manager_config())
-                        .await,
-                ),
-                _ => None,
-            };
             let child_catalog = child_model_info
-                .as_ref()
-                .unwrap_or(turn.model_info())
                 .model_messages
                 .as_ref()
                 .and_then(|messages| messages.multi_agent.as_ref())
@@ -282,7 +288,8 @@ impl CoreToolRuntime for Handler {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SpawnAgentArgs {
-    message: String,
+    message: Option<String>,
+    plaintext_message: Option<String>,
     task_name: String,
     agent_type: Option<String>,
     model: Option<String>,

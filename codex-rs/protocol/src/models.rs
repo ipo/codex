@@ -2243,6 +2243,12 @@ impl CallToolResult {
         self.is_error != Some(true)
     }
 
+    pub fn contains_encrypted_content(&self) -> bool {
+        convert_mcp_content_to_items(&self.content)
+            .iter()
+            .any(|item| matches!(item, FunctionCallOutputContentItem::EncryptedContent { .. }))
+    }
+
     pub fn as_function_call_output_payload(&self) -> FunctionCallOutputPayload {
         let content_items = convert_mcp_content_to_items(&self.content);
         if content_items
@@ -3507,6 +3513,22 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn detects_encrypted_mcp_content_metadata() {
+        let result = CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": "ciphertext",
+                "_meta": {"codex/encryptedContent": true},
+            })],
+            structured_content: None,
+            is_error: None,
+            meta: None,
+        };
+
+        assert!(result.contains_encrypted_content());
     }
 
     #[test]

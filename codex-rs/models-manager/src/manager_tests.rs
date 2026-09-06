@@ -848,6 +848,8 @@ async fn get_model_info_uses_custom_catalog() {
     let config = ModelsManagerConfig::default();
     let mut overlay = remote_model("gpt-overlay", "Overlay", /*priority*/ 0);
     overlay.supports_image_detail_original = true;
+    overlay.history_compatibility_group = Some("explicit-family".to_string());
+    overlay.requires_nonempty_assistant_messages = true;
 
     let manager = static_manager_for_tests(ModelsResponse {
         models: vec![overlay],
@@ -861,7 +863,24 @@ async fn get_model_info_uses_custom_catalog() {
     assert_eq!(model_info.display_name, "Overlay");
     assert_eq!(model_info.context_window, Some(272_000));
     assert!(model_info.supports_image_detail_original);
+    assert_eq!(model_info.history_compatibility_group, None);
+    assert!(!model_info.requires_nonempty_assistant_messages);
     assert!(!model_info.used_fallback_model_metadata);
+}
+
+#[tokio::test]
+async fn get_model_info_preserves_history_metadata_for_exact_catalog_match() {
+    let config = ModelsManagerConfig::default();
+    let mut exact = remote_model("external/exact", "Exact", /*priority*/ 0);
+    exact.history_compatibility_group = Some("external-family".to_string());
+    exact.requires_nonempty_assistant_messages = true;
+    let manager = static_manager_for_tests(ModelsResponse {
+        models: vec![exact.clone()],
+    });
+
+    let model_info = manager.get_model_info(&exact.slug, &config).await;
+
+    assert_eq!(model_info, exact);
 }
 
 #[tokio::test]
@@ -946,6 +965,8 @@ async fn get_model_info_matches_namespaced_suffix() {
     let config = ModelsManagerConfig::default();
     let mut remote = remote_model("gpt-image", "Image", /*priority*/ 0);
     remote.supports_image_detail_original = true;
+    remote.history_compatibility_group = Some("explicit-family".to_string());
+    remote.requires_nonempty_assistant_messages = true;
     let manager = static_manager_for_tests(ModelsResponse {
         models: vec![remote],
     });
@@ -955,6 +976,8 @@ async fn get_model_info_matches_namespaced_suffix() {
 
     assert_eq!(model_info.slug, namespaced_model);
     assert!(model_info.supports_image_detail_original);
+    assert_eq!(model_info.history_compatibility_group, None);
+    assert!(!model_info.requires_nonempty_assistant_messages);
     assert!(!model_info.used_fallback_model_metadata);
 }
 

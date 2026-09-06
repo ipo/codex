@@ -1,5 +1,6 @@
 use super::*;
 use crate::bundled_models_response;
+use codex_protocol::openai_models::ModelToolCapability;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -81,7 +82,9 @@ fn inherited_overlay_models_only_receive_explicit_aliases() {
         {
             "slug": explicit_slug,
             "inherits": parent.slug,
-            "aliases": ["child-alias"]
+            "aliases": ["child-alias"],
+            "history_compatibility_group": "external-family",
+            "requires_nonempty_assistant_messages": true
         }
     ]}))
     .expect("overlay should apply");
@@ -89,9 +92,12 @@ fn inherited_overlay_models_only_receive_explicit_aliases() {
     let mut expected_inherited = parent.clone();
     expected_inherited.slug = inherited_slug.to_string();
     expected_inherited.aliases = Vec::new();
+    expected_inherited.history_compatibility_group = None;
     let mut expected_explicit = parent;
     expected_explicit.slug = explicit_slug.to_string();
     expected_explicit.aliases = vec!["child-alias".to_string()];
+    expected_explicit.history_compatibility_group = Some("external-family".to_string());
+    expected_explicit.requires_nonempty_assistant_messages = true;
     assert_eq!(
         applied.models[applied.models.len() - 2..],
         [expected_inherited, expected_explicit]
@@ -190,9 +196,16 @@ fn allows_typed_inference_and_remaining_staged_deployed_overlay_fields() {
             "wire_model": "grok-4.6"
         },
         "requires_nonempty_assistant_messages": false,
-        "supports_parallel_tool_calls": true
+        "supports_parallel_tool_calls": true,
+        "disabled_tools": ["web_search", "image_generation"]
     }]});
 
-    ModelCatalogOverlay::from_json(&overlay.to_string())
-        .expect("typed and staged deployed fields should remain accepted");
+    let applied = apply(overlay).expect("typed and staged deployed fields should remain accepted");
+    assert_eq!(
+        applied.models[0].disabled_tools,
+        [
+            ModelToolCapability::WebSearch,
+            ModelToolCapability::ImageGeneration,
+        ]
+    );
 }

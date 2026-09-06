@@ -275,9 +275,7 @@ async fn run_compact_task_inner_impl(
 
     let compaction_response_id = loop {
         // Clone is required because of the loop
-        let turn_input = history
-            .clone()
-            .for_prompt(&turn_context.model_info().input_modalities);
+        let turn_input = history.clone().for_model_prompt(turn_context.model_info());
         let turn_input_len = turn_input.len();
         let prompt = Prompt {
             input: turn_input,

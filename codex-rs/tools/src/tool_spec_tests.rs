@@ -6,11 +6,13 @@ use crate::AdditionalProperties;
 use crate::FreeformTool;
 use crate::FreeformToolFormat;
 use crate::JsonSchema;
+use crate::NamespaceToolSpecMode;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use crate::create_tools_json_for_responses_api;
 use crate::create_tools_json_for_responses_lite;
 use crate::create_tools_raw_json_for_responses_api;
+use crate::serialize_tool_specs;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
 use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLocation;
@@ -334,6 +336,66 @@ fn namespace_tool_spec_serializes_expected_wire_shape() {
                 },
             ],
         })
+    );
+}
+
+#[test]
+fn namespace_tools_flatten_to_canonical_top_level_names() {
+    let function = ResponsesApiTool {
+        name: "__lookup_order".to_string(),
+        description: "Look up an order".to_string(),
+        strict: false,
+        defer_loading: Some(true),
+        parameters: JsonSchema::default(),
+        output_schema: Some(json!({"type": "object"})),
+    };
+    let custom = FreeformTool {
+        name: "apply_patch".to_string(),
+        description: "Apply a patch".to_string(),
+        defer_loading: None,
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: "start: \"patch\"".to_string(),
+        },
+    };
+
+    let specs = serialize_tool_specs(
+        [ToolSpec::Namespace(ResponsesApiNamespace {
+            name: "mcp__demo__".to_string(),
+            description: "Demo tools".to_string(),
+            tools: vec![
+                ResponsesApiNamespaceTool::Function(function.clone()),
+                ResponsesApiNamespaceTool::Custom(custom.clone()),
+            ],
+        })],
+        NamespaceToolSpecMode::Flatten,
+    );
+
+    let mut expected_function = function;
+    expected_function.name = "mcp__demo__lookup_order".to_string();
+    let mut expected_custom = custom;
+    expected_custom.name = "mcp__demo__apply_patch".to_string();
+    assert_eq!(
+        specs,
+        vec![
+            ToolSpec::Function(expected_function),
+            ToolSpec::Freeform(expected_custom),
+        ]
+    );
+}
+
+#[test]
+fn preserve_mode_keeps_namespace_wrappers_unchanged() {
+    let specs = vec![ToolSpec::Namespace(ResponsesApiNamespace {
+        name: "mcp__demo".to_string(),
+        description: "Demo tools".to_string(),
+        tools: Vec::new(),
+    })];
+
+    assert_eq!(
+        serialize_tool_specs(specs.clone(), NamespaceToolSpecMode::Preserve),
+        specs
     );
 }
 

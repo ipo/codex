@@ -1,7 +1,9 @@
 mod approvals;
 pub(crate) mod code_mode;
+mod collaboration_wire;
 pub(crate) mod context;
 mod control_tool_analytics;
+mod deferred_tool_state;
 pub(crate) mod events;
 mod executed_tool_calls;
 pub(crate) mod handlers;
@@ -18,6 +20,7 @@ pub(crate) mod sandboxing;
 pub(crate) mod spec_plan;
 pub(crate) mod tool_dispatch_trace;
 mod tool_namespaces_info;
+mod wire_adaptation;
 
 use std::borrow::Cow;
 

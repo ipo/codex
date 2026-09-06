@@ -641,8 +641,11 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         max_context_window: None,
         auto_compact_token_limit: None,
         comp_hash: None,
+        history_compatibility_group: None,
+        requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     };
 
     let mut models_response = serde_json::to_value(ModelsResponse {
@@ -925,8 +928,11 @@ async fn remote_models_apply_legacy_instructions() -> Result<()> {
         max_context_window: None,
         auto_compact_token_limit: None,
         comp_hash: None,
+        history_compatibility_group: None,
+        requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     };
     let mut models_response = serde_json::to_value(ModelsResponse {
         models: vec![remote_model],
@@ -1501,7 +1507,10 @@ fn test_remote_model_with_policy(
         max_context_window: None,
         auto_compact_token_limit: None,
         comp_hash: None,
+        history_compatibility_group: None,
+        requires_nonempty_assistant_messages: false,
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
+        disabled_tools: Vec::new(),
     }
 }

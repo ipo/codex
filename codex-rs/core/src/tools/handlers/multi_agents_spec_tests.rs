@@ -2,6 +2,8 @@ use super::*;
 use crate::tools::handlers::multi_agents_common::model_supports_multi_agent_backend;
 use crate::tools::handlers::multi_agents_spec_model_catalog::MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES;
 use crate::tools::handlers::multi_agents_spec_model_catalog::SPAWN_AGENT_MODEL_CATALOG_TOO_LARGE;
+use crate::tools::handlers::multi_agents_spec_model_catalog::bounded_model_catalog_description;
+use crate::tools::handlers::multi_agents_spec_model_catalog::bounded_model_description;
 use crate::tools::handlers::multi_agents_spec_model_catalog::preferred_spawn_agent_model_selector;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::openai_models::ModelPreset;
@@ -43,6 +45,53 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
         supported_in_api: true,
         input_modalities: Vec::new(),
     }
+}
+
+#[test]
+fn bounded_model_description_limits_multibyte_fields_and_collections() {
+    let mut model = model_preset("visible", /*show_in_picker*/ true);
+    model.model = "界".repeat(100);
+    model.description = "説明".repeat(200);
+    model.supported_reasoning_efforts = (0..12)
+        .map(|index| ReasoningEffortPreset {
+            effort: ReasoningEffort::Custom(format!("努力{index}{}", "界".repeat(40))),
+            description: String::new(),
+        })
+        .collect();
+    model.default_reasoning_effort = model.supported_reasoning_efforts[0].effort.clone();
+    model.service_tiers = (0..8)
+        .map(|index| ModelServiceTier {
+            id: format!("階層{index}{}", "界".repeat(40)),
+            name: String::new(),
+            description: String::new(),
+        })
+        .collect();
+
+    let description = bounded_model_description(&model);
+
+    assert!(description.is_char_boundary(description.len()));
+    assert!(description.contains("…"));
+    assert_eq!(description.matches("Reasoning efforts:").count(), 1);
+    assert_eq!(description.matches("階層").count(), 4);
+    assert!(description.len() < 1_000);
+}
+
+#[test]
+fn bounded_model_catalog_description_has_utf8_safe_aggregate_bound() {
+    let models = (0..100)
+        .map(|index| {
+            let mut model = model_preset(&format!("model-{index}"), /*show_in_picker*/ true);
+            model.model = format!("モデル{index}-{}", "界".repeat(100));
+            model.description = "説明".repeat(100);
+            model
+        })
+        .collect::<Vec<_>>();
+
+    let description = bounded_model_catalog_description(&models, MultiAgentVersion::V2);
+
+    assert!(description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert!(description.is_char_boundary(description.len()));
+    assert!(description.ends_with('…'));
 }
 
 #[test]
@@ -106,6 +155,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             .and_then(|schema| schema.encrypted),
         Some(true)
     );
+    assert!(properties.contains_key("plaintext_message"));
     assert!(properties.contains_key("fork_turns"));
     assert_eq!(
         properties
@@ -127,12 +177,14 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         properties
             .get("reasoning_effort")
             .and_then(|schema| schema.description.as_deref()),
-        Some("Reasoning effort override for the new agent. Omit to inherit the parent effort.")
+        Some(
+            "Reasoning effort override for the new agent. Full-history forks must use the parent's effective effort."
+        )
     );
     assert!(!properties.contains_key("service_tier"));
     assert_eq!(
         parameters.required.as_ref(),
-        Some(&vec!["task_name".to_string(), "message".to_string()])
+        Some(&vec!["task_name".to_string()])
     );
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
@@ -312,19 +364,20 @@ fn spawn_agent_model_catalog_preserves_exact_selectors_at_aggregate_boundary() {
 
     let description = spawn_agent_models_description(&models, MultiAgentVersion::V2);
 
-    assert_eq!(description, exact_selectors);
     assert!(description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
-    assert!(approx_token_count(&description) < 10_000);
+    assert!(description.contains("model-0-"));
+    assert_ne!(description, exact_selectors);
+    assert!(approx_token_count(&description) < 1_100);
 }
 
 #[test]
 fn spawn_agent_model_catalog_warns_when_exact_selectors_exceed_aggregate_bound() {
     let models = (0..413).map(max_length_selector_model).collect::<Vec<_>>();
 
-    assert_eq!(
-        spawn_agent_models_description(&models, MultiAgentVersion::V2),
-        SPAWN_AGENT_MODEL_CATALOG_TOO_LARGE
-    );
+    let description = spawn_agent_models_description(&models, MultiAgentVersion::V2);
+    assert!(description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert!(description.contains("model-0-"));
+    assert_ne!(description, SPAWN_AGENT_MODEL_CATALOG_TOO_LARGE);
 }
 
 #[test]
@@ -417,7 +470,7 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
 }
 
 #[test]
-fn send_message_tool_requires_message_and_has_no_output_schema() {
+fn send_message_tool_exposes_encrypted_and_plaintext_inputs() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -442,6 +495,7 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
             .and_then(|schema| schema.encrypted),
         Some(true)
     );
+    assert!(properties.contains_key("plaintext_message"));
     assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("items"));
     assert_eq!(
@@ -452,13 +506,13 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
     );
     assert_eq!(
         parameters.required.as_ref(),
-        Some(&vec!["target".to_string(), "message".to_string()])
+        Some(&vec!["target".to_string()])
     );
     assert_eq!(output_schema, None);
 }
 
 #[test]
-fn followup_task_tool_requires_message_and_has_no_output_schema() {
+fn followup_task_tool_exposes_encrypted_and_plaintext_inputs() {
     let ToolSpec::Function(ResponsesApiTool {
         name,
         description,
@@ -490,10 +544,11 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
             .and_then(|schema| schema.encrypted),
         Some(true)
     );
+    assert!(properties.contains_key("plaintext_message"));
     assert!(!properties.contains_key("items"));
     assert_eq!(
         parameters.required.as_ref(),
-        Some(&vec!["target".to_string(), "message".to_string()])
+        Some(&vec!["target".to_string()])
     );
     assert_eq!(output_schema, None);
 }

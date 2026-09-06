@@ -41,6 +41,7 @@ pub(crate) const WEB_NAMESPACE: &str = "web";
 pub(crate) const RUN_TOOL_NAME: &str = "run";
 const WEB_RUN_DESCRIPTION: &str = include_str!("../web_run_description.md");
 const RESULTS_PAYLOAD_BYTES_METRIC: &str = "codex.web_search.results.payload_bytes";
+const STANDALONE_SEARCH_MODEL: &str = "gpt-5.6-sol";
 
 pub(crate) struct WebSearchTool {
     pub(crate) session_id: String,
@@ -115,7 +116,7 @@ impl WebSearchTool {
         );
         let request = SearchRequest {
             id: self.session_id.clone(),
-            model: call.model.clone(),
+            model: STANDALONE_SEARCH_MODEL.to_string(),
             reasoning: None,
             input: recent_input(call.conversation_history.items()),
             commands: Some(commands),
