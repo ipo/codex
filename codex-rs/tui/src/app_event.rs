@@ -49,6 +49,8 @@ use uuid::Uuid;
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::PathCompletionRequest;
+use crate::bottom_pane::PathCompletionResult;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::ConnectorScopeGeneration;
@@ -489,6 +491,10 @@ pub(crate) enum AppEvent {
         query: String,
         matches: Vec<FileMatch>,
     },
+
+    StartPathCompletion(PathCompletionRequest),
+
+    PathCompletionResult(PathCompletionResult),
 
     /// Same-host task results for the active unified mention query.
     TaskSearchResult {

@@ -294,10 +294,8 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                 }
-                if self.is_task_running {
-                    return self.handle_submission(/*should_queue*/ true);
-                }
-                (InputResult::None, true)
+                self.popups.active = ActivePopup::None;
+                self.request_path_completion()
             }
             KeyEvent {
                 code: KeyCode::Char('/'),
