@@ -787,13 +787,17 @@ impl App {
                 // A full usage read can finish before thread/start. Apply its cached fallback
                 // after attachment but before the initial prompt or queued draft is submitted.
                 let recovery_was_pending = self.chat_widget.hold_rate_limit_recovery();
-                self.enqueue_primary_thread_session(started.session, started.turns)
+                let initial_submission = self
+                    .enqueue_primary_thread_session(started.session, started.turns)
                     .await?;
                 self.apply_backend_banner_fallback(app_server).await;
                 if !recovery_was_pending {
                     self.chat_widget.finish_rate_limit_recovery();
                 }
-                self.chat_widget.maybe_send_next_queued_input();
+                if initial_submission == crate::chatwidget::InitialUserMessageSubmission::NoMessage
+                {
+                    self.chat_widget.maybe_send_next_queued_input();
+                }
             }
             Err(err) if self.recover_transport_error(&err) => {}
             Err(err) => {
@@ -928,12 +932,13 @@ impl App {
         if started.blocks_direct_input {
             self.mark_primary_thread_parent_owned(started.session.thread_id);
         }
-        self.enqueue_primary_thread_session_with_presentation(
-            started.session,
-            started.turns,
-            presentation,
-        )
-        .await?;
+        let _ = self
+            .enqueue_primary_thread_session_with_presentation(
+                started.session,
+                started.turns,
+                presentation,
+            )
+            .await?;
         Ok(())
     }
 

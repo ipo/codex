@@ -19,7 +19,7 @@ const GOAL_FILE_PREFIX: &str = "Read the Codex goal objective file at ";
 const GOAL_FILE_SUFFIX: &str = " before continuing.";
 const GOAL_FILE_NAME: &str = "goal-objective.md";
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct GoalDraft {
     pub(crate) objective: String,
     pub(crate) text_elements: Vec<TextElement>,

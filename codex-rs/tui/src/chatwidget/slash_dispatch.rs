@@ -996,11 +996,12 @@ impl ChatWidget {
         let QueuedUserMessage {
             user_message,
             pending_pastes,
+            source,
             ..
         } = queued_message;
         let UserMessage {
             text,
-            local_images,
+            mut local_images,
             remote_image_urls,
             text_elements,
             mention_bindings,
@@ -1039,6 +1040,14 @@ impl ChatWidget {
             );
             return QueueDrain::Continue;
         };
+
+        if source == QueuedUserMessageSource::Initial
+            && matches!(&command, SlashCommandItem::Builtin(SlashCommand::Goal))
+        {
+            for image in &mut local_images {
+                image.placeholder.clear();
+            }
+        }
 
         if rest.is_empty() {
             return match command {

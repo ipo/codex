@@ -1,0 +1,6 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+assertion_line: 717
+expression: rendered
+---
+• Unrecognized command '/goal'. Type "/" for a list of supported commands.

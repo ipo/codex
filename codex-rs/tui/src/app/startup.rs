@@ -573,7 +573,9 @@ See the Codex keymap documentation for supported actions and examples."
                 )
                 .await
             {
-                Ok(result) => result?,
+                Ok(result) => {
+                    let _ = result?;
+                }
                 Err(err) => return shutdown_on_startup_error(app_server, err).await,
             }
             if should_prompt_for_paused_goal_after_startup_resume

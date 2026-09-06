@@ -190,8 +190,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn finish_rate_limit_recovery(&mut self) {
-        if std::mem::take(&mut self.input_queue.rate_limit_recovery_pending) {
-            self.submit_initial_user_message_if_pending();
+        if std::mem::take(&mut self.input_queue.rate_limit_recovery_pending)
+            && matches!(
+                self.submit_initial_user_message_if_pending(),
+                InitialUserMessageSubmission::NoMessage | InitialUserMessageSubmission::Continue
+            )
+        {
             self.maybe_send_next_queued_input();
         }
     }

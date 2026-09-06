@@ -34,6 +34,8 @@ mod safety_buffering;
 mod session_lifecycle_requests;
 mod session_summary;
 mod startup;
+#[path = "tests/startup_slash_commands.rs"]
+mod startup_slash_commands;
 #[path = "tests/stream_animation_tests.rs"]
 mod stream_animation_tests;
 #[path = "tests/thread_usage.rs"]
