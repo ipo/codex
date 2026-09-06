@@ -12,6 +12,7 @@ use arc_swap::ArcSwap;
 use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::ResolvedPluginMetricsOperation;
 use codex_core_plugins::TrustedPluginRoots;
+use codex_exec_server::EnvironmentInfo;
 use codex_exec_server::ExecutorFileSystem;
 use codex_file_system::FileSystemSandboxContext;
 use codex_model_provider::SharedModelProvider;
@@ -55,6 +56,7 @@ pub(crate) struct TurnEnvironment {
     pub(crate) shell: Option<shell::Shell>,
     /// OS reported by the selected executor; `None` for legacy executors.
     pub(crate) executor_platform_os: Option<String>,
+    pub(crate) info: Option<Arc<EnvironmentInfo>>,
     pub(crate) shell_snapshot: ShellSnapshotTask,
     pub(crate) shell_snapshot_v2_supported: bool,
 }
@@ -75,6 +77,7 @@ impl TurnEnvironment {
             temporary_directories: None,
             shell,
             executor_platform_os: None,
+            info: None,
             shell_snapshot: futures::future::ready(None).boxed().shared(),
             shell_snapshot_v2_supported: false,
         }
@@ -111,6 +114,10 @@ impl TurnEnvironment {
 
     pub(crate) fn cwd(&self) -> &PathUri {
         &self.selection.cwd
+    }
+
+    pub(crate) fn info(&self) -> Option<&EnvironmentInfo> {
+        self.info.as_deref()
     }
 
     pub(crate) fn workspace_roots(&self) -> &[PathUri] {
@@ -176,6 +183,7 @@ impl std::fmt::Debug for TurnEnvironment {
             .field("temporary_directories", &self.temporary_directories)
             .field("shell", &self.shell)
             .field("executor_platform_os", &self.executor_platform_os)
+            .field("info", &self.info)
             .field("config", self.config())
             .field("config_origin", &self.config_origin)
             .finish_non_exhaustive()

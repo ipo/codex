@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
 use crate::AnthropicThinkingPolicy;
-use crate::ClaudeToolSpec;
 use crate::InferenceDialect;
 use crate::ModelInferenceConfig;
 use crate::ReasoningEffort;
 use crate::WireApi;
+use codex_tools::ToolSpec;
 use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
@@ -53,7 +53,7 @@ pub struct AssembleRequest<'a> {
     pub effort: &'a ReasoningEffort,
     pub messages: &'a [Message],
     pub system: &'a [SystemBlock],
-    pub tools: &'a [ClaudeToolSpec],
+    pub tools: &'a [ToolSpec],
     pub resumable_session_id: &'a str,
     pub codex_version: &'a str,
     pub opus_compatibility: Option<&'a OpusCompatibilityContext>,
@@ -80,12 +80,18 @@ pub enum AssembleError {
     #[error("claude-sonnet-5 requires a Claude Code compatibility context")]
     MissingSonnetCompatibilityContext,
     #[error(
-        "unsupported tool at index {index}: {kind} `{name}`; only JSON-schema function tools are supported"
+        "unsupported tool at index {index}: {kind} `{name}`; only eager JSON-schema function tools are supported"
     )]
     UnsupportedTool {
         index: usize,
         kind: &'static str,
         name: String,
+    },
+    #[error("tool `{name}` at index {index} contains an invalid JSON schema: {message}")]
+    InvalidToolSchema {
+        index: usize,
+        name: String,
+        message: String,
     },
     #[error("native message at index {index} has unsupported {role} block `{kind}")]
     UnsupportedNativeBlock {
@@ -301,21 +307,49 @@ fn adaptive_output_effort(effort: &ReasoningEffort) -> Result<OutputEffort, Asse
     }
 }
 
-fn encode_tools(specs: &[ClaudeToolSpec]) -> Result<Vec<Tool>, AssembleError> {
+fn encode_tools(specs: &[ToolSpec]) -> Result<Vec<Tool>, AssembleError> {
     specs
         .iter()
         .enumerate()
         .map(|(index, spec)| match spec {
-            ClaudeToolSpec::Function(tool) => Ok(Tool {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                input_schema: tool.input_schema.clone(),
-                cache_control: None,
-            }),
-            ClaudeToolSpec::Unsupported { kind, .. } => Err(AssembleError::UnsupportedTool {
+            ToolSpec::Function(tool) if tool.defer_loading.is_none() => {
+                serde_json::to_value(&tool.parameters)
+                    .map(|input_schema| Tool {
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
+                        input_schema,
+                        cache_control: None,
+                    })
+                    .map_err(|error| AssembleError::InvalidToolSchema {
+                        index,
+                        name: tool.name.clone(),
+                        message: error.to_string(),
+                    })
+            }
+            ToolSpec::Function(tool) => Err(AssembleError::UnsupportedTool {
                 index,
-                kind,
+                kind: "deferred function",
+                name: tool.name.clone(),
+            }),
+            ToolSpec::Namespace(namespace) => Err(AssembleError::UnsupportedTool {
+                index,
+                kind: "namespace",
+                name: namespace.name.clone(),
+            }),
+            ToolSpec::ToolSearch { .. } => Err(AssembleError::UnsupportedTool {
+                index,
+                kind: "hosted tool search",
                 name: spec.name().to_string(),
+            }),
+            ToolSpec::WebSearch { .. } => Err(AssembleError::UnsupportedTool {
+                index,
+                kind: "hosted web search",
+                name: spec.name().to_string(),
+            }),
+            ToolSpec::Freeform(tool) => Err(AssembleError::UnsupportedTool {
+                index,
+                kind: "freeform",
+                name: tool.name.clone(),
             }),
         })
         .collect()

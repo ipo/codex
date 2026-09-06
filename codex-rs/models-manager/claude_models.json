@@ -23,6 +23,9 @@
       "default_verbosity": null,
       "comp_hash": null,
       "aliases": ["fable-5"],
+      "history_compatibility_group": "anthropic",
+      "tool_mode": "direct",
+      "multi_agent_version": "v2",
       "inference": {
         "family": "anthropic",
         "wire_api": "anthropic_messages",
@@ -58,6 +61,9 @@
       "default_verbosity": null,
       "comp_hash": null,
       "aliases": ["opus-5"],
+      "history_compatibility_group": "anthropic",
+      "tool_mode": "direct",
+      "multi_agent_version": "v2",
       "inference": {
         "family": "anthropic",
         "wire_api": "anthropic_messages",
@@ -93,6 +99,9 @@
       "default_verbosity": null,
       "comp_hash": null,
       "aliases": ["opus-4.8"],
+      "history_compatibility_group": "anthropic",
+      "tool_mode": "direct",
+      "multi_agent_version": "v2",
       "inference": {
         "family": "anthropic",
         "wire_api": "anthropic_messages",
@@ -128,6 +137,9 @@
       "default_verbosity": null,
       "comp_hash": null,
       "aliases": ["sonnet-5"],
+      "history_compatibility_group": "anthropic",
+      "tool_mode": "direct",
+      "multi_agent_version": "v2",
       "inference": {
         "family": "anthropic",
         "wire_api": "anthropic_messages",
@@ -163,6 +175,9 @@
       "default_verbosity": null,
       "comp_hash": null,
       "aliases": ["haiku-4.5"],
+      "history_compatibility_group": "anthropic",
+      "tool_mode": "direct",
+      "multi_agent_version": "v2",
       "inference": {
         "family": "anthropic",
         "wire_api": "anthropic_messages",

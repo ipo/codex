@@ -6,11 +6,13 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionStrategy;
 use codex_analytics::CompactionTrigger;
+use codex_exec_server::EnvironmentSystemInfo;
 use codex_git_utils::SanitizedGitUrl;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
+use codex_utils_path_uri::PathUri;
 use codex_utils_string::to_ascii_json_string;
 use http::HeaderMap as ApiHeaderMap;
 use http::HeaderValue;
@@ -181,6 +183,14 @@ pub(crate) struct TurnMetadataWorkspace {
     pub(crate) has_changes: Option<bool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TurnExecutionEnvironment {
+    pub(crate) cwd: PathUri,
+    pub(crate) is_git_repository: bool,
+    pub(crate) shell: String,
+    pub(crate) system: EnvironmentSystemInfo,
+}
+
 /// Model-visible namespaces indexed by their effective Responses Lite names.
 pub(crate) type TurnToolNamespacesInfo = BTreeMap<String, TurnToolNamespaceInfo>;
 
@@ -242,6 +252,7 @@ pub struct CodexResponsesMetadata {
     pub(crate) node_repl_auto_review_required: Option<bool>,
     pub(crate) node_repl_disabled: Option<bool>,
     pub(crate) workspaces: BTreeMap<String, TurnMetadataWorkspace>,
+    pub(crate) turn_environment: Option<TurnExecutionEnvironment>,
     pub(crate) tool_namespaces_info: Option<TurnToolNamespacesInfo>,
     pub(crate) turn_started_at_unix_ms: Option<i64>,
     pub(crate) history_ingest_requested: Option<bool>,
@@ -281,6 +292,7 @@ impl CodexResponsesMetadata {
             node_repl_auto_review_required: None,
             node_repl_disabled: None,
             workspaces: BTreeMap::new(),
+            turn_environment: None,
             tool_namespaces_info: None,
             turn_started_at_unix_ms: None,
             history_ingest_requested: None,

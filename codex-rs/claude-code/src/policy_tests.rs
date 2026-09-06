@@ -1,3 +1,10 @@
+use std::collections::BTreeMap;
+
+use codex_tools::FreeformTool;
+use codex_tools::FreeformToolFormat;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -48,16 +55,18 @@ fn user_text(text: &str, cache_control: Option<CacheControl>) -> Message {
     }
 }
 
-fn function_tool(name: &str) -> ClaudeToolSpec {
-    ClaudeToolSpec::Function(ClaudeFunctionTool {
+fn function_tool(name: &str) -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
         name: name.to_string(),
         description: format!("Run {name}"),
-        input_schema: json!({
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-            "additionalProperties": false
-        }),
+        strict: true,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::from([("path".to_string(), JsonSchema::string(None))]),
+            Some(vec!["path".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
     })
 }
 
@@ -77,7 +86,7 @@ fn assemble(
     effort: &ReasoningEffort,
     messages: &[Message],
     system: &[SystemBlock],
-    tools: &[ClaudeToolSpec],
+    tools: &[ToolSpec],
 ) -> Result<AssembledRequest, AssembleError> {
     assemble_request(AssembleRequest {
         profile,
@@ -399,10 +408,16 @@ fn rejects_incompatible_routes_unsupported_tools_and_invalid_native_blocks() {
             &ReasoningEffort::Medium,
             &[],
             &[],
-            &[ClaudeToolSpec::Unsupported {
-                kind: "freeform",
+            &[ToolSpec::Freeform(FreeformTool {
                 name: "patch".to_string(),
-            }],
+                description: "Apply a patch".to_string(),
+                defer_loading: None,
+                format: FreeformToolFormat {
+                    r#type: "grammar".to_string(),
+                    syntax: "lark".to_string(),
+                    definition: "start: /.+/".to_string(),
+                },
+            })],
         ),
         Err(AssembleError::UnsupportedTool {
             index: 0,

@@ -59,6 +59,7 @@ pub enum NativeStreamError {
 pub struct ClaudeResponseStream {
     rx: mpsc::UnboundedReceiver<Result<ResponseEvent, NativeStreamError>>,
     pub upstream_request_id: Option<String>,
+    cancellation: CancellationToken,
 }
 
 impl Stream for ClaudeResponseStream {
@@ -66,6 +67,12 @@ impl Stream for ClaudeResponseStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx.poll_recv(cx)
+    }
+}
+
+impl Drop for ClaudeResponseStream {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
     }
 }
 
@@ -117,6 +124,7 @@ impl<T: HttpTransport> ClaudeHttpAdapter<T> {
             .map(str::to_string);
         let idle_timeout = self.session.provider().stream_idle_timeout;
         let (tx, rx) = mpsc::unbounded_channel();
+        let task_cancellation = cancellation.clone();
         let delta_tx = tx.clone();
         let mut started = BTreeSet::new();
         let mut decoder = IncrementalDecoder::new(move |delta| {
@@ -129,7 +137,7 @@ impl<T: HttpTransport> ClaudeHttpAdapter<T> {
             let mut bytes = stream_response.bytes;
             loop {
                 let next = tokio::select! {
-                    _ = cancellation.cancelled() => {
+                    _ = task_cancellation.cancelled() => {
                         let _ = tx.send(Err(NativeStreamError::Cancelled));
                         return;
                     }
@@ -176,6 +184,7 @@ impl<T: HttpTransport> ClaudeHttpAdapter<T> {
         Ok(ClaudeResponseStream {
             rx,
             upstream_request_id,
+            cancellation,
         })
     }
 }

@@ -19,6 +19,7 @@ use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::MAX_EXTRA_METADATA_VALUE_BYTES;
 use crate::responses_metadata::PARENT_TURN_ID_KEY;
 use crate::responses_metadata::ROOT_TURN_ID_KEY;
+use crate::responses_metadata::TurnExecutionEnvironment;
 use crate::responses_metadata::TurnMetadataWorkspace;
 use crate::responses_metadata::TurnToolNamespacesInfo;
 use crate::responses_metadata::filter_extra_metadata;
@@ -132,6 +133,7 @@ pub(crate) struct TurnMetadataState {
     node_repl_disabled: bool,
     enriched_workspaces: RwLock<Option<BTreeMap<String, TurnMetadataWorkspace>>>,
     tool_namespaces_info: RwLock<Option<TurnToolNamespacesInfo>>,
+    turn_environment: RwLock<Option<TurnExecutionEnvironment>>,
     turn_started_at_unix_ms: RwLock<Option<i64>>,
     responses_api_metadata: RwLock<BTreeMap<String, String>>,
     responsesapi_client_metadata: RwLock<BTreeMap<String, String>>,
@@ -218,6 +220,7 @@ impl TurnMetadataState {
             node_repl_disabled: model_info.node_repl_disabled,
             enriched_workspaces: RwLock::new(None),
             tool_namespaces_info: RwLock::new(None),
+            turn_environment: RwLock::new(None),
             turn_started_at_unix_ms: RwLock::new(None),
             responses_api_metadata: RwLock::new(BTreeMap::new()),
             responsesapi_client_metadata: RwLock::new(BTreeMap::new()),
@@ -296,6 +299,13 @@ impl TurnMetadataState {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             (!tool_namespaces_info.is_empty()).then_some(tool_namespaces_info);
+    }
+
+    pub(crate) fn set_turn_environment(&self, environment: TurnExecutionEnvironment) {
+        *self
+            .turn_environment
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(environment);
     }
 
     pub(crate) fn set_parent_turn_id(&self, parent_turn_id: String) {
@@ -426,6 +436,11 @@ impl TurnMetadataState {
             node_repl_auto_review_required: Some(self.node_repl_auto_review_required),
             node_repl_disabled: Some(self.node_repl_disabled),
             workspaces: self.current_workspaces(),
+            turn_environment: self
+                .turn_environment
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
             tool_namespaces_info: self
                 .tool_namespaces_info
                 .read()

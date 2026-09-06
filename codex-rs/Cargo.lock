@@ -2414,12 +2414,15 @@ dependencies = [
 name = "codex-claude-code"
 version = "0.153.4"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "codex-api",
  "codex-client",
  "codex-protocol",
+ "codex-tools",
  "futures",
  "http 1.4.0",
+ "insta",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -2827,6 +2830,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-async-utils",
  "codex-client",
+ "codex-claude-code",
  "codex-code-mode",
  "codex-config",
  "codex-connectors",

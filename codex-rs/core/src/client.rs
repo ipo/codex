@@ -149,6 +149,9 @@ use codex_response_debug_context::extract_response_debug_context_from_api_error;
 use codex_response_debug_context::telemetry_api_error_message;
 use codex_response_debug_context::telemetry_transport_error_message;
 
+#[path = "client/claude_dispatch.rs"]
+mod claude_dispatch;
+
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 pub const X_CODEX_ROUTING_HINT_HEADER: &str = "x-codex-routing-hint";
@@ -1141,6 +1144,19 @@ impl ModelClient {
         Ok(ReqwestTransport::from_http_client(client))
     }
 
+    fn build_raw_api_transport(
+        &self,
+        api_provider: &ApiProvider,
+        endpoint: &str,
+    ) -> Result<ReqwestTransport> {
+        let request_url = api_provider.url_for_path(endpoint);
+        let client = self
+            .http_client_factory
+            .build_client(&request_url, ClientRouteClass::Api)
+            .map_err(std::io::Error::from)?;
+        Ok(ReqwestTransport::from_http_client(client))
+    }
+
     pub(crate) async fn prewarm_auth(&self) -> Result<()> {
         self.current_client_setup().await.map(|_| ())
     }
@@ -1284,6 +1300,16 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn stream_max_retries(&self, model_info: &ModelInfo) -> Result<u64> {
+        self.client
+            .state
+            .provider
+            .info()
+            .resolve_inference_plan(model_info)
+            .map(|plan| plan.route().stream_max_retries)
+            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
+    }
+
     pub(crate) fn turn_state(&self) -> Arc<OnceLock<String>> {
         Arc::clone(&self.turn_state)
     }
@@ -2040,9 +2066,35 @@ impl ModelClientSession {
             codex_model_provider_info::ResolvedInferencePlan::Legacy { route, .. } => {
                 route.wire_api
             }
-            codex_model_provider_info::ResolvedInferencePlan::OpenAi { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::Anthropic { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::Kimi { .. }
+            codex_model_provider_info::ResolvedInferencePlan::OpenAi { route, .. } => {
+                route.wire_api
+            }
+            codex_model_provider_info::ResolvedInferencePlan::Anthropic {
+                wire_model,
+                max_output_tokens,
+                thinking,
+                supports_disabled_thinking,
+                route,
+            } => {
+                return self
+                    .stream_claude(
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                        effort,
+                        responses_metadata,
+                        inference_trace,
+                        claude_dispatch::ClaudePlan {
+                            wire_model,
+                            max_output_tokens,
+                            thinking,
+                            supports_disabled_thinking,
+                            route,
+                        },
+                    )
+                    .await;
+            }
+            codex_model_provider_info::ResolvedInferencePlan::Kimi { .. }
             | codex_model_provider_info::ResolvedInferencePlan::Grok { .. }
             | codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { .. } => {
                 return Err(CodexErr::InvalidRequest(format!(

@@ -137,6 +137,7 @@ type PendingConfigurationResult = Result<EnvironmentConfig, String>;
 #[derive(Clone)]
 struct ResolvedEnvironment {
     environment: Arc<Environment>,
+    info: Option<EnvironmentInfo>,
     shell: Option<Shell>,
     user_home_dir: Option<PathUri>,
     executor_platform_os: Option<String>,
@@ -259,6 +260,7 @@ impl ThreadEnvironments {
                 let resolution: TurnEnvironmentResolution =
                     futures::future::ready(Ok(ResolvedEnvironment {
                         environment: environment.environment,
+                        info: environment.info.map(Arc::unwrap_or_clone),
                         shell: environment.shell,
                         user_home_dir: environment.user_home_dir,
                         executor_platform_os: environment.executor_platform_os,
@@ -628,15 +630,22 @@ impl ThreadEnvironments {
         };
         // Resolve the attachment only after both prerequisites are ready.
         let ((), installed_config) = tokio::try_join!(connection_ready, configuration_ready)?;
+        let info = match environment.info().await {
+            Ok(info) => Some(info),
+            Err(err) => {
+                tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
+                None
+            }
+        };
         let executor_platform_os;
         let (shell, user_home_dir, temporary_dirs, snapshot_v2) = if environment.is_remote() {
-            match environment.info().await {
-                Ok(info) => {
-                    executor_platform_os = info.platform_os;
-                    let user_home_dir = info.user_home_dir;
-                    let temporary_directories = info.temporary_directories;
+            match info.as_ref() {
+                Some(info) => {
+                    executor_platform_os = info.platform_os.clone();
+                    let user_home_dir = info.user_home_dir.clone();
+                    let temporary_directories = info.temporary_directories.clone();
                     let shell_snapshot_v2_supported = info.capabilities.shell_snapshot_v2;
-                    let shell = match Shell::from_environment_shell_info(info.shell) {
+                    let shell = match Shell::from_environment_shell_info(info.shell.clone()) {
                         Ok(shell) => Some(shell),
                         Err(err) => {
                             tracing::warn!(
@@ -652,9 +661,8 @@ impl ThreadEnvironments {
                         shell_snapshot_v2_supported,
                     )
                 }
-                Err(err) => {
+                None => {
                     executor_platform_os = None;
-                    tracing::warn!("failed to get info for environment `{environment_id}`: {err}");
                     (None, None, None, false)
                 }
             }
@@ -676,6 +684,7 @@ impl ThreadEnvironments {
         ));
         Ok(ResolvedEnvironment {
             environment,
+            info,
             shell,
             user_home_dir,
             executor_platform_os,
@@ -761,6 +770,7 @@ impl TurnEnvironmentState {
                     environment.shell,
                 );
                 turn_environment.executor_platform_os = environment.executor_platform_os;
+                turn_environment.info = environment.info.map(Arc::new);
                 turn_environment.shell_snapshot = environment.shell_snapshot;
                 turn_environment.shell_snapshot_v2_supported =
                     environment.shell_snapshot_v2_supported;

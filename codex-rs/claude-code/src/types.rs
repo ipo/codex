@@ -2,6 +2,15 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalOutcome {
+    Completed,
+    ToolsReady,
+    Continue,
+    OutputExhausted,
+    Refusal,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MessagesRequest {
     pub model: String,

@@ -246,6 +246,7 @@ pub(crate) mod time_reminder;
 mod token_budget;
 pub(crate) mod turn;
 pub(crate) mod turn_context;
+mod turn_environment_metadata;
 mod turn_input;
 mod turn_suspension;
 mod world_state;
@@ -3577,6 +3578,16 @@ impl Session {
         let session_telemetry = settings.telemetry(&turn_context.session_telemetry);
         // Keep selections fixed for the turn while allowing their startup work to finish.
         let environments = turn_context.environments.refresh_readiness();
+        if let Some(environment) = turn_environment_metadata::collect_claude_code_turn_environment(
+            &settings.model_info,
+            environments.primary(),
+        )
+        .await
+        {
+            turn_context
+                .turn_metadata_state
+                .set_turn_environment(environment);
+        }
         self.services
             .agents_md_manager
             .refresh(&turn_context.config, &environments)

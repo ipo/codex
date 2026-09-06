@@ -1,7 +1,9 @@
 //! Native Claude Code request and response adapters.
 
 mod claude_code_identity;
-mod contracts;
+mod encoder;
+mod history;
+mod history_content;
 mod opus_compatibility;
 mod policy;
 mod replay;
@@ -21,9 +23,10 @@ pub use codex_protocol::model_inference::ModelInferenceConfig;
 pub use codex_protocol::model_inference::WireApi;
 pub use codex_protocol::openai_models::ReasoningEffort;
 pub use codex_protocol::protocol::TokenUsage;
-pub use contracts::ClaudeFunctionTool;
-pub use contracts::ClaudeToolSpec;
-pub use contracts::TerminalOutcome;
+pub use encoder::CanonicalOutputSchema;
+pub use encoder::EncodeError;
+pub use encoder::EncodeRequest;
+pub use encoder::encode_request;
 pub use opus_compatibility::ClaudeCodeEnvironment;
 pub use opus_compatibility::OpusCompatibilityContext;
 pub use opus_compatibility::OpusEnvironment;
@@ -63,6 +66,7 @@ pub use types::OutputEffort;
 pub use types::RequestMetadata;
 pub use types::Role;
 pub use types::SystemBlock;
+pub use types::TerminalOutcome;
 pub use types::Thinking;
 pub use types::ThinkingDisplay;
 pub use types::Tool;
