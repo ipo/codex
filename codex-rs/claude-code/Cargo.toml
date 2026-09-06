@@ -1,22 +1,28 @@
 [package]
-edition = "2024"
-license = "Apache-2.0"
+edition.workspace = true
+license.workspace = true
 name = "codex-claude-code"
-version = "0.153.4"
+version.workspace = true
 
 [lib]
 doctest = false
 name = "codex_claude_code"
 path = "src/lib.rs"
 
-# Keep this provisional crate independent until the shared inference contracts land.
-[workspace]
-
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-uuid = { version = "1", features = ["v5"] }
+codex-api = { workspace = true }
+codex-client = { workspace = true }
+codex-protocol = { workspace = true }
+futures = { workspace = true }
+http = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio-util = { workspace = true }
+uuid = { workspace = true, features = ["v5"] }
 
 [dev-dependencies]
-pretty_assertions = "1"
+bytes = { workspace = true }
+pretty_assertions = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

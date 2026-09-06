@@ -7,6 +7,7 @@ mod policy;
 mod replay;
 mod sonnet_compatibility;
 mod stream;
+mod transport;
 mod types;
 
 #[cfg(test)]
@@ -14,15 +15,15 @@ mod mock;
 
 pub use claude_code_identity::ClaudeCodeIdentity;
 pub use claude_code_identity::ClaudeCodeRequestKind;
-pub use contracts::AnthropicThinkingPolicy;
+pub use codex_protocol::model_inference::AnthropicThinkingPolicy;
+pub use codex_protocol::model_inference::InferenceDialect;
+pub use codex_protocol::model_inference::ModelInferenceConfig;
+pub use codex_protocol::model_inference::WireApi;
+pub use codex_protocol::openai_models::ReasoningEffort;
+pub use codex_protocol::protocol::TokenUsage;
 pub use contracts::ClaudeFunctionTool;
-pub use contracts::ClaudeRequestProfile;
 pub use contracts::ClaudeToolSpec;
-pub use contracts::InferenceDialect;
-pub use contracts::ReasoningEffort;
 pub use contracts::TerminalOutcome;
-pub use contracts::TokenUsage;
-pub use contracts::WireApi;
 pub use opus_compatibility::ClaudeCodeEnvironment;
 pub use opus_compatibility::OpusCompatibilityContext;
 pub use opus_compatibility::OpusEnvironment;
@@ -44,6 +45,9 @@ pub use stream::DecodedStream;
 pub use stream::IncrementalDecoder;
 pub use stream::PresentationDelta;
 pub use stream::decode_stream;
+pub use transport::ClaudeHttpAdapter;
+pub use transport::ClaudeResponseStream;
+pub use transport::NativeStreamError;
 pub use types::CacheControl;
 pub use types::CacheCreationUsage;
 pub use types::CacheTtl;
@@ -77,3 +81,7 @@ mod policy_tests;
 #[cfg(test)]
 #[path = "stream_tests.rs"]
 mod stream_tests;
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod transport_tests;

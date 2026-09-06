@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::AnthropicThinkingPolicy;
-use crate::ClaudeRequestProfile;
 use crate::ClaudeToolSpec;
 use crate::InferenceDialect;
+use crate::ModelInferenceConfig;
 use crate::ReasoningEffort;
 use crate::WireApi;
 use serde::Serialize;
@@ -49,7 +49,7 @@ pub struct RequestTransport {
 /// Native inputs assembled into a Claude Messages request without history conversion.
 #[derive(Debug)]
 pub struct AssembleRequest<'a> {
-    pub profile: &'a ClaudeRequestProfile,
+    pub profile: &'a ModelInferenceConfig,
     pub effort: &'a ReasoningEffort,
     pub messages: &'a [Message],
     pub system: &'a [SystemBlock],
@@ -62,6 +62,8 @@ pub struct AssembleRequest<'a> {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AssembleError {
+    #[error("Claude Messages assembly requires an Anthropic model profile")]
+    NotAnthropicModel,
     #[error("unsupported Anthropic route contract: {wire_api}/{dialect}")]
     UnsupportedRouteContract {
         wire_api: WireApi,
@@ -95,14 +97,18 @@ pub enum AssembleError {
 
 /// Assembles an exact Claude Code Messages request from already-native content.
 pub fn assemble_request(params: AssembleRequest<'_>) -> Result<AssembledRequest, AssembleError> {
-    let ClaudeRequestProfile {
+    let ModelInferenceConfig::Anthropic {
         wire_api,
         dialect,
+        route: _,
         wire_model,
         max_output_tokens,
         thinking,
         supports_disabled_thinking,
-    } = params.profile;
+    } = params.profile
+    else {
+        return Err(AssembleError::NotAnthropicModel);
+    };
     if (*wire_api, *dialect) != (WireApi::AnthropicMessages, InferenceDialect::ClaudeCode) {
         return Err(AssembleError::UnsupportedRouteContract {
             wire_api: *wire_api,

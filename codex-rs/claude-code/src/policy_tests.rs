@@ -10,10 +10,11 @@ fn profile(
     max_output_tokens: u32,
     thinking: AnthropicThinkingPolicy,
     supports_disabled_thinking: bool,
-) -> ClaudeRequestProfile {
-    ClaudeRequestProfile {
+) -> ModelInferenceConfig {
+    ModelInferenceConfig::Anthropic {
         wire_api: WireApi::AnthropicMessages,
         dialect: InferenceDialect::ClaudeCode,
+        route: "claude_code".to_string(),
         wire_model: model.to_string(),
         max_output_tokens,
         thinking,
@@ -21,7 +22,7 @@ fn profile(
     }
 }
 
-fn adaptive(model: &str, supports_disabled_thinking: bool) -> ClaudeRequestProfile {
+fn adaptive(model: &str, supports_disabled_thinking: bool) -> ModelInferenceConfig {
     profile(
         model,
         /*max_output_tokens*/ 64_000,
@@ -72,7 +73,7 @@ fn environment() -> ClaudeCodeEnvironment {
 }
 
 fn assemble(
-    profile: &ClaudeRequestProfile,
+    profile: &ModelInferenceConfig,
     effort: &ReasoningEffort,
     messages: &[Message],
     system: &[SystemBlock],
@@ -366,9 +367,24 @@ fn compatibility_profiles_preserve_effort_and_exact_identity_shapes() {
 
 #[test]
 fn rejects_incompatible_routes_unsupported_tools_and_invalid_native_blocks() {
-    let incompatible = ClaudeRequestProfile {
+    let non_anthropic = ModelInferenceConfig::OpenAi {
         wire_api: WireApi::Responses,
-        ..adaptive("claude-opus-4-8", /*supports_disabled_thinking*/ true)
+        dialect: InferenceDialect::OpenAi,
+        route: "openai".to_string(),
+        wire_model: "gpt-test".to_string(),
+    };
+    assert_eq!(
+        assemble(&non_anthropic, &ReasoningEffort::Medium, &[], &[], &[]),
+        Err(AssembleError::NotAnthropicModel)
+    );
+    let incompatible = ModelInferenceConfig::Anthropic {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::ClaudeCode,
+        route: "claude_code".to_string(),
+        wire_model: "claude-opus-4-8".to_string(),
+        max_output_tokens: 64_000,
+        thinking: AnthropicThinkingPolicy::Adaptive,
+        supports_disabled_thinking: true,
     };
     assert_eq!(
         assemble(&incompatible, &ReasoningEffort::Medium, &[], &[], &[]),

@@ -16,7 +16,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::instrument;
 
-pub(crate) struct EndpointSession<T: HttpTransport> {
+pub struct EndpointSession<T: HttpTransport> {
     transport: T,
     provider: Provider,
     auth: SharedAuthProvider,
@@ -24,7 +24,7 @@ pub(crate) struct EndpointSession<T: HttpTransport> {
 }
 
 impl<T: HttpTransport> EndpointSession<T> {
-    pub(crate) fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
+    pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             transport,
             provider,
@@ -33,15 +33,12 @@ impl<T: HttpTransport> EndpointSession<T> {
         }
     }
 
-    pub(crate) fn with_request_telemetry(
-        mut self,
-        request: Option<Arc<dyn RequestTelemetry>>,
-    ) -> Self {
+    pub fn with_request_telemetry(mut self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
         self.request_telemetry = request;
         self
     }
 
-    pub(crate) fn provider(&self) -> &Provider {
+    pub fn provider(&self) -> &Provider {
         &self.provider
     }
 
@@ -119,7 +116,7 @@ impl<T: HttpTransport> EndpointSession<T> {
         skip_all,
         fields(http.method = %method, api.path = path)
     )]
-    pub(crate) async fn stream_encoded_json_with<C>(
+    pub async fn stream_encoded_json_with<C>(
         &self,
         method: Method,
         path: &str,

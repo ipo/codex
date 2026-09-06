@@ -16,7 +16,7 @@ fn expected_usage(write: Option<u64>, read: Option<u64>, thinking: Option<u64>) 
     let input = 10 + write.unwrap_or(0) as i64 + read.unwrap_or(0) as i64;
     (
         Usage { input_tokens:10, output_tokens:4, cache_creation_input_tokens:write, cache_read_input_tokens:read, thinking_tokens:thinking, cache_creation:None },
-        TokenUsage { input_tokens:input, cached_input_tokens:read.unwrap_or(0) as i64, cache_write_input_tokens:write.unwrap_or(0) as i64, output_tokens:4, reasoning_output_tokens:thinking.unwrap_or(0) as i64, total_tokens:input + 4 },
+        TokenUsage { input_tokens:input, cached_input_tokens:read.unwrap_or(0) as i64, cache_write_input_tokens:write.unwrap_or(0) as i64, output_tokens:4, reasoning_output_tokens:thinking.unwrap_or(0) as i64, total_tokens:input + 4, codex_rollout_budget_units: None },
     )
 }
 
@@ -57,7 +57,7 @@ fn reconstructs_ordered_interleaved_blocks_and_usage() {
         ],
         terminal_outcome: TerminalOutcome::ToolsReady,
         usage: Usage { input_tokens:100, output_tokens:40, cache_creation_input_tokens:Some(20), cache_read_input_tokens:Some(30), thinking_tokens:Some(11), cache_creation:Some(CacheCreationUsage { ephemeral_5m_input_tokens:7, ephemeral_1h_input_tokens:13 }) },
-        token_usage: TokenUsage { input_tokens:150, cached_input_tokens:30, cache_write_input_tokens:20, output_tokens:40, reasoning_output_tokens:11, total_tokens:190 },
+        token_usage: TokenUsage { input_tokens:150, cached_input_tokens:30, cache_write_input_tokens:20, output_tokens:40, reasoning_output_tokens:11, total_tokens:190, codex_rollout_budget_units: None },
     });
     assert_eq!(presentation, vec![
         PresentationDelta::ToolInput { index:3, id:"call-a".into(), name:"alpha".into(), delta:"{\"x\":".into() },

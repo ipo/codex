@@ -26,6 +26,7 @@ pub(super) fn map_usage(usage: &Usage) -> TokenUsage {
         output_tokens,
         reasoning_output_tokens: usage.thinking_tokens.unwrap_or(0) as i64,
         total_tokens: input_tokens + output_tokens,
+        codex_rollout_budget_units: None,
     }
 }
 

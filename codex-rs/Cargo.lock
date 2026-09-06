@@ -2411,6 +2411,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-claude-code"
+version = "0.153.4"
+dependencies = [
+ "bytes",
+ "codex-api",
+ "codex-client",
+ "codex-protocol",
+ "futures",
+ "http 1.4.0",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "codex-cli"
 version = "0.0.0"
 dependencies = [

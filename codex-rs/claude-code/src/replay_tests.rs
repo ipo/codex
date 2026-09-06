@@ -118,7 +118,7 @@ fn replay_is_byte_exact_only_for_the_bound_model_and_dialect() {
         Ok(ReplayDecision::Native(blocks))
     );
     for (dialect, model) in [
-        (InferenceDialect::Other, "claude-sonnet-5"),
+        (InferenceDialect::OpenAi, "claude-sonnet-5"),
         (InferenceDialect::ClaudeCode, "claude-opus-5"),
     ] {
         assert_eq!(
