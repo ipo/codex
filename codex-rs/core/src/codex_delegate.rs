@@ -69,7 +69,7 @@ pub(crate) async fn run_codex_thread_interactive(
     config.model_provider.supports_websockets &= parent_session
         .services
         .model_client
-        .responses_websocket_enabled();
+        .responses_websocket_enabled(parent_ctx.model_info());
 
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);

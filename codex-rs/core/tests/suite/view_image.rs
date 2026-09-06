@@ -1610,6 +1610,7 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
     let text_only_model = ModelInfo {
         slug: model_slug.to_string(),
         aliases: Vec::new(),
+        inference: None,
         display_name: "Text-only view_image test model".to_string(),
         description: Some("Remote model for view_image unsupported-path coverage".to_string()),
         default_reasoning_level: Some(ReasoningEffort::Medium),

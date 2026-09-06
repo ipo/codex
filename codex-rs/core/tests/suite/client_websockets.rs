@@ -27,6 +27,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::model_inference::GrokInferenceConfig;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -560,6 +563,38 @@ async fn responses_websocket_preconnect_reuses_connection() {
     assert_eq!(connection.len(), 1);
 
     server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_responses_model_never_preconnects_responses_websocket() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(Vec::new()).await;
+    let mut harness = websocket_harness(&server).await;
+    harness.model_info.inference = Some(ModelInferenceConfig::Grok(GrokInferenceConfig {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::Grok,
+        route: "grok".to_string(),
+        wire_model: "grok-4.6".to_string(),
+    }));
+    let responses_metadata = websocket_connection_metadata(&harness);
+    let mut client_session = harness.client.new_session();
+
+    client_session
+        .preconnect_websocket(
+            &harness.model_info,
+            &harness.session_telemetry,
+            &responses_metadata,
+        )
+        .await
+        .expect("external preconnect should be a no-op");
+
+    assert!(
+        !harness
+            .client
+            .responses_websocket_enabled(&harness.model_info)
+    );
+    assert!(server.handshakes().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2498,6 +2533,7 @@ fn websocket_provider_with_connect_timeout(
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: Default::default(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,

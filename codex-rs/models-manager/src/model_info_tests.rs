@@ -1,6 +1,10 @@
 use super::*;
 use crate::ModelsManagerConfig;
 use codex_protocol::config_types::Personality;
+use codex_protocol::model_inference::GrokInferenceConfig;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::ModelInferenceConfig;
+use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ApprovalMessages;
 use codex_protocol::openai_models::AutoReviewMessages;
 use codex_protocol::openai_models::CollaborationModeMessages;
@@ -321,6 +325,33 @@ fn unknown_model_uses_builtin_instruction_template() {
         BASE_INSTRUCTIONS
     );
     assert!(model.used_fallback_model_metadata);
+}
+
+#[test]
+fn external_inference_uses_neutral_identity_without_rewriting_openai_instructions() {
+    let catalog = crate::bundled_models_response().expect("bundled catalog should parse");
+    let openai = catalog
+        .models
+        .into_iter()
+        .find(|model| model.slug == "gpt-6-astra")
+        .expect("bundled Astra model");
+    let config = ModelsManagerConfig::default();
+    let openai_instructions = with_config_overrides(openai.clone(), &config)
+        .get_model_instructions(/*personality*/ None);
+    let mut external = openai;
+    external.slug = "xai/grok-4.6".to_string();
+    external.inference = Some(ModelInferenceConfig::Grok(GrokInferenceConfig {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::Grok,
+        route: "grok".to_string(),
+        wire_model: "grok-4.6".to_string(),
+    }));
+    let external_instructions =
+        with_config_overrides(external, &config).get_model_instructions(/*personality*/ None);
+
+    assert!(openai_instructions.starts_with("You are Codex, an agent based on GPT-6."));
+    assert!(external_instructions.starts_with("You are Codex, an AI coding agent."));
+    assert!(!external_instructions.contains("based on GPT-6"));
 }
 
 #[test]

@@ -599,6 +599,7 @@ fn hosted_model_tool_specs(
 ) -> Vec<ToolSpec> {
     // Responses Lite accepts schemas for client-executed tools, not hosted Responses tools.
     if model_info.use_responses_lite
+        || !model_info.supports_responses_capabilities(turn_context.provider.info().wire_api)
         || crate::guardian::is_basic_session_source(&turn_context.session_source)
     {
         return Vec::new();
@@ -696,6 +697,10 @@ fn required_child_management_tool_names(
 }
 
 fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
+    if !model_info.supports_responses_capabilities(turn_context.provider.info().wire_api) {
+        return false;
+    }
+
     if !turn_context
         .config
         .features
