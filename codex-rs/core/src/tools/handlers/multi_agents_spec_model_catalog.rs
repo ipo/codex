@@ -12,7 +12,7 @@ pub(super) const MAX_REQUESTED_MODEL_BYTES_IN_SPAWN_AGENT_ERROR: usize = 96;
 /// Hard byte ceiling for the injected model catalog. Codex's shared context estimator uses four
 /// bytes per token, so 39,996 bytes is at most 9,999 estimated tokens and remains below the
 /// repository's 10K-token per-fragment limit.
-pub(super) const MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES: usize = 39_996;
+pub(super) const MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES: usize = 4_096;
 pub(super) const TRUNCATION_SUFFIX: &str = "…";
 
 const SPAWN_AGENT_MODELS_DESCRIPTION_HEADER: &str =
@@ -101,12 +101,7 @@ pub(super) fn spawn_agent_models_description(
         return description;
     }
 
-    let description = format!("{SPAWN_AGENT_MODELS_DESCRIPTION_HEADER}\n{exact_selectors}");
-    if description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES {
-        description
-    } else {
-        exact_selectors
-    }
+    bounded_model_catalog_description(models, multi_agent_version)
 }
 
 pub(super) fn bounded_spawn_agent_model_selectors(

@@ -361,19 +361,20 @@ fn spawn_agent_model_catalog_preserves_exact_selectors_at_aggregate_boundary() {
 
     let description = spawn_agent_models_description(&models, MultiAgentVersion::V2);
 
-    assert_eq!(description, exact_selectors);
     assert!(description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
-    assert!(approx_token_count(&description) < 10_000);
+    assert!(description.contains("model-0-"));
+    assert_ne!(description, exact_selectors);
+    assert!(approx_token_count(&description) < 1_100);
 }
 
 #[test]
 fn spawn_agent_model_catalog_warns_when_exact_selectors_exceed_aggregate_bound() {
     let models = (0..413).map(max_length_selector_model).collect::<Vec<_>>();
 
-    assert_eq!(
-        spawn_agent_models_description(&models, MultiAgentVersion::V2),
-        SPAWN_AGENT_MODEL_CATALOG_TOO_LARGE
-    );
+    let description = spawn_agent_models_description(&models, MultiAgentVersion::V2);
+    assert!(description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert!(description.contains("model-0-"));
+    assert_ne!(description, SPAWN_AGENT_MODEL_CATALOG_TOO_LARGE);
 }
 
 #[test]
