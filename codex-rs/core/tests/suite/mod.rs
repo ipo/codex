@@ -87,6 +87,7 @@ mod hooks_executor;
 #[cfg(not(target_os = "windows"))]
 mod hooks_mcp;
 mod image_rollout;
+mod inference_routes;
 mod injected_models_cache;
 #[cfg(not(target_os = "windows"))]
 mod interrupt_hooks;

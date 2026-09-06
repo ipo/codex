@@ -20,6 +20,7 @@ base_url = "http://localhost:11434/v1"
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: HashMap::new(),
         query_params: None,
         http_headers: None,
         env_http_headers: None,
@@ -53,6 +54,7 @@ query_params = { api-version = "2025-04-01-preview" }
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: HashMap::new(),
         query_params: Some(maplit::hashmap! {
             "api-version".to_string() => "2025-04-01-preview".into(),
         }),
@@ -90,6 +92,7 @@ supports_standalone_web_search = true
         auth: None,
         aws: None,
         wire_api: WireApi::Responses,
+        wire_routes: HashMap::new(),
         query_params: None,
         http_headers: Some(maplit::hashmap! {
             "X-Example-Header".to_string() => "example-value".into(),
@@ -111,16 +114,169 @@ supports_standalone_web_search = true
 }
 
 #[test]
-fn test_deserialize_chat_wire_api_shows_helpful_error() {
-    let provider_toml = r#"
-name = "OpenAI using Chat Completions"
-base_url = "https://api.openai.com/v1"
-env_key = "OPENAI_API_KEY"
-wire_api = "chat"
-        "#;
+fn named_routes_resolve_every_typed_family_with_route_retry_policy() {
+    let configs = [
+        ModelInferenceConfig::OpenAi {
+            wire_api: WireApi::Responses,
+            dialect: InferenceDialect::OpenAi,
+            route: "openai".to_string(),
+            wire_model: "gpt-5.6-sol".to_string(),
+        },
+        ModelInferenceConfig::Anthropic {
+            wire_api: WireApi::AnthropicMessages,
+            dialect: InferenceDialect::ClaudeCode,
+            route: "claude".to_string(),
+            wire_model: "claude-opus-5".to_string(),
+            max_output_tokens: 64_000,
+            thinking: AnthropicThinkingPolicy::Adaptive,
+            supports_disabled_thinking: true,
+        },
+        ModelInferenceConfig::Kimi(KimiInferenceConfig {
+            wire_api: WireApi::ChatCompletions,
+            dialect: InferenceDialect::Kimi,
+            route: "kimi".to_string(),
+            wire_model: "k3".to_string(),
+            max_output_tokens: 131_072,
+            thinking: codex_protocol::model_inference::KimiThinkingPolicy::RequiredWithEffort,
+        }),
+        ModelInferenceConfig::Grok(GrokInferenceConfig {
+            wire_api: WireApi::Responses,
+            dialect: InferenceDialect::Grok,
+            route: "grok".to_string(),
+            wire_model: "grok-4.6".to_string(),
+        }),
+        ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
+            wire_api: WireApi::Responses,
+            dialect: InferenceDialect::LlamaCpp,
+            route: "llama_cpp".to_string(),
+            expected_model_basename: "model.gguf".to_string(),
+            context_window: 131_072,
+            max_input_tokens: 121_856,
+            max_output_tokens: 8_192,
+            safety_margin_tokens: 1_024,
+        }),
+    ];
+    let wire_routes = configs
+        .iter()
+        .map(ModelInferenceConfig::route_contract)
+        .map(|(wire_api, dialect, name)| {
+            (
+                name.to_string(),
+                ModelProviderWireRoute {
+                    wire_api,
+                    dialect,
+                    base_url: format!("https://{name}.example/v1"),
+                    request_path: "sample".to_string(),
+                    query_params: Some(HashMap::from([("beta".to_string(), "true".into())])),
+                    request_max_retries: None,
+                    stream_max_retries: Some(150),
+                    stream_idle_timeout_ms: Some(1_200),
+                },
+            )
+        })
+        .collect();
+    let provider = ModelProviderInfo {
+        request_max_retries: Some(7),
+        stream_max_retries: Some(8),
+        stream_idle_timeout_ms: Some(900),
+        wire_routes,
+        ..ModelProviderInfo::default()
+    };
 
-    let err = toml::from_str::<ModelProviderInfo>(provider_toml).unwrap_err();
-    assert!(err.to_string().contains(CHAT_WIRE_API_REMOVED_ERROR));
+    let plans = configs
+        .iter()
+        .map(|config| {
+            provider
+                .resolve_inference_contract("catalog-model", Some(config))
+                .expect("typed route should resolve")
+        })
+        .collect::<Vec<_>>();
+    assert!(matches!(plans[0], ResolvedInferencePlan::OpenAi { .. }));
+    assert!(matches!(plans[1], ResolvedInferencePlan::Anthropic { .. }));
+    assert!(matches!(plans[2], ResolvedInferencePlan::Kimi { .. }));
+    assert!(matches!(plans[3], ResolvedInferencePlan::Grok { .. }));
+    assert!(matches!(plans[4], ResolvedInferencePlan::LlamaCpp { .. }));
+    assert_eq!(
+        plans
+            .iter()
+            .map(|plan| plan.route().clone())
+            .collect::<Vec<_>>(),
+        configs
+            .iter()
+            .map(ModelInferenceConfig::route_contract)
+            .map(|(wire_api, dialect, name)| ResolvedWireRoute {
+                name: Some(name.to_string()),
+                wire_api,
+                dialect,
+                base_url: Some(format!("https://{name}.example/v1")),
+                request_path: "sample".to_string(),
+                query_params: Some(HashMap::from([("beta".to_string(), "true".into())])),
+                request_max_retries: 7,
+                stream_max_retries: 100,
+                stream_idle_timeout: Duration::from_millis(1_200),
+            })
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn legacy_metadata_and_invalid_native_routes_resolve_before_sampling() {
+    let provider = ModelProviderInfo {
+        base_url: Some("https://legacy.example/v1".to_string()),
+        request_max_retries: Some(3),
+        stream_max_retries: Some(6),
+        ..ModelProviderInfo::default()
+    };
+    assert_eq!(
+        provider
+            .resolve_inference_contract("legacy-model", None)
+            .expect("metadata-free model should preserve legacy routing"),
+        ResolvedInferencePlan::Legacy {
+            wire_model: "legacy-model".to_string(),
+            route: ResolvedWireRoute {
+                name: None,
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::OpenAi,
+                base_url: Some("https://legacy.example/v1".to_string()),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: 3,
+                stream_max_retries: 6,
+                stream_idle_timeout: Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+            },
+        }
+    );
+
+    let missing = ModelInferenceConfig::Grok(GrokInferenceConfig {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::Grok,
+        route: "grok".to_string(),
+        wire_model: "grok-4.6".to_string(),
+    });
+    assert_eq!(
+        provider
+            .resolve_inference_contract("xai/grok-4.6", Some(&missing))
+            .expect_err("missing route should fail")
+            .to_string(),
+        "model `xai/grok-4.6` (grok) requires provider wire route `grok`; configure `model_providers.<provider>.wire_routes.grok` with `wire_api = \"responses\"` and `dialect = \"grok\"`"
+    );
+
+    let incompatible = ModelInferenceConfig::Anthropic {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::OpenAi,
+        route: "responses".to_string(),
+        wire_model: "claude-opus-5".to_string(),
+        max_output_tokens: 64_000,
+        thinking: AnthropicThinkingPolicy::Adaptive,
+        supports_disabled_thinking: true,
+    };
+    assert_eq!(
+        provider
+            .resolve_inference_contract("anthropic/claude-opus-5", Some(&incompatible))
+            .expect_err("family-incompatible route should fail")
+            .to_string(),
+        "model `anthropic/claude-opus-5` declares an incompatible inference contract for family `anthropic`: `wire_api = \"responses\"` with `dialect = \"open_ai\"`; supported: `wire_api = \"anthropic_messages\"` with `dialect = \"claude_code\"`"
+    );
 }
 
 #[test]
@@ -268,6 +424,7 @@ fn test_create_amazon_bedrock_provider() {
                 auth_refresh: None,
             }),
             wire_api: WireApi::Responses,
+            wire_routes: HashMap::new(),
             query_params: None,
             http_headers: Some(maplit::hashmap! {
                 AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>

@@ -10,6 +10,7 @@ const FORWARD_COMPATIBILITY_BASELINE_MODEL: &str = "gpt-5.6-sol";
 // Keep this in sync with the fields accepted by `ModelInfo`'s serde implementation.
 const MODEL_INFO_FIELDS: &[&str] = &[
     "slug",
+    "inference",
     "aliases",
     "display_name",
     "description",
@@ -58,7 +59,6 @@ const MODEL_INFO_FIELDS: &[&str] = &[
 // until their owning tickets.
 const FORWARD_COMPATIBILITY_FIELDS: &[&str] = &[
     "history_compatibility_group",
-    "inference",
     "requires_nonempty_assistant_messages",
     "supports_parallel_tool_calls",
 ];

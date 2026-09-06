@@ -86,9 +86,8 @@
 //!
 //! # Submission and Prompt Expansion
 //!
-//! `Enter` submits immediately. `Tab` requests queuing while a task is running; if no task is
-//! running, `Tab` submits just like Enter so input is never dropped.
-//! `Tab` does not submit when entering a `!` shell command.
+//! `Enter` submits immediately. Plain `Tab` completes filesystem paths while leaving mention
+//! completion to its active popup. Queueing continues to use its configured binding.
 //!
 //! On submit/queue paths, the composer:
 //!
@@ -267,6 +266,7 @@ use super::footer::reset_mode_after_activity;
 use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
 use super::footer::status_line_right_indicator_line;
+use super::footer::status_line_right_indicator_line_fitting_width;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
 use super::mentions_v2::MentionV2Popup;
@@ -298,6 +298,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::TextElement;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 mod agents_navigation;
 mod attachment_state;
@@ -305,6 +306,7 @@ mod completion_target;
 mod draft_state;
 mod footer_state;
 mod history_search;
+pub(crate) mod path_completion;
 mod popup_state;
 mod reconnect;
 mod slash_input;
@@ -316,6 +318,7 @@ use self::draft_state::ComposerMentionBinding;
 use self::draft_state::DraftState;
 use self::footer_state::FooterState;
 use self::history_search::HistorySearchSession;
+use self::path_completion::PathCompletionRequest;
 use self::popup_state::ActivePopup;
 use self::popup_state::DismissedToken;
 use self::popup_state::PopupState;
@@ -550,6 +553,9 @@ pub(crate) struct ChatComposer {
     history_search_next_keys: Vec<KeyBinding>,
     editor_keymap: Arc<EditorKeymap>,
     vim_normal_keymap: VimNormalKeymap,
+    cwd: Option<AbsolutePathBuf>,
+    next_path_completion_request_id: u64,
+    pending_path_completion: Option<PathCompletionRequest>,
 }
 
 /// A resolved legacy `$` target plus any catalog built while disambiguating shell syntax.
@@ -728,6 +734,9 @@ impl ChatComposer {
             history_search_next_keys: default_keymap.composer.history_search_next.clone(),
             editor_keymap: default_editor_keymap,
             vim_normal_keymap: default_vim_normal_keymap,
+            cwd: AbsolutePathBuf::current_dir().ok(),
+            next_path_completion_request_id: 0,
+            pending_path_completion: None,
         };
         this.draft.textarea.set_keymap_bindings(&default_keymap);
         // Apply configuration via the setter to keep side-effects centralized.
@@ -737,6 +746,14 @@ impl ChatComposer {
 
     pub(crate) fn set_frame_requester(&mut self, frame_requester: FrameRequester) {
         self.frame_requester = Some(frame_requester);
+    }
+
+    pub(crate) fn set_cwd(&mut self, cwd: AbsolutePathBuf) {
+        self.cwd = Some(cwd);
+        self.pending_path_completion = None;
+        if matches!(self.popups.active, ActivePopup::Path(_)) {
+            self.popups.active = ActivePopup::None;
+        }
     }
 
     /// Records the effective reasoning tier, captures the outgoing status
@@ -1041,6 +1058,7 @@ impl ChatComposer {
             ActivePopup::MentionV2(popup) => {
                 Constraint::Max(popup.calculate_required_height(area.width))
             }
+            ActivePopup::Path(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::None => Constraint::Max(footer_total_height),
         };
         let [composer_rect, popup_rect] =
@@ -1462,6 +1480,30 @@ impl ChatComposer {
         } else {
             Some(Line::from(spans))
         }
+    }
+
+    fn mode_indicator_line_fitting_width(
+        &self,
+        show_cycle_hint: bool,
+        max_width: usize,
+    ) -> Option<Line<'static>> {
+        let mut spans = Vec::new();
+        if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            spans.push(vim_mode);
+        }
+        if let Some(indicators) = status_line_right_indicator_line_fitting_width(
+            self.footer.collaboration_mode_indicator,
+            self.footer.goal_status_indicator.as_ref(),
+            self.footer.ide_context_active,
+            show_cycle_hint,
+            max_width,
+        ) {
+            if !spans.is_empty() {
+                spans.push(" | ".dim());
+            }
+            spans.extend(indicators.spans);
+        }
+        (!spans.is_empty()).then_some(Line::from(spans))
     }
 
     fn right_footer_line_with_context(&self) -> Line<'static> {
@@ -1999,6 +2041,8 @@ impl ChatComposer {
             return (InputResult::None, false);
         }
 
+        self.pending_path_completion = None;
+
         if self.history_search.is_none()
             && !self.popups.active()
             && self.draft.textarea.wants_vim_search_key(key_event)
@@ -2023,6 +2067,7 @@ impl ChatComposer {
             ActivePopup::File(_) => self.handle_key_event_with_file_popup(key_event),
             ActivePopup::Skill(_) => self.handle_key_event_with_skill_popup(key_event),
             ActivePopup::MentionV2(_) => self.handle_key_event_with_mentions_v2_popup(key_event),
+            ActivePopup::Path(_) => self.handle_key_event_with_path_popup(key_event),
             ActivePopup::None => self.handle_key_event_without_popup(key_event),
         };
         self.reset_vim_mode_after_successful_dispatch(&result.0);
@@ -3557,6 +3602,9 @@ impl ChatComposer {
         } else {
             self.footer.mode = reset_mode_after_activity(self.footer.mode);
         }
+        if key_event.code == KeyCode::Tab {
+            return self.request_path_completion();
+        }
         if self.queue_keys.is_pressed(key_event)
             && (self.is_task_running || self.queue_submissions || !self.is_bang_shell_command())
         {
@@ -4654,6 +4702,7 @@ impl ChatComposer {
                 ActivePopup::File(c) => c.calculate_required_height(),
                 ActivePopup::Skill(c) => c.calculate_required_height(width),
                 ActivePopup::MentionV2(c) => c.calculate_required_height(width),
+                ActivePopup::Path(c) => c.calculate_required_height(),
             }
     }
 }
@@ -4685,6 +4734,9 @@ impl ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::MentionV2(popup) => {
+                popup.render_ref(popup_rect, buf);
+            }
+            ActivePopup::Path(popup) => {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
@@ -4796,8 +4848,13 @@ impl ChatComposer {
                         } else if transition_active {
                             None
                         } else if status_line_active {
-                            let full = self.mode_indicator_line(show_cycle_hint);
-                            let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
+                            let available =
+                                hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                            let full =
+                                self.mode_indicator_line_fitting_width(show_cycle_hint, available);
+                            let compact = self.mode_indicator_line_fitting_width(
+                                /*show_cycle_hint*/ false, available,
+                            );
                             let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                             if can_show_left_with_context(hint_rect, left_width, full_width) {
                                 full
@@ -5914,6 +5971,67 @@ mod tests {
                     /*context_percent*/ 100,
                     Some(CollaborationModeIndicator::Plan),
                 );
+            },
+        );
+
+        // Configurable status lines carry the workspace branch on the left, while Plan and goal
+        // indicators carry deterministic build provenance on the right.
+        snapshot_composer_state_with_width(
+            "footer_provenance_plan_wide",
+            /*width*/ 120,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer,
+                    /*context_percent*/ 100,
+                    Some(CollaborationModeIndicator::Plan),
+                );
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from("workspace/main")));
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_provenance_plan_constrained",
+            /*width*/ 60,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer,
+                    /*context_percent*/ 100,
+                    Some(CollaborationModeIndicator::Plan),
+                );
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from("workspace/main")));
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_provenance_goal_wide",
+            /*width*/ 120,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer, /*context_percent*/ 100, /*indicator*/ None,
+                );
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from("workspace/main")));
+                composer.set_goal_status_indicator(Some(GoalStatusIndicator::Active {
+                    usage: Some("40K / 50K".to_string()),
+                }));
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_provenance_goal_constrained",
+            /*width*/ 74,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer, /*context_percent*/ 100, /*indicator*/ None,
+                );
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from("workspace/main")));
+                composer.set_goal_status_indicator(Some(GoalStatusIndicator::Active {
+                    usage: Some("40K / 50K".to_string()),
+                }));
             },
         );
 

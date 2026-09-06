@@ -1170,6 +1170,15 @@ impl AppServerSession {
         }
     }
 
+    pub(crate) fn thread_settings_update_is_available(&self) -> bool {
+        self.thread_settings_update_supported
+    }
+
+    #[cfg(test)]
+    pub(crate) fn disable_thread_settings_update_for_test(&mut self) {
+        self.thread_settings_update_supported = false;
+    }
+
     pub(crate) async fn thread_inject_items(
         &mut self,
         thread_id: ThreadId,

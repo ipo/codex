@@ -17,6 +17,10 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::model_inference::GrokInferenceConfig;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::ModelInferenceConfig;
+use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -3202,12 +3206,36 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
             });
         },
         ToolPlanInputs {
-            extension_tool_executors: vec![image_generation_tool],
+            extension_tool_executors: vec![image_generation_tool.clone()],
             ..Default::default()
         },
     )
     .await;
     unsupported_provider.assert_visible_lacks(&["image_gen"]);
+
+    let external_responses_model = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            set_web_search_mode(turn, WebSearchMode::Live);
+            update_turn_settings_for_test(turn, |settings| {
+                let model_info = Arc::make_mut(&mut settings.model_info);
+                model_info.use_responses_lite = false;
+                model_info.input_modalities = vec![InputModality::Image];
+                model_info.inference = Some(ModelInferenceConfig::Grok(GrokInferenceConfig {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::Grok,
+                    route: "grok".to_string(),
+                    wire_model: "grok-4.6".to_string(),
+                }));
+            });
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![image_generation_tool],
+            ..Default::default()
+        },
+    )
+    .await;
+    external_responses_model.assert_visible_lacks(&["web_search", "image_gen"]);
 
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);

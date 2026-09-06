@@ -41,9 +41,11 @@
 //! In short: `single_line_footer_layout` chooses *what* best fits, and the two
 //! render helpers choose whether to draw the chosen line or the default
 //! `FooterProps` mapping.
+use crate::bottom_pane::build_provenance;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::ShortcutHint;
+use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
 use crate::render::line_utils::prefix_lines;
 use crate::status::format_tokens_compact;
 use crate::ui_consts::FOOTER_INDENT_COLS;
@@ -592,6 +594,15 @@ pub(crate) fn status_line_right_indicator_line(
 ) -> Option<Line<'static>> {
     let primary_indicator = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint)
         .or_else(|| goal_status_indicator_line(goal_status_indicator));
+    let primary_indicator = primary_indicator.map(|line| {
+        if collaboration_mode_indicator == Some(CollaborationModeIndicator::Plan)
+            || collaboration_mode_indicator.is_none() && goal_status_indicator.is_some()
+        {
+            build_provenance::line(line)
+        } else {
+            line
+        }
+    });
     let ide_context_indicator = ide_context_active.then(|| Line::from(vec!["IDE context".cyan()]));
     let mut line: Option<Line<'static>> = None;
 
@@ -610,6 +621,37 @@ pub(crate) fn status_line_right_indicator_line(
     }
 
     line
+}
+
+pub(crate) fn status_line_right_indicator_line_fitting_width(
+    collaboration_mode_indicator: Option<CollaborationModeIndicator>,
+    goal_status_indicator: Option<&GoalStatusIndicator>,
+    ide_context_active: bool,
+    show_cycle_hint: bool,
+    max_width: usize,
+) -> Option<Line<'static>> {
+    let primary = mode_indicator_line(collaboration_mode_indicator, show_cycle_hint)
+        .or_else(|| goal_status_indicator_line(goal_status_indicator));
+    let primary = primary.and_then(|line| {
+        if collaboration_mode_indicator == Some(CollaborationModeIndicator::Plan)
+            || collaboration_mode_indicator.is_none() && goal_status_indicator.is_some()
+        {
+            build_provenance::line_fitting_width(line, max_width)
+        } else {
+            Some(line)
+        }
+    });
+    let ide = ide_context_active.then(|| Line::from(vec!["IDE context".cyan()]));
+    let mut result = primary;
+    if let Some(ide) = ide {
+        if let Some(line) = result.as_mut() {
+            line.push_span(" · ".dim());
+            line.extend(ide.spans);
+        } else {
+            result = Some(ide);
+        }
+    }
+    result.map(|line| truncate_line_with_ellipsis_if_overflow(line, max_width))
 }
 
 pub(crate) fn side_conversation_context_line(label: &str) -> Line<'static> {
@@ -673,14 +715,20 @@ pub(crate) fn render_context_right(area: Rect, buf: &mut Buffer, line: &Line<'st
         return;
     }
 
-    let context_width = line.width() as u16;
+    let max_width = area.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+    let fitted = if line.width() > max_width {
+        truncate_line_with_ellipsis_if_overflow(line.clone(), max_width)
+    } else {
+        line.clone()
+    };
+    let context_width = fitted.width() as u16;
     let Some(mut x) = right_aligned_x(area, context_width) else {
         return;
     };
     let y = area.y + area.height.saturating_sub(1);
     let max_x = area.x.saturating_add(area.width);
 
-    for span in &line.spans {
+    for span in &fitted.spans {
         if x >= max_x {
             break;
         }
