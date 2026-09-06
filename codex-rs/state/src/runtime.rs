@@ -657,14 +657,19 @@ mod tests {
             .filter_map(|event| event.tags.get("phase").cloned())
             .collect::<BTreeSet<_>>();
         let expected = [
+            "wait_init_lock_state",
             "open_state",
             "migrate_state",
+            "wait_init_lock_logs",
             "open_logs",
             "migrate_logs",
+            "wait_init_lock_goals",
             "open_goals",
             "migrate_goals",
+            "wait_init_lock_memories",
             "open_memories",
             "migrate_memories",
+            "wait_init_lock_queue",
             "open_queue",
             "migrate_queue",
             "ensure_backfill_state",

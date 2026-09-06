@@ -21,11 +21,16 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::sqlite::SqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::fs::TryLockError;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+const INIT_LOCK_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 60);
 const LOGS_DB_FILENAME: &str = "logs_2.sqlite";
 const GOALS_DB_FILENAME: &str = "goals_1.sqlite";
 const MEMORIES_DB_FILENAME: &str = "memories_1.sqlite";
@@ -38,6 +43,7 @@ struct RuntimeDbSpec {
     label: &'static str,
     filename: &'static str,
     kind: DbKind,
+    lock_phase: &'static str,
     open_phase: &'static str,
     migrate_phase: &'static str,
 }
@@ -52,6 +58,7 @@ const STATE_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "state DB",
     filename: STATE_DB_FILENAME,
     kind: DbKind::State,
+    lock_phase: "wait_init_lock_state",
     open_phase: "open_state",
     migrate_phase: "migrate_state",
 };
@@ -60,6 +67,7 @@ const LOGS_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "log DB",
     filename: LOGS_DB_FILENAME,
     kind: DbKind::Logs,
+    lock_phase: "wait_init_lock_logs",
     open_phase: "open_logs",
     migrate_phase: "migrate_logs",
 };
@@ -68,6 +76,7 @@ const GOALS_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "goals DB",
     filename: GOALS_DB_FILENAME,
     kind: DbKind::Goals,
+    lock_phase: "wait_init_lock_goals",
     open_phase: "open_goals",
     migrate_phase: "migrate_goals",
 };
@@ -76,6 +85,7 @@ const MEMORIES_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "memories DB",
     filename: MEMORIES_DB_FILENAME,
     kind: DbKind::Memories,
+    lock_phase: "wait_init_lock_memories",
     open_phase: "open_memories",
     migrate_phase: "migrate_memories",
 };
@@ -84,6 +94,7 @@ const QUEUE_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "queue DB",
     filename: QUEUE_DB_FILENAME,
     kind: DbKind::Queue,
+    lock_phase: "wait_init_lock_queue",
     open_phase: "open_queue",
     migrate_phase: "migrate_queue",
 };
@@ -92,6 +103,7 @@ const THREAD_HISTORY_DB: RuntimeDbSpec = RuntimeDbSpec {
     label: "thread history DB",
     filename: THREAD_HISTORY_DB_FILENAME,
     kind: DbKind::ThreadHistory,
+    lock_phase: "wait_init_lock_thread_history",
     open_phase: "open_thread_history",
     migrate_phase: "migrate_thread_history",
 };
@@ -236,6 +248,18 @@ impl SqliteConfig {
     ) -> anyhow::Result<SqlitePool> {
         let path = spec.path(self.home());
         let started = Instant::now();
+        let lock_result = acquire_init_lock(path.as_path()).await;
+        telemetry::record_init_result(
+            telemetry_override,
+            spec.kind,
+            spec.lock_phase,
+            started.elapsed(),
+            &lock_result,
+        );
+        let _init_lock = lock_result.map_err(|source| {
+            RuntimeDbInitError::new(spec.label, "lock", path.as_path(), source)
+        })?;
+        let started = Instant::now();
         let pool_result = self
             .open_read_write_pool(&path)
             .await
@@ -310,3 +334,68 @@ impl SqliteConfig {
             .await
     }
 }
+
+struct InitLock {
+    _file: File,
+}
+
+async fn acquire_init_lock(db_path: &Path) -> anyhow::Result<InitLock> {
+    let lock_path = init_lock_path(db_path);
+    let file = open_owner_only_lock_file(lock_path.as_path())?;
+    let started = Instant::now();
+    let mut attempt = 0_u32;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(InitLock { _file: file }),
+            Err(TryLockError::WouldBlock) => {
+                let delay = init_lock_retry_delay(attempt);
+                if started.elapsed().saturating_add(delay) >= INIT_LOCK_TIMEOUT {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!(
+                            "timed out waiting for SQLite initialization lock {}",
+                            lock_path.display()
+                        ),
+                    )
+                    .into());
+                }
+                tokio::time::sleep(delay).await;
+                attempt = attempt.saturating_add(1);
+            }
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+}
+
+fn init_lock_path(db_path: &Path) -> PathBuf {
+    let mut path = db_path.as_os_str().to_os_string();
+    path.push(".init.lock");
+    PathBuf::from(path)
+}
+
+fn open_owner_only_lock_file(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(file)
+}
+
+fn init_lock_retry_delay(attempt: u32) -> Duration {
+    let base_millis = 10_u64.saturating_mul(1_u64 << attempt.min(3));
+    let jitter_millis = (u64::from(std::process::id()) + u64::from(attempt) * 29) % 31;
+    Duration::from_millis(base_millis.saturating_add(jitter_millis))
+}
+
+#[cfg(test)]
+#[path = "sqlite_tests.rs"]
+mod tests;
