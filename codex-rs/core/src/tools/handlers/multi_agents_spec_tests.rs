@@ -101,6 +101,14 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         Some(true)
     );
     assert!(properties.contains_key("fork_turns"));
+    assert_eq!(
+        properties
+            .get("cwd")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(
+            "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
+        )
+    );
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
@@ -157,6 +165,14 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         .expect("spawn_agent should use object params");
 
     assert!(properties.contains_key("fork_context"));
+    assert_eq!(
+        properties
+            .get("cwd")
+            .and_then(|schema| schema.description.as_deref()),
+        Some(
+            "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
+        )
+    );
     assert!(!properties.contains_key("fork_turns"));
     assert_eq!(
         properties.get("agent_type"),

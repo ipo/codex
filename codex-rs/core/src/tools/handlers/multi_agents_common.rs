@@ -8,6 +8,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use codex_exec_server::GetMetadataOptions;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -22,7 +23,10 @@ use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
@@ -165,6 +169,131 @@ pub(crate) fn parse_collab_input(
             Ok(items)
         }
     }
+}
+
+/// Resolves and validates an optional child cwd in the inherited primary environment.
+///
+/// Only the primary selection changes. The selection's workspace roots and permission profile are
+/// preserved, so selecting a cwd cannot widen the child's filesystem authority.
+pub(crate) async fn resolve_spawn_agent_environments(
+    turn: &TurnContext,
+    requested_cwd: Option<&str>,
+) -> Result<Vec<TurnEnvironmentSelection>, FunctionCallError> {
+    let mut selections = turn.environments.to_selections();
+    let Some(requested_cwd) = requested_cwd else {
+        return Ok(selections);
+    };
+    if requested_cwd.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agent cwd must not be empty".to_string(),
+        ));
+    }
+
+    let primary = turn.environments.primary().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent cannot select a cwd because the primary environment is unavailable"
+                .to_string(),
+        )
+    })?;
+    let base_convention = primary.cwd().infer_path_convention();
+    let bytes = requested_cwd.as_bytes();
+    let requests_windows_absolute_path = requested_cwd.starts_with(r"\\")
+        || matches!(
+            bytes,
+            [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic()
+        );
+    if requests_windows_absolute_path && base_convention == Some(PathConvention::Posix) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd `{requested_cwd}` uses the Windows path convention, but primary environment `{}` uses POSIX paths",
+            primary.selection.environment_id
+        )));
+    }
+
+    let cwd = primary.cwd().join(requested_cwd).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd `{requested_cwd}` is invalid for primary environment `{}`: {err}",
+            primary.selection.environment_id
+        ))
+    })?;
+    let mut sandbox = primary.sandbox_context(/*additional_permissions*/ None);
+    sandbox.cwd = Some(cwd.clone());
+    let filesystem = primary.environment.get_filesystem();
+    let metadata = filesystem
+        .get_metadata(&cwd, GetMetadataOptions::default(), Some(&sandbox))
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "spawn_agent cannot access cwd `{}` in primary environment `{}`: {err}",
+                cwd.inferred_native_path_string(),
+                primary.selection.environment_id
+            ))
+        })?;
+    if !metadata.is_directory {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd `{}` is not a directory in primary environment `{}`",
+            cwd.inferred_native_path_string(),
+            primary.selection.environment_id
+        )));
+    }
+    filesystem
+        .read_directory(&cwd, Some(&sandbox))
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "spawn_agent cwd `{}` is not readable in primary environment `{}`: {err}",
+                cwd.inferred_native_path_string(),
+                primary.selection.environment_id
+            ))
+        })?;
+
+    let Some(primary_selection) = selections.first_mut() else {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agent cannot select a cwd because the primary environment is unavailable"
+                .to_string(),
+        ));
+    };
+    primary_selection.cwd = cwd;
+    Ok(selections)
+}
+
+/// Applies the selected primary environment cwd to the child config's legacy fallback.
+///
+/// `Config::cwd` remains host-native while environment selections use executor-aware URIs. For a
+/// foreign executor, retain the compatibility projection used by remote test environments so the
+/// child session snapshot does not retain the parent's cwd.
+pub(crate) fn apply_spawn_agent_selected_cwd(
+    config: &mut Config,
+    environments: &[TurnEnvironmentSelection],
+) -> Result<(), FunctionCallError> {
+    let primary = environments.first().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent cannot select a cwd because the primary environment is unavailable"
+                .to_string(),
+        )
+    })?;
+    config.cwd = primary
+        .cwd
+        .to_abs_path()
+        .or_else(|_| {
+            primary
+                .cwd
+                .to_url()
+                .to_file_path()
+                .map_err(|()| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "cwd URI cannot be projected onto the host",
+                    )
+                })
+                .and_then(|cwd| AbsolutePathBuf::try_from(cwd).map_err(std::io::Error::other))
+        })
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "spawn_agent cwd `{}` cannot be represented in the child config: {err}",
+                primary.cwd.inferred_native_path_string(),
+            ))
+        })?;
+    Ok(())
 }
 
 /// Builds the base config snapshot for a newly spawned sub-agent.
