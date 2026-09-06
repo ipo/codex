@@ -1,0 +1,277 @@
+use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelsResponse;
+use serde_json::Map;
+use serde_json::Value;
+use std::collections::HashSet;
+use std::fmt;
+
+const FORWARD_COMPATIBILITY_BASELINE_MODEL: &str = "gpt-5.6-sol";
+
+// Keep this in sync with the fields accepted by `ModelInfo`'s serde implementation.
+const MODEL_INFO_FIELDS: &[&str] = &[
+    "slug",
+    "display_name",
+    "description",
+    "default_reasoning_level",
+    "supported_reasoning_levels",
+    "shell_type",
+    "visibility",
+    "supported_in_api",
+    "priority",
+    "additional_speed_tiers",
+    "service_tiers",
+    "default_service_tier",
+    "availability_nux",
+    "upgrade",
+    "model_messages",
+    "include_skills_usage_instructions",
+    "include_plugin_usage_instructions",
+    "include_apps_usage_instructions",
+    "supports_reasoning_summary_parameter",
+    "default_reasoning_summary",
+    "support_verbosity",
+    "default_verbosity",
+    "apply_patch_tool_type",
+    "web_search_tool_type",
+    "truncation_policy",
+    "supports_image_detail_original",
+    "context_window",
+    "max_context_window",
+    "auto_compact_token_limit",
+    "comp_hash",
+    "effective_context_window_percent",
+    "experimental_supported_tools",
+    "input_modalities",
+    "supports_search_tool",
+    "use_responses_lite",
+    "node_repl_auto_review_required",
+    "node_repl_disabled",
+    "auto_review_model_override",
+    "model_specialty",
+    "tool_mode",
+    "multi_agent_version",
+    "multi_agent_reasoning_effort",
+];
+
+// These staged fields in the deployed overlay are intentionally accepted but not interpreted
+// until their owning tickets.
+const FORWARD_COMPATIBILITY_FIELDS: &[&str] = &[
+    "aliases",
+    "history_compatibility_group",
+    "inference",
+    "requires_nonempty_assistant_messages",
+    "supports_parallel_tool_calls",
+];
+
+/// A validated sequence of shallow model catalog patches and inherited additions.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelCatalogOverlay {
+    entries: Vec<ModelCatalogOverlayEntry>,
+}
+
+/// A startup-validated overlay whose entries can be composed onto later catalog snapshots.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedModelCatalogOverlay {
+    entries: Vec<ResolvedModelCatalogOverlayEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ModelCatalogOverlayEntry {
+    index: usize,
+    slug: String,
+    inherits: Option<String>,
+    fields: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ResolvedModelCatalogOverlayEntry {
+    entry: ModelCatalogOverlayEntry,
+    fallback: ModelInfo,
+}
+
+/// Error returned while parsing or applying a model catalog overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCatalogOverlayError(String);
+
+impl fmt::Display for ModelCatalogOverlayError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ModelCatalogOverlayError {}
+
+impl ModelCatalogOverlay {
+    /// Parse and validate an overlay document with the shape `{ "models": [...] }`.
+    pub fn from_json(json: &str) -> Result<Self, ModelCatalogOverlayError> {
+        let value: Value = serde_json::from_str(json)
+            .map_err(|err| ModelCatalogOverlayError(format!("invalid JSON: {err}")))?;
+        let models = value
+            .as_object()
+            .and_then(|root| root.get("models"))
+            .ok_or_else(|| ModelCatalogOverlayError("missing field `models`".to_string()))?
+            .as_array()
+            .ok_or_else(|| {
+                ModelCatalogOverlayError("field `models` must be an array".to_string())
+            })?;
+
+        let mut entries = Vec::with_capacity(models.len());
+        let mut slugs = HashSet::with_capacity(models.len());
+        for (index, value) in models.iter().enumerate() {
+            let fields = value.as_object().cloned().ok_or_else(|| {
+                ModelCatalogOverlayError(format!("entry {index}: must be an object"))
+            })?;
+            let slug = fields
+                .get("slug")
+                .ok_or_else(|| {
+                    ModelCatalogOverlayError(format!("entry {index}: missing field `slug`"))
+                })?
+                .as_str()
+                .filter(|slug| !slug.is_empty())
+                .ok_or_else(|| {
+                    ModelCatalogOverlayError(format!(
+                        "entry {index}: field `slug` must be a non-empty string"
+                    ))
+                })?
+                .to_string();
+            if !slugs.insert(slug.clone()) {
+                return Err(ModelCatalogOverlayError(format!(
+                    "entry {index} slug `{slug}`: duplicate slug"
+                )));
+            }
+            let inherits = match fields.get("inherits") {
+                Some(Value::String(inherits)) if !inherits.is_empty() => Some(inherits.clone()),
+                Some(_) => {
+                    return Err(ModelCatalogOverlayError(format!(
+                        "entry {index} slug `{slug}`: field `inherits` must be a non-empty string"
+                    )));
+                }
+                None => None,
+            };
+            if let Some(field) = fields.keys().find(|field| {
+                field.as_str() != "inherits"
+                    && !MODEL_INFO_FIELDS.contains(&field.as_str())
+                    && !FORWARD_COMPATIBILITY_FIELDS.contains(&field.as_str())
+            }) {
+                return Err(ModelCatalogOverlayError(format!(
+                    "entry {index} slug `{slug}`: invalid field `{field}`"
+                )));
+            }
+            entries.push(ModelCatalogOverlayEntry {
+                index,
+                slug,
+                inherits,
+                fields,
+            });
+        }
+        Ok(Self { entries })
+    }
+
+    /// Apply the overlay in order, replacing matching slugs in place and appending new slugs.
+    pub fn apply(
+        &self,
+        mut catalog: ModelsResponse,
+    ) -> Result<ModelsResponse, ModelCatalogOverlayError> {
+        for entry in &self.entries {
+            let model = apply_entry(entry, &catalog.models)?;
+            replace_or_append(&mut catalog.models, model);
+        }
+        Ok(catalog)
+    }
+
+    /// Resolve every entry against the startup catalog for later refresh composition.
+    pub fn resolve(
+        self,
+        mut catalog: ModelsResponse,
+    ) -> Result<ResolvedModelCatalogOverlay, ModelCatalogOverlayError> {
+        let mut entries = Vec::with_capacity(self.entries.len());
+        for entry in self.entries {
+            let fallback = apply_entry(&entry, &catalog.models)?;
+            replace_or_append(&mut catalog.models, fallback.clone());
+            entries.push(ResolvedModelCatalogOverlayEntry { entry, fallback });
+        }
+        Ok(ResolvedModelCatalogOverlay { entries })
+    }
+}
+
+impl ResolvedModelCatalogOverlay {
+    /// Compose the resolved overlay onto a later effective catalog snapshot.
+    pub fn apply(&self, mut catalog: ModelsResponse) -> ModelsResponse {
+        for resolved in &self.entries {
+            let model = apply_entry(&resolved.entry, &catalog.models)
+                .unwrap_or_else(|_| resolved.fallback.clone());
+            replace_or_append(&mut catalog.models, model);
+        }
+        catalog
+    }
+}
+
+fn apply_entry(
+    entry: &ModelCatalogOverlayEntry,
+    models: &[ModelInfo],
+) -> Result<ModelInfo, ModelCatalogOverlayError> {
+    let parent_slug = entry.inherits.as_deref().unwrap_or(&entry.slug);
+    let parent = models
+        .iter()
+        .find(|model| model.slug == parent_slug)
+        .or_else(|| {
+            if entry.inherits.is_none() && entry.fields.contains_key("inference") {
+                models
+                    .iter()
+                    .find(|model| model.slug == FORWARD_COMPATIBILITY_BASELINE_MODEL)
+            } else {
+                None
+            }
+        });
+    let Some(parent) = parent else {
+        let detail = if entry.inherits.is_some() {
+            format!("missing parent model `{parent_slug}`")
+        } else {
+            "new model requires field `inherits`".to_string()
+        };
+        return Err(ModelCatalogOverlayError(format!(
+            "entry {} slug `{}`: {detail}",
+            entry.index, entry.slug
+        )));
+    };
+
+    let parent_value = serde_json::to_value(parent).map_err(|err| {
+        ModelCatalogOverlayError(format!(
+            "entry {} slug `{}`: failed to serialize parent model: {err}",
+            entry.index, entry.slug
+        ))
+    })?;
+    let mut merged = parent_value.as_object().cloned().ok_or_else(|| {
+        ModelCatalogOverlayError(format!(
+            "entry {} slug `{}`: parent model did not serialize as an object",
+            entry.index, entry.slug
+        ))
+    })?;
+    for (field, value) in &entry.fields {
+        if field != "inherits" {
+            merged.insert(field.clone(), value.clone());
+        }
+    }
+
+    serde_json::from_value::<ModelInfo>(Value::Object(merged)).map_err(|err| {
+        ModelCatalogOverlayError(format!(
+            "entry {} slug `{}`: invalid model field: {err}",
+            entry.index, entry.slug
+        ))
+    })
+}
+
+fn replace_or_append(models: &mut Vec<ModelInfo>, model: ModelInfo) {
+    if let Some(target_index) = models
+        .iter()
+        .position(|candidate| candidate.slug == model.slug)
+    {
+        models[target_index] = model;
+    } else {
+        models.push(model);
+    }
+}
+
+#[cfg(test)]
+#[path = "model_catalog_overlay_tests.rs"]
+mod tests;

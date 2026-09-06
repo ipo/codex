@@ -104,6 +104,7 @@ use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_path_uri::LegacyAppPathString;
 use serde::Deserialize;
+use serde_json::json;
 use tempfile::tempdir;
 
 use super::*;
@@ -9488,6 +9489,93 @@ async fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
     assert!(
         err.to_string().contains("must contain at least one model"),
         "unexpected error: {err}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_catalog_overlay_json_loads_the_deployed_nineteen_entry_shape() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let overlay_path = codex_home.path().join("overlay.json");
+    let mut models = vec![
+        json!({"slug": "gpt-5.6-sol", "use_responses_lite": true}),
+        json!({"slug": "gpt-5.6-terra", "use_responses_lite": true}),
+        json!({"slug": "gpt-5.6-luna", "use_responses_lite": true}),
+        json!({"slug": "gpt-5.5", "use_responses_lite": false}),
+        json!({"slug": "gpt-5.4", "visibility": "list"}),
+        json!({"slug": "gpt-5.4-mini", "visibility": "list"}),
+        json!({"slug": "gpt-5.2", "visibility": "none"}),
+        json!({"slug": "codex-auto-review", "visibility": "none"}),
+        json!({
+            "slug": "gpt-5.3-codex-spark",
+            "inherits": "gpt-5.6-sol",
+            "display_name": "GPT-5.3 Codex Spark"
+        }),
+    ];
+    for slug in [
+        "anthropic/claude-fable-5",
+        "anthropic/claude-opus-5",
+        "anthropic/claude-opus-4-8",
+        "anthropic/claude-sonnet-5",
+        "anthropic/claude-haiku-4-5-20251001",
+        "kimi/k3",
+        "kimi/k3-256k",
+        "kimi/kimi-for-coding",
+        "kimi/kimi-for-coding-highspeed",
+    ] {
+        models.push(json!({
+            "slug": slug,
+            "inherits": "gpt-5.6-sol",
+            "aliases": [slug],
+            "inference": {"route": "future-contract"}
+        }));
+    }
+    models.push(json!({
+        "slug": "local/qwen3.8-27b",
+        "auto_compact_token_limit": 121856,
+        "context_window": 131072,
+        "inference": {"route": "llama_cpp"},
+        "max_context_window": 131072
+    }));
+    std::fs::write(
+        &overlay_path,
+        serde_json::to_string(&json!({"models": models}))?,
+    )?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            model_catalog_overlay_json: Some(overlay_path.abs()),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    let catalog = config
+        .model_catalog_overlay
+        .expect("overlay should load")
+        .apply(bundled_models_response().expect("bundled catalog should parse"));
+
+    assert_eq!(
+        catalog.models.len(),
+        bundled_models_response()
+            .expect("bundled catalog should parse")
+            .models
+            .len()
+            + 11
+    );
+    assert!(
+        catalog
+            .models
+            .iter()
+            .any(|model| model.slug == "gpt-6-astra")
+    );
+    assert!(
+        catalog
+            .models
+            .iter()
+            .any(|model| model.slug == "local/qwen3.8-27b")
     );
     Ok(())
 }

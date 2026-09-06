@@ -15,6 +15,7 @@ use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_login::default_client::ResidencyRequirement;
 use codex_login::default_client::read_default_client_residency_requirement;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::ResolvedModelCatalogOverlay;
 use codex_models_manager::cache::ModelsCache;
 use codex_models_manager::manager::OpenAiModelsManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -271,6 +272,7 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         &self,
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
     ) -> SharedModelsManager;
 
     /// Creates a model manager with caching disabled.
@@ -280,11 +282,16 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn models_manager_without_cache(
         &self,
         config_model_catalog: Option<ModelsResponse>,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
     ) -> SharedModelsManager {
         let model_catalog = config_model_catalog
             .or_else(|| codex_models_manager::bundled_models_response().ok())
             .unwrap_or_default();
-        Arc::new(StaticModelsManager::new(self.auth_manager(), model_catalog))
+        Arc::new(StaticModelsManager::new_with_overlay(
+            self.auth_manager(),
+            model_catalog,
+            model_catalog_overlay,
+        ))
     }
 
     /// Creates a model manager that can use a caller-provided cache for remote catalogs.
@@ -296,10 +303,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     fn models_manager_with_cache(
         &self,
         config_model_catalog: Option<ModelsResponse>,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
         cache: Arc<dyn ModelsCache>,
     ) -> SharedModelsManager {
         drop(cache);
-        self.models_manager_without_cache(config_model_catalog)
+        self.models_manager_without_cache(config_model_catalog, model_catalog_overlay)
     }
 }
 
@@ -445,21 +453,24 @@ impl ModelProvider for ConfiguredModelProvider {
         &self,
         codex_home: PathBuf,
         config_model_catalog: Option<ModelsResponse>,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_overlay(
                 self.auth_manager.clone(),
                 model_catalog,
+                model_catalog_overlay,
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new(
+                Arc::new(OpenAiModelsManager::new_with_overlay(
                     codex_home,
                     endpoint,
                     self.auth_manager.clone(),
+                    model_catalog_overlay,
                 ))
             }
         }
@@ -468,20 +479,23 @@ impl ModelProvider for ConfiguredModelProvider {
     fn models_manager_without_cache(
         &self,
         config_model_catalog: Option<ModelsResponse>,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_overlay(
                 self.auth_manager.clone(),
                 model_catalog,
+                model_catalog_overlay,
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_without_cache(
+                Arc::new(OpenAiModelsManager::new_without_cache_with_overlay(
                     endpoint,
                     self.auth_manager.clone(),
+                    model_catalog_overlay,
                 ))
             }
         }
@@ -490,22 +504,25 @@ impl ModelProvider for ConfiguredModelProvider {
     fn models_manager_with_cache(
         &self,
         config_model_catalog: Option<ModelsResponse>,
+        model_catalog_overlay: Option<ResolvedModelCatalogOverlay>,
         cache: Arc<dyn ModelsCache>,
     ) -> SharedModelsManager {
         match config_model_catalog {
-            Some(model_catalog) => Arc::new(StaticModelsManager::new(
+            Some(model_catalog) => Arc::new(StaticModelsManager::new_with_overlay(
                 self.auth_manager.clone(),
                 model_catalog,
+                model_catalog_overlay,
             )),
             None => {
                 let endpoint = Arc::new(OpenAiModelsEndpoint::new(
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_with_cache(
+                Arc::new(OpenAiModelsManager::new_with_cache_and_overlay(
                     cache,
                     endpoint,
                     self.auth_manager.clone(),
+                    model_catalog_overlay,
                 ))
             }
         }
@@ -1045,10 +1062,14 @@ mod tests {
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
             /*auth_manager*/ None,
         );
-        let manager =
-            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
-        let uncached_manager =
-            provider.models_manager_without_cache(/*config_model_catalog*/ None);
+        let manager = provider.models_manager(
+            test_codex_home(),
+            /*config_model_catalog*/ None,
+            /*model_catalog_overlay*/ None,
+        );
+        let uncached_manager = provider.models_manager_without_cache(
+            /*config_model_catalog*/ None, /*model_catalog_overlay*/ None,
+        );
 
         let catalog = manager
             .raw_model_catalog(
@@ -1147,6 +1168,7 @@ mod tests {
             Some(ModelsResponse {
                 models: vec![configured_model],
             }),
+            /*model_catalog_overlay*/ None,
         );
 
         let catalog = manager
@@ -1194,8 +1216,11 @@ mod tests {
             )),
         );
 
-        let manager =
-            provider.models_manager(test_codex_home(), /*config_model_catalog*/ None);
+        let manager = provider.models_manager(
+            test_codex_home(),
+            /*config_model_catalog*/ None,
+            /*model_catalog_overlay*/ None,
+        );
         let catalog = manager
             .raw_model_catalog(
                 RefreshStrategy::Online,
