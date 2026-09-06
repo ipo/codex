@@ -107,6 +107,7 @@ pub(crate) struct MentionBinding {
     /// Canonical mention target (for example `app://...` or absolute SKILL.md path).
     pub(crate) path: String,
 }
+mod build_provenance;
 mod chat_composer;
 mod chat_composer_history;
 mod command_popup;

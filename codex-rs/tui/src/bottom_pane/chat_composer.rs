@@ -266,6 +266,7 @@ use super::footer::reset_mode_after_activity;
 use super::footer::side_conversation_context_line;
 use super::footer::single_line_footer_layout;
 use super::footer::status_line_right_indicator_line;
+use super::footer::status_line_right_indicator_line_fitting_width;
 use super::footer::toggle_shortcut_mode;
 use super::footer::uses_passive_footer_status_layout;
 use super::mentions_v2::MentionV2Popup;
@@ -1479,6 +1480,30 @@ impl ChatComposer {
         } else {
             Some(Line::from(spans))
         }
+    }
+
+    fn mode_indicator_line_fitting_width(
+        &self,
+        show_cycle_hint: bool,
+        max_width: usize,
+    ) -> Option<Line<'static>> {
+        let mut spans = Vec::new();
+        if let Some(vim_mode) = self.vim_mode_indicator_span() {
+            spans.push(vim_mode);
+        }
+        if let Some(indicators) = status_line_right_indicator_line_fitting_width(
+            self.footer.collaboration_mode_indicator,
+            self.footer.goal_status_indicator.as_ref(),
+            self.footer.ide_context_active,
+            show_cycle_hint,
+            max_width,
+        ) {
+            if !spans.is_empty() {
+                spans.push(" | ".dim());
+            }
+            spans.extend(indicators.spans);
+        }
+        (!spans.is_empty()).then_some(Line::from(spans))
     }
 
     fn right_footer_line_with_context(&self) -> Line<'static> {
@@ -4823,8 +4848,13 @@ impl ChatComposer {
                         } else if transition_active {
                             None
                         } else if status_line_active {
-                            let full = self.mode_indicator_line(show_cycle_hint);
-                            let compact = self.mode_indicator_line(/*show_cycle_hint*/ false);
+                            let available =
+                                hint_rect.width.saturating_sub(FOOTER_INDENT_COLS as u16) as usize;
+                            let full =
+                                self.mode_indicator_line_fitting_width(show_cycle_hint, available);
+                            let compact = self.mode_indicator_line_fitting_width(
+                                /*show_cycle_hint*/ false, available,
+                            );
                             let full_width = full.as_ref().map(|l| l.width() as u16).unwrap_or(0);
                             if can_show_left_with_context(hint_rect, left_width, full_width) {
                                 full
@@ -5941,6 +5971,67 @@ mod tests {
                     /*context_percent*/ 100,
                     Some(CollaborationModeIndicator::Plan),
                 );
+            },
+        );
+
+        // Configurable status lines carry the workspace branch on the left, while Plan and goal
+        // indicators carry deterministic build provenance on the right.
+        snapshot_composer_state_with_width(
+            "footer_provenance_plan_wide",
+            /*width*/ 120,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer,
+                    /*context_percent*/ 100,
+                    Some(CollaborationModeIndicator::Plan),
+                );
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from("workspace/main")));
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_provenance_plan_constrained",
+            /*width*/ 60,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer,
+                    /*context_percent*/ 100,
+                    Some(CollaborationModeIndicator::Plan),
+                );
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from("workspace/main")));
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_provenance_goal_wide",
+            /*width*/ 120,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer, /*context_percent*/ 100, /*indicator*/ None,
+                );
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from("workspace/main")));
+                composer.set_goal_status_indicator(Some(GoalStatusIndicator::Active {
+                    usage: Some("40K / 50K".to_string()),
+                }));
+            },
+        );
+        snapshot_composer_state_with_width(
+            "footer_provenance_goal_constrained",
+            /*width*/ 74,
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                setup_collab_footer(
+                    composer, /*context_percent*/ 100, /*indicator*/ None,
+                );
+                composer.set_status_line_enabled(/*enabled*/ true);
+                composer.set_status_line(Some(Line::from("workspace/main")));
+                composer.set_goal_status_indicator(Some(GoalStatusIndicator::Active {
+                    usage: Some("40K / 50K".to_string()),
+                }));
             },
         );
 
