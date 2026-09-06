@@ -464,6 +464,16 @@ pub struct ModelInfo {
     /// Opaque identifier for compaction-compatible model configurations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comp_hash: Option<String>,
+    /// Internal identifier for models that can safely inherit one another's turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub history_compatibility_group: Option<String>,
+    /// Whether outgoing requests must omit empty assistant messages.
+    #[serde(default)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub requires_nonempty_assistant_messages: bool,
     /// Percentage of the context window considered usable for inputs, after
     /// reserving headroom for system prompts, tool overhead, and model output.
     #[serde(default = "default_effective_context_window_percent")]
@@ -510,6 +520,18 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    /// Returns whether arbitrary turns from either model can be inherited by the other.
+    pub fn is_history_compatible_with(&self, other: &Self) -> bool {
+        self.slug == other.slug
+            || matches!(
+                (
+                    self.history_compatibility_group.as_deref(),
+                    other.history_compatibility_group.as_deref(),
+                ),
+                (Some(left), Some(right)) if left == right
+            )
+    }
+
     pub fn wire_api(&self, legacy_wire_api: WireApi) -> WireApi {
         self.inference
             .as_ref()
@@ -1039,6 +1061,8 @@ mod tests {
             max_context_window: None,
             auto_compact_token_limit: None,
             comp_hash: None,
+            history_compatibility_group: None,
+            requires_nonempty_assistant_messages: false,
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
             disabled_tools: Vec::new(),
@@ -1054,6 +1078,41 @@ mod tests {
             multi_agent_version: None,
             multi_agent_reasoning_effort: None,
         }
+    }
+
+    #[test]
+    fn history_compatibility_requires_an_exact_slug_or_shared_explicit_group() {
+        let base = test_model(/*spec*/ None);
+        let same_slug = base.clone();
+        let mut same_group = test_model(/*spec*/ None);
+        same_group.slug = "compatible-model".to_string();
+        same_group.history_compatibility_group = Some("family".to_string());
+        let mut grouped_base = base.clone();
+        grouped_base.history_compatibility_group = Some("family".to_string());
+        let mut ungrouped = test_model(/*spec*/ None);
+        ungrouped.slug = "family".to_string();
+
+        assert!(base.is_history_compatible_with(&same_slug));
+        assert!(grouped_base.is_history_compatible_with(&same_group));
+        assert!(!base.is_history_compatible_with(&same_group));
+        assert!(!grouped_base.is_history_compatible_with(&ungrouped));
+    }
+
+    #[test]
+    fn legacy_model_metadata_defaults_to_isolated_history_and_unmodified_messages() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize model metadata");
+        let object = value
+            .as_object_mut()
+            .expect("model metadata should be an object");
+        object.remove("history_compatibility_group");
+        object.remove("requires_nonempty_assistant_messages");
+
+        let model =
+            serde_json::from_value::<ModelInfo>(value).expect("deserialize legacy model metadata");
+
+        assert_eq!(model.history_compatibility_group, None);
+        assert!(!model.requires_nonempty_assistant_messages);
     }
 
     fn personality_variables() -> ModelInstructionsVariables {

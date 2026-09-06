@@ -15,8 +15,7 @@ const MULTI_AGENT_V1_NAMESPACE_DESCRIPTION: &str = "Tools for spawning and manag
 
 const SPAWN_AGENT_INHERITED_MODEL_GUIDANCE: &str = "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed.";
 const SPAWN_AGENT_TYPE_OVERRIDE_DESCRIPTION_V1: &str = "Agent type override for the new agent. Omit to inherit the parent agent type with a full-history fork; otherwise, `default` is used.";
-const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
-    "Model override for the new agent. Omit unless an explicit override is needed.";
+const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str = "Model override for the new agent. Full-history forks may only name the parent model; use fork_turns=\"none\" to change models.";
 
 #[derive(Debug, Clone)]
 pub struct SpawnAgentToolOptions {
@@ -129,7 +128,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(
             properties,
-            Some(vec!["task_name".to_string(), "message".to_string()]),
+            Some(vec!["task_name".to_string()]),
             Some(false.into()),
         ),
         output_schema: Some(spawn_agent_output_schema_v2(
@@ -187,9 +186,17 @@ pub fn create_send_message_tool() -> ToolSpec {
         (
             "message".to_string(),
             JsonSchema::string(Some(
-                "Message text to queue on the target agent.".to_string(),
+                "Encrypted message text. Use exactly one of message or plaintext_message."
+                    .to_string(),
             ))
             .with_encrypted(),
+        ),
+        (
+            "plaintext_message".to_string(),
+            JsonSchema::string(Some(
+                "Plaintext message text. Required instead of message when crossing model families."
+                    .to_string(),
+            )),
         ),
     ]);
 
@@ -201,7 +208,7 @@ pub fn create_send_message_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(
             properties,
-            Some(vec!["target".to_string(), "message".to_string()]),
+            Some(vec!["target".to_string()]),
             Some(false.into()),
         ),
         output_schema: None,
@@ -220,9 +227,16 @@ pub fn create_followup_task_tool() -> ToolSpec {
         (
             "message".to_string(),
             JsonSchema::string(Some(
-                "Message text to send to the target agent.".to_string(),
+                "Encrypted task text. Use exactly one of message or plaintext_message.".to_string(),
             ))
             .with_encrypted(),
+        ),
+        (
+            "plaintext_message".to_string(),
+            JsonSchema::string(Some(
+                "Plaintext task text. Required instead of message when crossing model families."
+                    .to_string(),
+            )),
         ),
     ]);
 
@@ -232,7 +246,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(vec!["target".to_string(), "message".to_string()]), Some(false.into())),
+        parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
         output_schema: None,
     })
 }
@@ -627,14 +641,22 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         (
             "message".to_string(),
             JsonSchema::string(Some(
-                "Initial plain-text task for the new agent.".to_string(),
+                "Encrypted initial task. Use exactly one of message or plaintext_message."
+                    .to_string(),
             ))
             .with_encrypted(),
         ),
         (
+            "plaintext_message".to_string(),
+            JsonSchema::string(Some(
+                "Plaintext initial task. Required instead of message when crossing model families."
+                    .to_string(),
+            )),
+        ),
+        (
             "agent_type".to_string(),
             JsonSchema::string(Some(format!(
-                "Agent type override for the new agent. Omit unless explicitly asked. The selected role applies regardless of how much parent history is inherited.\n{agent_type_description}"
+                "Agent type override for the new agent. Omit unless explicitly asked. Full-history forks inherit the parent agent type; use fork_turns=\"none\" to apply an override.\n{agent_type_description}"
             ))),
         ),
         (
@@ -653,7 +675,7 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         (
             "reasoning_effort".to_string(),
             JsonSchema::string(Some(
-                "Reasoning effort override for the new agent. Omit to inherit the parent effort."
+                "Reasoning effort override for the new agent. Full-history forks must use the parent's effective effort."
                     .to_string(),
             )),
         ),

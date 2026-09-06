@@ -82,28 +82,30 @@ fn adapt_collaboration_message_parameter(tool_name: &str, schema: &mut JsonSchem
     let Some(properties) = schema.properties.as_mut() else {
         return;
     };
-    let Some(mut message) = properties.remove("message") else {
+    let Some(message) = properties.get("message") else {
         return;
     };
     if message.encrypted != Some(true) {
-        properties.insert("message".to_string(), message);
         return;
     }
+    if !properties.contains_key("plaintext_message") {
+        let mut plaintext_message = message.clone();
+        plaintext_message.encrypted = None;
+        plaintext_message.description = Some(match tool_name {
+            "spawn_agent" => "Plaintext initial task for the new agent.".to_string(),
+            "send_message" => "Plaintext message text to queue on the target agent.".to_string(),
+            "followup_task" => "Plaintext message text to send to the target agent.".to_string(),
+            _ => unreachable!("collaboration message tool was checked above"),
+        });
+        properties.insert("plaintext_message".to_string(), plaintext_message);
+    }
 
-    message.encrypted = None;
-    message.description = Some(match tool_name {
-        "spawn_agent" => "Plaintext initial task for the new agent.".to_string(),
-        "send_message" => "Plaintext message text to queue on the target agent.".to_string(),
-        "followup_task" => "Plaintext message text to send to the target agent.".to_string(),
-        _ => unreachable!("collaboration message tool was checked above"),
-    });
-    properties.insert("plaintext_message".to_string(), message);
-    if let Some(required) = schema.required.as_mut() {
-        for property in required {
-            if property == "message" {
-                *property = "plaintext_message".to_string();
-            }
-        }
+    let required = schema.required.get_or_insert_default();
+    if !required
+        .iter()
+        .any(|property| property == "plaintext_message")
+    {
+        required.push("plaintext_message".to_string());
     }
 }
 

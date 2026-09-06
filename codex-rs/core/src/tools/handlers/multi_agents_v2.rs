@@ -2,9 +2,6 @@
 
 use crate::agent::AgentStatus;
 use crate::agent::agent_resolver::resolve_agent_target;
-use crate::context::ContextualUserFragment;
-use crate::context::InterAgentMessage;
-use crate::context::InterAgentMessageType;
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
@@ -20,7 +17,10 @@ use codex_protocol::items::CollabAgentToolCallItem;
 use codex_protocol::items::CollabAgentToolCallStatus;
 use codex_protocol::items::SubAgentActivityItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::model_inference::ModelFamily;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SubAgentActivityKind;
@@ -55,31 +55,50 @@ pub(crate) async fn emit_sub_agent_activity(
     session.emit_turn_item_completed(turn, item).await;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ToolMessage {
+    Encrypted(String),
+    Plaintext(String),
+}
+
 fn communication_from_tool_message(
     author: AgentPath,
     recipient: AgentPath,
-    message: String,
-    source: &crate::tools::context::ToolCallSource,
+    message: ToolMessage,
     trigger_turn: bool,
 ) -> InterAgentCommunication {
-    if !matches!(
-        source,
-        crate::tools::context::ToolCallSource::DirectPlaintextMessage
-    ) {
-        return InterAgentCommunication::new_encrypted(
+    match message {
+        ToolMessage::Encrypted(message) => InterAgentCommunication::new_encrypted(
             author,
             recipient,
             Vec::new(),
             message,
             trigger_turn,
-        );
+        ),
+        ToolMessage::Plaintext(message) => {
+            InterAgentCommunication::new(author, recipient, Vec::new(), message, trigger_turn)
+        }
     }
-    let message_type = if trigger_turn {
-        InterAgentMessageType::NewTask
-    } else {
-        InterAgentMessageType::Message
-    };
-    let content =
-        InterAgentMessage::new(message_type, recipient.clone(), author.clone(), message).render();
-    InterAgentCommunication::new(author, recipient, Vec::new(), content, trigger_turn)
+}
+
+fn model_family(model: &ModelInfo) -> ModelFamily {
+    model
+        .inference
+        .as_ref()
+        .map_or(ModelFamily::OpenAi, ModelInferenceConfig::family)
+}
+
+fn validate_tool_message_family(
+    sender: &ModelInfo,
+    recipient: &ModelInfo,
+    message: &ToolMessage,
+) -> Result<(), FunctionCallError> {
+    let sender_family = model_family(sender);
+    let recipient_family = model_family(recipient);
+    if matches!(message, ToolMessage::Encrypted(_)) && sender_family != recipient_family {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "Encrypted collaboration messages cannot cross model families (`{sender_family}` to `{recipient_family}`); retry with plaintext_message."
+        )));
+    }
+    Ok(())
 }

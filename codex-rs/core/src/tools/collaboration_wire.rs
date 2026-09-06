@@ -111,7 +111,7 @@ fn adapt_native_plaintext_collaboration_invocation(
 pub(crate) fn adapt_native_plaintext_collaboration_arguments(
     arguments: &str,
 ) -> Result<String, FunctionCallError> {
-    let mut arguments = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
+    let parsed_arguments = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(
         arguments,
     )
     .map_err(|err| {
@@ -119,13 +119,13 @@ pub(crate) fn adapt_native_plaintext_collaboration_arguments(
             "failed to parse native collaboration arguments: {err}"
         ))
     })?;
-    if arguments.contains_key("message") {
+    if parsed_arguments.contains_key("message") {
         return Err(FunctionCallError::RespondToModel(
             "Encrypted collaboration arguments are unavailable on this inference wire; retry with plaintext_message."
                 .to_string(),
         ));
     }
-    let plaintext_message = arguments.remove("plaintext_message").ok_or_else(|| {
+    let plaintext_message = parsed_arguments.get("plaintext_message").ok_or_else(|| {
         FunctionCallError::RespondToModel(
             "Native collaboration calls require plaintext_message.".to_string(),
         )
@@ -135,10 +135,5 @@ pub(crate) fn adapt_native_plaintext_collaboration_arguments(
             "plaintext_message must be a string.".to_string(),
         ));
     }
-    arguments.insert("message".to_string(), plaintext_message);
-    serde_json::to_string(&arguments).map_err(|err| {
-        FunctionCallError::RespondToModel(format!(
-            "failed to serialize native collaboration arguments: {err}"
-        ))
-    })
+    Ok(arguments.to_string())
 }

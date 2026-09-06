@@ -1,4 +1,5 @@
 mod history;
+mod history_projection;
 mod normalize;
 pub(crate) mod updates;
 

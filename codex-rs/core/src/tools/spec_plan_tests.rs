@@ -25,6 +25,9 @@ use codex_protocol::model_inference::KimiInferenceConfig;
 use codex_protocol::model_inference::KimiThinkingPolicy;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::model_inference::WireApi;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -477,9 +480,9 @@ impl ToolExecutor<ToolInvocation> for NativeCollaborationProbe {
                 panic!("expected function payload");
             };
             let expected = if tool_name == "spawn_agent" {
-                json!({"task_name": "worker", "message": "continue"})
+                json!({"task_name": "worker", "plaintext_message": "continue"})
             } else {
-                json!({"target": "/root/worker", "message": "continue"})
+                json!({"target": "/root/worker", "plaintext_message": "continue"})
             };
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&arguments)
@@ -3081,7 +3084,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
 }
 
 #[tokio::test]
-async fn responses_and_astra_multi_agent_v2_message_schemas_remain_encrypted() {
+async fn responses_and_astra_multi_agent_v2_message_schemas_expose_both_message_forms() {
     for (slug, use_bedrock) in [("gpt-5.4", false), ("gpt-6-astra", true)] {
         let (_session, mut turn) = make_session_and_context().await;
         set_feature(&mut turn, Feature::MultiAgentV2, /*enabled*/ true);
@@ -3121,12 +3124,11 @@ async fn responses_and_astra_multi_agent_v2_message_schemas_remain_encrypted() {
                     .and_then(|schema| schema.encrypted),
                 Some(true)
             );
-            assert!(!properties.contains_key("plaintext_message"));
-            assert!(
-                tool.parameters
-                    .required
-                    .as_ref()
-                    .is_some_and(|required| required.contains(&"message".to_string()))
+            assert_eq!(
+                properties
+                    .get("plaintext_message")
+                    .and_then(|schema| schema.encrypted),
+                None
             );
         }
     }
@@ -3171,14 +3173,14 @@ async fn native_multi_agent_v2_message_schemas_require_plaintext() {
 }
 
 #[test]
-fn native_collaboration_runtime_translates_only_plaintext_message() {
-    let translated = adapt_native_plaintext_collaboration_arguments(
+fn native_collaboration_runtime_preserves_only_plaintext_message() {
+    let adapted = adapt_native_plaintext_collaboration_arguments(
         r#"{"target":"/root/worker","plaintext_message":"continue"}"#,
     )
     .expect("schema-valid native arguments should adapt");
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&translated).expect("adapted JSON should parse"),
-        json!({"target": "/root/worker", "message": "continue"})
+        serde_json::from_str::<serde_json::Value>(&adapted).expect("adapted JSON should parse"),
+        json!({"target": "/root/worker", "plaintext_message": "continue"})
     );
 
     let encrypted = adapt_native_plaintext_collaboration_arguments(
@@ -3192,7 +3194,7 @@ fn native_collaboration_runtime_translates_only_plaintext_message() {
 }
 
 #[tokio::test]
-async fn native_claude_and_kimi_plaintext_collaboration_calls_reach_runtime() {
+async fn native_claude_and_kimi_plaintext_collaboration_calls_return_continuation_results() {
     for configure_native in [
         use_native_claude as fn(&mut TurnContext),
         use_native_kimi as fn(&mut TurnContext),
@@ -3216,22 +3218,34 @@ async fn native_claude_and_kimi_plaintext_collaboration_calls_reach_runtime() {
                     "plaintext_message": "continue"
                 })
             };
-            runtime
+            let call_id = format!("call-{tool_name}");
+            let payload = ToolPayload::Function {
+                arguments: target.to_string(),
+            };
+            let output = runtime
                 .handle(ToolInvocation {
                     session: Arc::clone(&session),
                     turn: Arc::clone(&turn),
                     step_context: Arc::clone(&step_context),
                     cancellation_token: CancellationToken::new(),
                     tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
-                    call_id: format!("call-{tool_name}"),
+                    call_id: call_id.clone(),
                     tool_name: ToolName::plain(tool_name),
                     source: ToolCallSource::DirectPlaintextMessage,
-                    payload: ToolPayload::Function {
-                        arguments: target.to_string(),
-                    },
+                    payload: payload.clone(),
                 })
                 .await
                 .expect("schema-valid native collaboration call should reach runtime");
+            assert_eq!(
+                output.to_response_item(&call_id, &payload),
+                ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        body: FunctionCallOutputBody::Text("{\"ok\":true}".to_string()),
+                        success: Some(true),
+                    },
+                }
+            );
         }
     }
 }

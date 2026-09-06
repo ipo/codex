@@ -41,6 +41,8 @@ const MODEL_INFO_FIELDS: &[&str] = &[
     "max_context_window",
     "auto_compact_token_limit",
     "comp_hash",
+    "history_compatibility_group",
+    "requires_nonempty_assistant_messages",
     "effective_context_window_percent",
     "experimental_supported_tools",
     "disabled_tools",
@@ -58,11 +60,7 @@ const MODEL_INFO_FIELDS: &[&str] = &[
 
 // These staged fields in the deployed overlay are intentionally accepted but not interpreted
 // until their owning tickets.
-const FORWARD_COMPATIBILITY_FIELDS: &[&str] = &[
-    "history_compatibility_group",
-    "requires_nonempty_assistant_messages",
-    "supports_parallel_tool_calls",
-];
+const FORWARD_COMPATIBILITY_FIELDS: &[&str] = &["supports_parallel_tool_calls"];
 
 /// A validated sequence of shallow model catalog patches and inherited additions.
 #[derive(Debug, Clone, PartialEq)]
@@ -250,6 +248,7 @@ fn apply_entry(
     })?;
     if entry.inherits.is_some() {
         merged.insert("aliases".to_string(), Value::Array(Vec::new()));
+        merged.remove("history_compatibility_group");
     }
     for (field, value) in &entry.fields {
         if field != "inherits" {

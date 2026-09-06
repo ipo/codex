@@ -82,7 +82,9 @@ fn inherited_overlay_models_only_receive_explicit_aliases() {
         {
             "slug": explicit_slug,
             "inherits": parent.slug,
-            "aliases": ["child-alias"]
+            "aliases": ["child-alias"],
+            "history_compatibility_group": "external-family",
+            "requires_nonempty_assistant_messages": true
         }
     ]}))
     .expect("overlay should apply");
@@ -90,9 +92,12 @@ fn inherited_overlay_models_only_receive_explicit_aliases() {
     let mut expected_inherited = parent.clone();
     expected_inherited.slug = inherited_slug.to_string();
     expected_inherited.aliases = Vec::new();
+    expected_inherited.history_compatibility_group = None;
     let mut expected_explicit = parent;
     expected_explicit.slug = explicit_slug.to_string();
     expected_explicit.aliases = vec!["child-alias".to_string()];
+    expected_explicit.history_compatibility_group = Some("external-family".to_string());
+    expected_explicit.requires_nonempty_assistant_messages = true;
     assert_eq!(
         applied.models[applied.models.len() - 2..],
         [expected_inherited, expected_explicit]

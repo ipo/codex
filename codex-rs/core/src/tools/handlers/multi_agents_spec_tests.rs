@@ -155,6 +155,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             .and_then(|schema| schema.encrypted),
         Some(true)
     );
+    assert!(properties.contains_key("plaintext_message"));
     assert!(properties.contains_key("fork_turns"));
     assert_eq!(
         properties
@@ -176,12 +177,14 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         properties
             .get("reasoning_effort")
             .and_then(|schema| schema.description.as_deref()),
-        Some("Reasoning effort override for the new agent. Omit to inherit the parent effort.")
+        Some(
+            "Reasoning effort override for the new agent. Full-history forks must use the parent's effective effort."
+        )
     );
     assert!(!properties.contains_key("service_tier"));
     assert_eq!(
         parameters.required.as_ref(),
-        Some(&vec!["task_name".to_string(), "message".to_string()])
+        Some(&vec!["task_name".to_string()])
     );
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
@@ -467,7 +470,7 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
 }
 
 #[test]
-fn send_message_tool_requires_message_and_has_no_output_schema() {
+fn send_message_tool_exposes_encrypted_and_plaintext_inputs() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -492,6 +495,7 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
             .and_then(|schema| schema.encrypted),
         Some(true)
     );
+    assert!(properties.contains_key("plaintext_message"));
     assert!(!properties.contains_key("interrupt"));
     assert!(!properties.contains_key("items"));
     assert_eq!(
@@ -502,13 +506,13 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
     );
     assert_eq!(
         parameters.required.as_ref(),
-        Some(&vec!["target".to_string(), "message".to_string()])
+        Some(&vec!["target".to_string()])
     );
     assert_eq!(output_schema, None);
 }
 
 #[test]
-fn followup_task_tool_requires_message_and_has_no_output_schema() {
+fn followup_task_tool_exposes_encrypted_and_plaintext_inputs() {
     let ToolSpec::Function(ResponsesApiTool {
         name,
         description,
@@ -540,10 +544,11 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
             .and_then(|schema| schema.encrypted),
         Some(true)
     );
+    assert!(properties.contains_key("plaintext_message"));
     assert!(!properties.contains_key("items"));
     assert_eq!(
         parameters.required.as_ref(),
-        Some(&vec!["target".to_string(), "message".to_string()])
+        Some(&vec!["target".to_string()])
     );
     assert_eq!(output_schema, None);
 }
