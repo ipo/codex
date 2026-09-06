@@ -10,6 +10,7 @@ const FORWARD_COMPATIBILITY_BASELINE_MODEL: &str = "gpt-5.6-sol";
 // Keep this in sync with the fields accepted by `ModelInfo`'s serde implementation.
 const MODEL_INFO_FIELDS: &[&str] = &[
     "slug",
+    "aliases",
     "display_name",
     "description",
     "default_reasoning_level",
@@ -56,7 +57,6 @@ const MODEL_INFO_FIELDS: &[&str] = &[
 // These staged fields in the deployed overlay are intentionally accepted but not interpreted
 // until their owning tickets.
 const FORWARD_COMPATIBILITY_FIELDS: &[&str] = &[
-    "aliases",
     "history_compatibility_group",
     "inference",
     "requires_nonempty_assistant_messages",
@@ -247,6 +247,9 @@ fn apply_entry(
             entry.index, entry.slug
         ))
     })?;
+    if entry.inherits.is_some() {
+        merged.insert("aliases".to_string(), Value::Array(Vec::new()));
+    }
     for (field, value) in &entry.fields {
         if field != "inherits" {
             merged.insert(field.clone(), value.clone());

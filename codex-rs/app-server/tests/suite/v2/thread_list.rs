@@ -1038,6 +1038,80 @@ sqlite = true
 }
 
 #[tokio::test]
+async fn thread_list_scan_and_repair_preserves_db_row_for_malformed_rollout() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .build_initialized_with_timeout(std::time::Duration::from_secs(60))
+        .await?;
+
+    let uuid = Uuid::from_u128(9020);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let path = rollout_path(
+        codex_home.path(),
+        "2025-01-03T15-00-00",
+        thread_id.to_string().as_str(),
+    );
+    std::fs::create_dir_all(path.parent().expect("rollout parent"))?;
+    std::fs::write(&path, "malformed rollout\n")?;
+
+    let state_db = codex_state::StateRuntime::init(
+        codex_state::SqliteConfig::new_for_testing(codex_home.path().abs()),
+        "mock_provider".into(),
+    )
+    .await?;
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await?;
+    let created_at = DateTime::parse_from_rfc3339("2025-01-03T15:00:00Z")?.to_utc();
+    let mut builder = codex_state::ThreadMetadataBuilder::new(
+        thread_id,
+        path.clone(),
+        created_at,
+        CoreSessionSource::Cli,
+    );
+    builder.history_mode = codex_protocol::protocol::ThreadHistoryMode::Paginated;
+    builder.model_provider = Some("mock_provider".to_string());
+    builder.cwd = codex_home.path().to_path_buf();
+    let mut metadata = builder.build("mock_provider");
+    metadata.first_user_message = Some("SQLite is authoritative".to_string());
+    metadata.preview = metadata.first_user_message.clone();
+    metadata.title = "SQLite is authoritative".to_string();
+    state_db.upsert_thread(&metadata).await?;
+
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        /*cursor*/ None,
+        Some(10),
+        Some(vec!["mock_provider".to_string()]),
+        /*source_kinds*/ None,
+        /*archived*/ None,
+    )
+    .await?;
+
+    assert_eq!(
+        data.iter()
+            .map(|thread| (
+                thread.id.clone(),
+                thread.path.clone(),
+                thread.preview.clone(),
+                thread.history_mode,
+            ))
+            .collect::<Vec<_>>(),
+        vec![(
+            thread_id.to_string(),
+            Some(path),
+            "SQLite is authoritative".to_string(),
+            codex_app_server_protocol::ThreadHistoryMode::Paginated,
+        )]
+    );
+    assert_eq!(state_db.get_thread(thread_id).await?, Some(metadata));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;

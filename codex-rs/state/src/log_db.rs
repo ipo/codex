@@ -583,9 +583,11 @@ mod tests {
         }
     }
 
+    const TEST_LOG_TS: i64 = 4_000_000_000;
+
     fn test_entry(message: &str) -> LogEntry {
         LogEntry {
-            ts: 1,
+            ts: TEST_LOG_TS,
             ts_nanos: 2,
             level: "INFO".to_string(),
             target: "test".to_string(),

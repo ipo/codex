@@ -64,6 +64,7 @@ async fn handle_spawn_agent(
         .filter(|role| !role.is_empty());
     let input_items = parse_collab_input(args.message, args.items)?;
     let prompt = render_input_preview(&input_items);
+    let environments = resolve_spawn_agent_environments(turn.as_ref(), args.cwd.as_deref()).await?;
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
     let max_depth = turn.config.agent_max_depth;
@@ -103,10 +104,13 @@ async fn handle_spawn_agent(
     )
     .await?;
     if !args.fork_context {
-        apply_spawn_agent_role(&session, &mut config, role_name).await?;
+        apply_spawn_agent_role(&session, &mut config, role_name, turn.multi_agent_version).await?;
     }
     apply_spawn_agent_service_tier(&session, &mut config).await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
+    if args.cwd.is_some() {
+        apply_spawn_agent_selected_cwd(&mut config, &environments)?;
+    }
 
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,
@@ -124,7 +128,7 @@ async fn handle_spawn_agent(
             parent_thread_id: Some(session.thread_id),
             parent_turn_id: Some(turn.sub_id.clone()),
             root_turn_id: turn.turn_metadata_state.root_turn_id(),
-            environments: Some(step_context.environments.to_selections()),
+            environments: Some(environments),
             multi_agent_v2_usage_hints: None,
             cyber_access_program: turn.cyber_access_program,
         },
@@ -228,6 +232,7 @@ struct SpawnAgentArgs {
     agent_type: Option<String>,
     model: Option<String>,
     reasoning_effort: Option<ReasoningEffort>,
+    cwd: Option<String>,
     #[serde(default)]
     fork_context: bool,
 }

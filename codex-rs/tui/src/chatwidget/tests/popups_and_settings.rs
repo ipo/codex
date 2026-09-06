@@ -3535,13 +3535,11 @@ async fn skills_menu_default_mentions_shortcut_snapshot() {
     assert_chatwidget_snapshot!("skills_menu_default_mentions_shortcut", popup);
 }
 
-#[tokio::test]
-async fn model_picker_hides_show_in_picker_false_models_from_cache() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
-    chat.thread_id = Some(ThreadId::new());
-    let preset = |slug: &str, show_in_picker: bool| ModelPreset {
+fn model_picker_preset(slug: &str, show_in_picker: bool) -> ModelPreset {
+    ModelPreset {
         id: slug.to_string(),
         model: slug.to_string(),
+        aliases: Vec::new(),
         display_name: slug.to_string(),
         description: format!("{slug} description"),
         model_specialty: None,
@@ -3561,11 +3559,17 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         availability_nux: None,
         supported_in_api: true,
         input_modalities: default_input_modalities(),
-    };
+    }
+}
+
+#[tokio::test]
+async fn model_picker_hides_show_in_picker_false_models_from_cache() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;
+    chat.thread_id = Some(ThreadId::new());
 
     chat.open_model_popup_with_presets(vec![
-        preset("test-visible-model", true),
-        preset("test-hidden-model", false),
+        model_picker_preset("test-visible-model", true),
+        model_picker_preset("test-hidden-model", false),
     ]);
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_picker_filters_hidden_models", popup);
@@ -3577,6 +3581,49 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
         !popup.contains("test-hidden-model"),
         "expected hidden model to be excluded from picker:\n{popup}"
     );
+}
+
+#[tokio::test]
+async fn model_picker_displays_and_searches_aliases_without_duplicate_rows() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("canonical-model")).await;
+    let mut canonical = model_picker_preset("canonical-model", true);
+    canonical.aliases = vec!["short-name".to_string(), "provider/canonical".to_string()];
+    chat.model_catalog = Arc::new(ModelCatalog::new(vec![
+        canonical,
+        model_picker_preset("other-model", true),
+    ]));
+    chat.open_all_models_popup();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("model_picker_aliases", popup);
+    assert_eq!(popup.matches("canonical-model (current)").count(), 1);
+
+    for character in "short-name".chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(character)));
+    }
+    let filtered = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(filtered.contains("canonical-model"));
+    assert!(!filtered.contains("other-model"));
+}
+
+#[tokio::test]
+async fn production_model_picker_displays_and_searches_auto_model_aliases() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("codex-auto-fast")).await;
+    let mut auto = model_picker_preset("codex-auto-fast", true);
+    auto.aliases = vec!["quick-auto".to_string(), "provider/auto-fast".to_string()];
+    chat.open_model_popup_with_presets(vec![auto, model_picker_preset("other-model", true)]);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("model_picker_auto_aliases", popup);
+    assert_eq!(popup.matches("codex-auto-fast (current)").count(), 1);
+    assert!(popup.contains("Aliases: quick-auto, provider/auto-fast"));
+
+    for character in "quick-auto".chars() {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Char(character)));
+    }
+    let filtered = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(filtered.contains("codex-auto-fast"));
+    assert!(!filtered.contains("All models"));
 }
 
 #[tokio::test]
@@ -4043,6 +4090,7 @@ async fn single_reasoning_option_skips_selection() {
     let preset = ModelPreset {
         id: "model-with-single-reasoning".to_string(),
         model: "model-with-single-reasoning".to_string(),
+        aliases: Vec::new(),
         display_name: "model-with-single-reasoning".to_string(),
         description: "".to_string(),
         model_specialty: None,

@@ -11,6 +11,7 @@ use crate::context::MultiAgentModeInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::world_state::PersistentModeState;
 use crate::session::multi_agents::resolve_usage_hints;
+use crate::tools::handlers::multi_agents_common::apply_spawn_agent_selected_cwd;
 use crate::tools::handlers::multi_agents_common::build_agent_resume_config;
 use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
@@ -544,6 +545,10 @@ impl AgentControl {
         let residency_slot = self
             .reserve_v2_residency_slot(&state, &config, Some(thread_id))
             .await?;
+        if let Some(selections) = environment_selections.as_deref() {
+            apply_spawn_agent_selected_cwd(&mut config, selections)
+                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+        }
 
         match state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {

@@ -1658,6 +1658,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
     ModelPreset {
         id: model.id,
         model: model.model,
+        aliases: model.aliases,
         display_name: model.display_name,
         description: model.description,
         model_specialty: model.model_specialty,
@@ -2409,6 +2410,7 @@ mod tests {
         ApiModel {
             id: "model-id".to_string(),
             model: "current-model".to_string(),
+            aliases: Vec::new(),
             upgrade: Some("replacement-model".to_string()),
             upgrade_info: Some(codex_app_server_protocol::ModelUpgradeInfo {
                 model: "replacement-model".to_string(),

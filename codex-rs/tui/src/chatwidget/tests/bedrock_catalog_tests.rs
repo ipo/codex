@@ -24,7 +24,9 @@ async fn bedrock_astra_model_and_reasoning_pickers() {
         ),
     ] {
         let presets = create_model_provider(provider_info, /*auth_manager*/ None)
-            .models_manager_without_cache(/*config_model_catalog*/ None)
+            .models_manager_without_cache(
+                /*config_model_catalog*/ None, /*model_catalog_overlay*/ None,
+            )
             .list_models(
                 RefreshStrategy::Offline,
                 HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),

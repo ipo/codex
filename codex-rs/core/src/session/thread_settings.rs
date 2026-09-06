@@ -22,7 +22,20 @@ pub(super) async fn update(
     submission_id: String,
     overrides: ThreadSettingsOverrides,
 ) {
-    let updates = prepare_update(overrides);
+    let mut updates = prepare_update(overrides);
+    if let Err(error) = session.canonicalize_settings_update(&mut updates).await {
+        session
+            .send_event_raw(Event {
+                id: submission_id,
+                msg: EventMsg::Error(ErrorEvent {
+                    misalignment: None,
+                    message: format!("invalid thread settings override: {error}"),
+                    codex_error_info: Some(CodexErrorInfo::BadRequest),
+                }),
+            })
+            .await;
+        return;
+    }
     if let Err(error) = apply_update(session, submission_id.clone(), updates).await {
         session
             .send_event_raw(Event {

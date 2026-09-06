@@ -8,6 +8,11 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
+use crate::tools::handlers::multi_agents_spec_model_catalog::MAX_REQUESTED_MODEL_BYTES_IN_SPAWN_AGENT_ERROR;
+use crate::tools::handlers::multi_agents_spec_model_catalog::MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES;
+use crate::tools::handlers::multi_agents_spec_model_catalog::bounded_spawn_agent_model_selectors;
+use crate::tools::handlers::multi_agents_spec_model_catalog::truncate_utf8_bytes;
+use codex_exec_server::GetMetadataOptions;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
@@ -16,13 +21,17 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::PathConvention;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
@@ -30,7 +39,6 @@ use serde_json::Value as JsonValue;
 pub(crate) const MIN_WAIT_TIMEOUT_MS: i64 = DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS;
 pub(crate) const DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
 pub(crate) const MAX_WAIT_TIMEOUT_MS: i64 = HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS;
-pub(crate) const MAX_SPAWN_AGENT_MODEL_OVERRIDES: usize = 5;
 
 pub(crate) fn model_supports_multi_agent_backend(
     model: &ModelPreset,
@@ -167,6 +175,131 @@ pub(crate) fn parse_collab_input(
     }
 }
 
+/// Resolves and validates an optional child cwd in the inherited primary environment.
+///
+/// Only the primary selection changes. The selection's workspace roots and permission profile are
+/// preserved, so selecting a cwd cannot widen the child's filesystem authority.
+pub(crate) async fn resolve_spawn_agent_environments(
+    turn: &TurnContext,
+    requested_cwd: Option<&str>,
+) -> Result<Vec<TurnEnvironmentSelection>, FunctionCallError> {
+    let mut selections = turn.environments.to_selections();
+    let Some(requested_cwd) = requested_cwd else {
+        return Ok(selections);
+    };
+    if requested_cwd.is_empty() {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agent cwd must not be empty".to_string(),
+        ));
+    }
+
+    let primary = turn.environments.primary().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent cannot select a cwd because the primary environment is unavailable"
+                .to_string(),
+        )
+    })?;
+    let base_convention = primary.cwd().infer_path_convention();
+    let bytes = requested_cwd.as_bytes();
+    let requests_windows_absolute_path = requested_cwd.starts_with(r"\\")
+        || matches!(
+            bytes,
+            [drive, b':', b'\\' | b'/', ..] if drive.is_ascii_alphabetic()
+        );
+    if requests_windows_absolute_path && base_convention == Some(PathConvention::Posix) {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd `{requested_cwd}` uses the Windows path convention, but primary environment `{}` uses POSIX paths",
+            primary.selection.environment_id
+        )));
+    }
+
+    let cwd = primary.cwd().join(requested_cwd).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd `{requested_cwd}` is invalid for primary environment `{}`: {err}",
+            primary.selection.environment_id
+        ))
+    })?;
+    let mut sandbox = primary.sandbox_context(/*additional_permissions*/ None);
+    sandbox.cwd = Some(cwd.clone());
+    let filesystem = primary.environment.get_filesystem();
+    let metadata = filesystem
+        .get_metadata(&cwd, GetMetadataOptions::default(), Some(&sandbox))
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "spawn_agent cannot access cwd `{}` in primary environment `{}`: {err}",
+                cwd.inferred_native_path_string(),
+                primary.selection.environment_id
+            ))
+        })?;
+    if !metadata.is_directory {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "spawn_agent cwd `{}` is not a directory in primary environment `{}`",
+            cwd.inferred_native_path_string(),
+            primary.selection.environment_id
+        )));
+    }
+    filesystem
+        .read_directory(&cwd, Some(&sandbox))
+        .await
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "spawn_agent cwd `{}` is not readable in primary environment `{}`: {err}",
+                cwd.inferred_native_path_string(),
+                primary.selection.environment_id
+            ))
+        })?;
+
+    let Some(primary_selection) = selections.first_mut() else {
+        return Err(FunctionCallError::RespondToModel(
+            "spawn_agent cannot select a cwd because the primary environment is unavailable"
+                .to_string(),
+        ));
+    };
+    primary_selection.cwd = cwd;
+    Ok(selections)
+}
+
+/// Applies the selected primary environment cwd to the child config's legacy fallback.
+///
+/// `Config::cwd` remains host-native while environment selections use executor-aware URIs. For a
+/// foreign executor, retain the compatibility projection used by remote test environments so the
+/// child session snapshot does not retain the parent's cwd.
+pub(crate) fn apply_spawn_agent_selected_cwd(
+    config: &mut Config,
+    environments: &[TurnEnvironmentSelection],
+) -> Result<(), FunctionCallError> {
+    let primary = environments.first().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent cannot select a cwd because the primary environment is unavailable"
+                .to_string(),
+        )
+    })?;
+    config.cwd = primary
+        .cwd
+        .to_abs_path()
+        .or_else(|_| {
+            primary
+                .cwd
+                .to_url()
+                .to_file_path()
+                .map_err(|()| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "cwd URI cannot be projected onto the host",
+                    )
+                })
+                .and_then(|cwd| AbsolutePathBuf::try_from(cwd).map_err(std::io::Error::other))
+        })
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "spawn_agent cwd `{}` cannot be represented in the child config: {err}",
+                primary.cwd.inferred_native_path_string(),
+            ))
+        })?;
+    Ok(())
+}
+
 /// Builds the base config snapshot for a newly spawned sub-agent.
 ///
 /// The returned config starts from the parent's effective config and then refreshes the
@@ -276,21 +409,9 @@ pub(crate) async fn apply_requested_spawn_agent_model_overrides(
     }
 
     if let Some(requested_model) = requested_model {
-        let available_models = session
-            .services
-            .models_manager
-            .list_models(RefreshStrategy::Offline, config.http_client_factory())
-            .await;
-        let selected_model_name = find_spawn_agent_model_name(
-            &available_models,
-            requested_model,
-            turn.multi_agent_version,
-        )?;
-        let selected_model_info = session
-            .services
-            .models_manager
-            .get_model_info(&selected_model_name, &config.to_models_manager_config())
-            .await;
+        let (selected_model_name, selected_model_info) =
+            resolve_spawn_agent_model(session, config, requested_model, turn.multi_agent_version)
+                .await?;
 
         config.model = Some(selected_model_name.clone());
         if let Some(reasoning_effort) = requested_reasoning_effort {
@@ -353,6 +474,7 @@ pub(crate) async fn apply_spawn_agent_role(
     session: &Session,
     config: &mut Config,
     role_name: Option<&str>,
+    multi_agent_version: MultiAgentVersion,
 ) -> Result<(), FunctionCallError> {
     let previous_model = config.model.clone();
     let previous_reasoning_effort = config.model_reasoning_effort.clone();
@@ -364,32 +486,57 @@ pub(crate) async fn apply_spawn_agent_role(
         return Ok(());
     }
 
+    let requested_model = config.model.clone().ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "spawn_agent could not resolve the child model after applying its role".to_string(),
+        )
+    })?;
+    let (canonical_model, model_info) =
+        resolve_spawn_agent_model(session, config, &requested_model, multi_agent_version).await?;
+    config.model = Some(canonical_model.clone());
+
     let Some(reasoning_effort) = config.model_reasoning_effort.clone() else {
         return Ok(());
     };
-    let model = config.model.clone().ok_or_else(|| {
-        FunctionCallError::RespondToModel(
-            "spawn_agent could not resolve the child model for reasoning effort validation"
-                .to_string(),
-        )
-    })?;
-    let model_info = session
-        .services
-        .models_manager
-        .get_model_info(&model, &config.to_models_manager_config())
-        .await;
-    if model_info.used_fallback_model_metadata {
-        return Ok(());
-    }
-
     validate_spawn_agent_reasoning_effort(
-        &model,
+        &canonical_model,
         &model_info.supported_reasoning_levels,
         &reasoning_effort,
     )
 }
 
-fn find_spawn_agent_model_name(
+async fn resolve_spawn_agent_model(
+    session: &Session,
+    config: &Config,
+    requested_model: &str,
+    multi_agent_version: MultiAgentVersion,
+) -> Result<(String, ModelInfo), FunctionCallError> {
+    let available_models = session
+        .services
+        .models_manager
+        .list_models(RefreshStrategy::Offline, config.http_client_factory())
+        .await;
+    let canonical_model = session
+        .services
+        .models_manager
+        .resolve_model(
+            requested_model,
+            RefreshStrategy::Offline,
+            config.http_client_factory(),
+        )
+        .await
+        .map_err(|err| FunctionCallError::RespondToModel(format!("{err} for spawn_agent")))?;
+    let selected_model_name =
+        find_spawn_agent_model_name(&available_models, &canonical_model, multi_agent_version)?;
+    let model_info = session
+        .services
+        .models_manager
+        .get_model_info(&selected_model_name, &config.to_models_manager_config())
+        .await;
+    Ok((selected_model_name, model_info))
+}
+
+pub(crate) fn find_spawn_agent_model_name(
     available_models: &[ModelPreset],
     requested_model: &str,
     multi_agent_version: MultiAgentVersion,
@@ -402,17 +549,19 @@ fn find_spawn_agent_model_name(
         })
         .map(|model| model.model.clone())
         .ok_or_else(|| {
-            let available = available_models
-                .iter()
-                .filter(|model| model.show_in_picker)
-                .filter(|model| model_supports_multi_agent_backend(model, multi_agent_version))
-                .take(MAX_SPAWN_AGENT_MODEL_OVERRIDES)
-                .map(|model| model.model.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            FunctionCallError::RespondToModel(format!(
-                "Unknown model `{requested_model}` for spawn_agent. Available models: {available}"
-            ))
+            let requested_model = truncate_utf8_bytes(
+                requested_model,
+                MAX_REQUESTED_MODEL_BYTES_IN_SPAWN_AGENT_ERROR,
+            );
+            let prefix = format!(
+                "Model `{requested_model}` is incompatible with the selected multi-agent backend for spawn_agent. Available preferred model selectors: "
+            );
+            let available = bounded_spawn_agent_model_selectors(
+                available_models,
+                multi_agent_version,
+                MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES.saturating_sub(prefix.len()),
+            );
+            FunctionCallError::RespondToModel(format!("{prefix}{available}"))
         })
 }
 

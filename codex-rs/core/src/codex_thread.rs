@@ -520,7 +520,10 @@ impl CodexThread {
         &self,
         overrides: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<ThreadConfigSnapshot> {
-        let updates = Self::thread_settings_update(overrides);
+        let mut updates = Self::thread_settings_update(overrides);
+        self.session
+            .canonicalize_settings_update(&mut updates)
+            .await?;
         self.session.preview_settings(&updates).await
     }
 
@@ -532,7 +535,10 @@ impl CodexThread {
         &self,
         settings: CodexThreadSettingsOverrides,
     ) -> ConstraintResult<()> {
-        let updates = Self::thread_settings_update(settings);
+        let mut updates = Self::thread_settings_update(settings);
+        self.session
+            .canonicalize_settings_update(&mut updates)
+            .await?;
         self.session.update_settings(updates).await.map(|_| ())
     }
 

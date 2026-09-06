@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Select Model
+  Pick a quick auto mode or browse all models.
+
+  Search models or aliases
+› codex-auto-fast (current)  Aliases: quick-auto, provider/auto-fast — codex-auto-fast description
+  All models                 Choose a specific model and reasoning level (current: codex-auto-
+                             fast)
+
+  Press enter to confirm or esc to go back
