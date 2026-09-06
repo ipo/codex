@@ -114,6 +114,7 @@ fn server_notification_requires_delivery(notification: &ServerNotification) -> b
         ServerNotification::TurnCompleted(_)
             | ServerNotification::ThreadQueueChanged(_)
             | ServerNotification::ThreadSettingsUpdated(_)
+            | ServerNotification::McpServerStatusUpdated(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::ItemCompleted(ItemCompletedNotification {
                 item: ThreadItem::AgentMessage {
@@ -792,6 +793,8 @@ mod tests {
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
+    use codex_app_server_protocol::McpServerStartupState;
+    use codex_app_server_protocol::McpServerStatusUpdatedNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadQueueChangedNotification;
     use codex_app_server_protocol::ThreadStartParams;
@@ -827,6 +830,15 @@ mod tests {
     ) -> InProcessClientHandle {
         let codex_home = TempDir::new().expect("temp dir");
         let config = Arc::new(build_test_config(codex_home.path()).await);
+        start_test_client_with_config(config, codex_home, session_source, channel_capacity).await
+    }
+
+    async fn start_test_client_with_config(
+        config: Arc<Config>,
+        codex_home: TempDir,
+        session_source: SessionSource,
+        channel_capacity: usize,
+    ) -> InProcessClientHandle {
         let state_db = codex_rollout::state_db::try_init(config.as_ref())
             .await
             .expect("state db should initialize for in-process test");
@@ -940,6 +952,86 @@ mod tests {
             .expect("in-process runtime should shutdown cleanly");
     }
 
+    #[tokio::test]
+    async fn saturated_in_process_queue_eventually_delivers_mcp_terminal_status() {
+        let codex_home = TempDir::new().expect("temp dir");
+        tokio::fs::write(
+            codex_home.path().join("config.toml"),
+            "[mcp_servers.unavailable]\ncommand = 'codex-missing-mcp-test-command-4fd7824a'\nstartup_timeout_sec = 1\n",
+        )
+        .await
+        .expect("write test MCP config");
+        let config = build_test_config(codex_home.path()).await;
+        let mut client = start_test_client_with_config(
+            Arc::new(config),
+            codex_home,
+            SessionSource::Cli,
+            /*channel_capacity*/ 1,
+        )
+        .await;
+        let request_sender = client.sender();
+        let thread_start = tokio::spawn(async move {
+            request_sender
+                .request(ClientRequest::ThreadStart {
+                    request_id: RequestId::Integer(5),
+                    params: ThreadStartParams {
+                        ephemeral: Some(true),
+                        ..ThreadStartParams::default()
+                    },
+                })
+                .await
+        });
+
+        timeout(Duration::from_secs(2), async {
+            while client.event_rx.is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the bounded event queue should saturate");
+        assert_eq!(client.event_rx.len(), 1);
+
+        let statuses = timeout(Duration::from_secs(5), async {
+            let mut statuses = Vec::new();
+            while !statuses
+                .iter()
+                .any(|status| !matches!(status, McpServerStartupState::Starting))
+            {
+                let event = client
+                    .next_event()
+                    .await
+                    .expect("event stream should stay open");
+                if let InProcessServerEvent::ServerNotification(notification) = event
+                    && let ServerNotification::McpServerStatusUpdated(notification) =
+                        notification.as_ref()
+                    && notification.name == "unavailable"
+                {
+                    statuses.push(notification.status);
+                }
+            }
+            statuses
+        })
+        .await
+        .expect("terminal MCP startup status should survive backpressure");
+        assert_eq!(
+            statuses,
+            vec![
+                McpServerStartupState::Starting,
+                McpServerStartupState::Failed
+            ]
+        );
+
+        thread_start
+            .await
+            .expect("thread/start task should complete")
+            .expect("thread/start transport should work")
+            .expect("thread/start should succeed");
+        client
+            .shutdown()
+            .await
+            .expect("in-process runtime should shutdown cleanly");
+    }
+
     #[tokio::test(start_paused = true)]
     async fn in_process_outbound_router_shutdown_does_not_wait_for_retained_sender() {
         let (outgoing_tx, outgoing_rx) = mpsc::channel(/*buffer*/ 1);
@@ -1022,6 +1114,15 @@ mod tests {
                     item_type_results: Vec::new(),
                 },
             )
+        ));
+        assert!(server_notification_requires_delivery(
+            &ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: Some("thread-1".to_string()),
+                name: "docs".to_string(),
+                status: McpServerStartupState::Ready,
+                error: None,
+                failure_reason: None,
+            })
         ));
         assert!(server_notification_requires_delivery(
             &ServerNotification::ItemCompleted(ItemCompletedNotification {
