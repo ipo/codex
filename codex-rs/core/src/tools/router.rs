@@ -7,6 +7,7 @@ use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::deferred_tool_state::DeferredToolLoadState;
 #[cfg(test)]
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::registry::AnyToolResult;
@@ -43,21 +44,41 @@ pub struct ToolCall {
 
 impl ToolCall {
     pub(crate) fn direct_source(&self) -> ToolCallSource {
-        if self.tool_name.namespace.as_deref() == Some("collaboration")
-            && matches!(
-                self.tool_name.name.as_str(),
-                "spawn_agent" | "send_message" | "followup_task"
-            )
-            && self
+        if is_collaboration_message_tool_name(&self.tool_name)
+            && (self
                 .encrypted_function_args
                 .as_ref()
                 .is_some_and(Vec::is_empty)
+                || payload_has_plaintext_message(&self.payload))
         {
             ToolCallSource::DirectPlaintextMessage
         } else {
             ToolCallSource::Direct
         }
     }
+}
+
+fn is_collaboration_message_tool_name(tool_name: &ToolName) -> bool {
+    matches!(
+        tool_name.name.as_str(),
+        "spawn_agent" | "send_message" | "followup_task"
+    ) || tool_name
+        .name
+        .rsplit_once("__")
+        .is_some_and(|(_, name)| matches!(name, "spawn_agent" | "send_message" | "followup_task"))
+}
+
+fn payload_has_plaintext_message(payload: &ToolPayload) -> bool {
+    let ToolPayload::Function { arguments } = payload else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .is_some_and(|arguments| {
+            arguments
+                .as_object()
+                .is_some_and(|arguments| arguments.contains_key("plaintext_message"))
+        })
 }
 
 pub(crate) fn tool_log_payload<'a>(
@@ -74,6 +95,7 @@ pub(crate) fn tool_log_payload<'a>(
 pub struct ToolRouter {
     registry: ToolRegistry,
     model_visible_specs: Arc<[ToolSpec]>,
+    deferred_tool_load_state: Option<Arc<DeferredToolLoadState>>,
     tool_mode: ToolMode,
     code_mode_tool_names: BTreeMap<String, ToolName>,
     tool_namespaces_info: Option<TurnToolNamespacesInfo>,
@@ -122,6 +144,7 @@ impl ToolRouter {
         let mut router = Self {
             registry,
             model_visible_specs: model_visible_specs.into(),
+            deferred_tool_load_state: None,
             tool_mode,
             code_mode_tool_names,
             tool_namespaces_info,
@@ -134,8 +157,29 @@ impl ToolRouter {
         router
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn with_deferred_tool_load_state(
+        mut self,
+        state: Arc<DeferredToolLoadState>,
+    ) -> Self {
+        self.deferred_tool_load_state = Some(state);
+        self
+    }
+
     pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
-        Arc::clone(&self.model_visible_specs)
+        let Some(state) = &self.deferred_tool_load_state else {
+            return Arc::clone(&self.model_visible_specs);
+        };
+        let loaded_tools = state.loaded_tools();
+        if loaded_tools.is_empty() {
+            return Arc::clone(&self.model_visible_specs);
+        }
+        self.model_visible_specs
+            .iter()
+            .chain(loaded_tools.iter())
+            .cloned()
+            .collect::<Vec<_>>()
+            .into()
     }
 
     pub(crate) fn tool_mode(&self) -> ToolMode {
@@ -355,6 +399,19 @@ impl ToolRouter {
         source: ToolCallSource,
         terminal_outcome_reached: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        if call.encrypted_function_args.is_some()
+            && !crate::tools::wire_adaptation::wire_supports_encrypted_tool_content(
+                &step_context.turn,
+                &step_context.settings.model_info,
+            )
+        {
+            let message = if is_collaboration_message_tool_name(&call.tool_name) {
+                "Encrypted collaboration arguments are unavailable on this inference wire; retry with plaintext_message."
+            } else {
+                "Encrypted tool arguments are unavailable on this inference wire."
+            };
+            return Err(FunctionCallError::RespondToModel(message.to_string()));
+        }
         let ToolCall {
             tool_name,
             call_id,

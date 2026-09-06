@@ -4,7 +4,9 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
+use crate::session::tests::update_turn_settings_for_test;
 use crate::tools::context::ToolPayload;
+use crate::tools::deferred_tool_state::DeferredToolLoadState;
 use crate::tools::handlers::McpHandler;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
@@ -24,6 +26,11 @@ use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::KimiInferenceConfig;
+use codex_protocol::model_inference::KimiThinkingPolicy;
+use codex_protocol::model_inference::ModelInferenceConfig;
+use codex_protocol::model_inference::WireApi;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ResponseItem;
@@ -56,6 +63,81 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     assert_eq!(
         tool_log_payload(&payload, &ToolCallSource::Direct),
         payload.log_payload()
+    );
+}
+
+#[test]
+fn native_and_flattened_collaboration_plaintext_calls_use_plaintext_source() {
+    for tool_name in [
+        ToolName::plain("spawn_agent"),
+        ToolName::plain("collaboration__send_message"),
+        ToolName::namespaced("agents", "followup_task"),
+    ] {
+        let call = ToolCall {
+            tool_name,
+            call_id: "call-1".to_string(),
+            payload: ToolPayload::Function {
+                arguments: json!({"plaintext_message": "plain"}).to_string(),
+            },
+            encrypted_function_args: None,
+        };
+        assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+    }
+
+    let encrypted = ToolCall {
+        tool_name: ToolName::namespaced("collaboration", "send_message"),
+        call_id: "call-2".to_string(),
+        payload: ToolPayload::Function {
+            arguments: json!({"message": "enc_opaque"}).to_string(),
+        },
+        encrypted_function_args: Some(vec!["enc_metadata".to_string()]),
+    };
+    assert_eq!(encrypted.direct_source(), ToolCallSource::Direct);
+}
+
+#[tokio::test]
+async fn native_wire_rejects_encrypted_function_arguments_before_dispatch() {
+    let (session, mut turn) = make_session_and_context().await;
+    update_turn_settings_for_test(&mut turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).inference =
+            Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+                wire_api: WireApi::ChatCompletions,
+                dialect: InferenceDialect::Kimi,
+                route: "kimi_code".to_string(),
+                wire_model: "kimi-for-coding".to_string(),
+                max_output_tokens: 32_768,
+                thinking: KimiThinkingPolicy::Required,
+            }));
+    });
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let router = Arc::clone(&step_context.tool_router);
+    let call = ToolCall {
+        tool_name: ToolName::plain("send_message"),
+        call_id: "call-1".to_string(),
+        payload: ToolPayload::Function {
+            arguments: json!({"message": "enc_opaque"}).to_string(),
+        },
+        encrypted_function_args: Some(vec!["enc_metadata".to_string()]),
+    };
+
+    let err = match router
+        .dispatch_tool_call_with_code_mode_result(
+            Arc::new(session),
+            step_context,
+            CancellationToken::new(),
+            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+            call,
+            ToolCallSource::Direct,
+        )
+        .await
+    {
+        Ok(_) => panic!("native encrypted arguments should be rejected"),
+        Err(err) => err,
+    };
+    assert_eq!(
+        err.to_string(),
+        "Encrypted collaboration arguments are unavailable on this inference wire; retry with plaintext_message."
     );
 }
 
@@ -487,6 +569,43 @@ async fn specs_filter_deferred_dynamic_tools() -> anyhow::Result<()> {
     let updated_specs = updated_router.model_visible_specs();
     assert!(!Arc::ptr_eq(&visible_specs, &updated_specs));
     assert!(namespace_function_names(&updated_specs, "codex_app").is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn model_visible_specs_include_only_current_deferred_load_state() -> anyhow::Result<()> {
+    let (_, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
+    let step_context = StepContext::for_test(Arc::clone(&turn));
+    let state = Arc::new(DeferredToolLoadState::default());
+    let router = test_tool_router(
+        step_context.as_ref(),
+        Vec::new(),
+        Vec::new(),
+        &turn.dynamic_tools,
+    )
+    .with_deferred_tool_load_state(Arc::clone(&state));
+    let base_specs = router.model_visible_specs();
+
+    state.replace(vec![ToolSpec::Function(ResponsesApiTool {
+        name: "mcp__calendar__create_event".to_string(),
+        description: "Create an event".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: codex_tools::JsonSchema::default(),
+        output_schema: None,
+    })]);
+
+    let loaded_specs = router.model_visible_specs();
+    assert_eq!(loaded_specs.len(), base_specs.len() + 1);
+    assert!(matches!(
+        loaded_specs.last(),
+        Some(ToolSpec::Function(tool)) if tool.name == "mcp__calendar__create_event"
+    ));
+
+    state.replace(Vec::new());
+    assert!(Arc::ptr_eq(&base_specs, &router.model_visible_specs()));
 
     Ok(())
 }

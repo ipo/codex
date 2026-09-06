@@ -316,6 +316,17 @@ pub enum ApplyPatchToolType {
     Freeform,
 }
 
+/// Logical model-level opt-outs for client-owned tool capabilities.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelToolCapability {
+    ApplyPatch,
+    ToolSearch,
+    WebSearch,
+    ImageGeneration,
+    CodexApps,
+}
+
 #[derive(
     Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, TS, JsonSchema, Default,
 )]
@@ -458,6 +469,9 @@ pub struct ModelInfo {
     #[serde(default = "default_effective_context_window_percent")]
     pub effective_context_window_percent: i64,
     pub experimental_supported_tools: Vec<String>,
+    /// Client-owned tool capabilities that must not be advertised for this model.
+    #[serde(default)]
+    pub disabled_tools: Vec<ModelToolCapability>,
     /// Input modalities accepted by the backend for this model.
     #[serde(default = "default_input_modalities")]
     pub input_modalities: Vec<InputModality>,
@@ -496,11 +510,22 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    pub fn wire_api(&self, legacy_wire_api: WireApi) -> WireApi {
+        self.inference
+            .as_ref()
+            .map(|inference| inference.route_contract().0)
+            .unwrap_or(legacy_wire_api)
+    }
+
     pub fn supports_responses_capabilities(&self, legacy_wire_api: WireApi) -> bool {
         self.inference.as_ref().map_or(
             legacy_wire_api == WireApi::Responses,
             ModelInferenceConfig::supports_responses_capabilities,
         )
+    }
+
+    pub fn disables_tool(&self, capability: ModelToolCapability) -> bool {
+        self.disabled_tools.contains(&capability)
     }
 
     pub fn resolved_context_window(&self) -> Option<i64> {
@@ -1016,6 +1041,7 @@ mod tests {
             comp_hash: None,
             effective_context_window_percent: 95,
             experimental_supported_tools: vec![],
+            disabled_tools: Vec::new(),
             input_modalities: default_input_modalities(),
             used_fallback_model_metadata: false,
             supports_search_tool: false,

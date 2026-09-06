@@ -1,7 +1,13 @@
 use super::*;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
+use crate::session::tests::update_turn_settings_for_test;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
+use codex_protocol::model_inference::AnthropicThinkingPolicy;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::ModelInferenceConfig;
+use codex_protocol::model_inference::WireApi;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_utils_output_truncation::TruncationPolicy;
 use futures::future::BoxFuture;
@@ -38,6 +44,38 @@ impl ToolExecutor<ToolInvocation> for TestHandler {
 }
 
 impl CoreToolRuntime for TestHandler {}
+
+struct EncryptedOutputHandler {
+    tool_name: codex_tools::ToolName,
+}
+
+impl ToolExecutor<ToolInvocation> for EncryptedOutputHandler {
+    fn tool_name(&self) -> codex_tools::ToolName {
+        self.tool_name.clone()
+    }
+
+    fn spec(&self) -> codex_tools::ToolSpec {
+        test_spec(&self.tool_name)
+    }
+
+    fn handle<'a>(&'a self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
+        Box::pin(async {
+            Ok(
+                Box::new(crate::tools::context::FunctionToolOutput::from_content(
+                    vec![FunctionCallOutputContentItem::EncryptedContent {
+                        encrypted_content: "enc_opaque".to_string(),
+                    }],
+                    Some(true),
+                )) as Box<dyn crate::tools::context::ToolOutput>,
+            )
+        })
+    }
+}
+
+impl CoreToolRuntime for EncryptedOutputHandler {}
 
 struct ReadinessTestHandler {
     handler: TestHandler,
@@ -370,6 +408,108 @@ fn registry_allows_identical_names_in_different_namespaces() {
         )))
     );
     assert_eq!(registry.first_collision(), None);
+}
+
+#[test]
+fn flattened_namespace_aliases_resolve_to_original_runtimes() {
+    let original_name = codex_tools::ToolName::namespaced("mcp__calendar", "create_event");
+    let handler = Arc::new(TestHandler {
+        tool_name: original_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let mut registry = ToolRegistry::from_tools([Arc::clone(&handler)]);
+
+    registry.enable_flattened_namespace_aliases();
+
+    let alias = codex_tools::ToolName::plain("mcp__calendar__create_event");
+    assert!(
+        registry
+            .tool(&alias)
+            .is_some_and(|runtime| Arc::ptr_eq(&runtime, &handler))
+    );
+    assert_eq!(registry.resolved_tool_name(&alias), Some(original_name));
+}
+
+#[test]
+fn flattened_namespace_alias_collisions_are_recorded() {
+    let alias = codex_tools::ToolName::plain("mcp__calendar__create_event");
+    let namespaced = Arc::new(TestHandler {
+        tool_name: codex_tools::ToolName::namespaced("mcp__calendar", "create_event"),
+    }) as Arc<dyn CoreToolRuntime>;
+    let plain = Arc::new(TestHandler {
+        tool_name: alias.clone(),
+    }) as Arc<dyn CoreToolRuntime>;
+    let mut registry = ToolRegistry::from_tools([namespaced, plain]);
+
+    registry.enable_flattened_namespace_aliases();
+
+    assert_eq!(
+        registry.first_collision(),
+        Some(&alias.with_default_namespace())
+    );
+}
+
+#[tokio::test]
+async fn flattened_namespace_alias_dispatch_uses_original_runtime_identity() -> anyhow::Result<()> {
+    let (session, turn) = crate::session::tests::make_session_and_context().await;
+    let original_name = codex_tools::ToolName::namespaced("mcp__calendar", "create_event");
+    let handler = Arc::new(LifecycleTestHandler {
+        tool_name: original_name,
+        result: LifecycleTestResult::Ok { success: true },
+    }) as Arc<dyn CoreToolRuntime>;
+    let mut registry = ToolRegistry::from_tools([handler]);
+    registry.enable_flattened_namespace_aliases();
+
+    registry
+        .dispatch_any_with_terminal_outcome(
+            test_invocation(
+                Arc::new(session),
+                Arc::new(turn),
+                "call-flat-alias",
+                codex_tools::ToolName::plain("mcp__calendar__create_event"),
+            ),
+            /*terminal_outcome_reached*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_wire_rejects_encrypted_tool_result_before_replay() {
+    let (session, mut turn) = crate::session::tests::make_session_and_context().await;
+    update_turn_settings_for_test(&mut turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).inference = Some(ModelInferenceConfig::Anthropic {
+            wire_api: WireApi::AnthropicMessages,
+            dialect: InferenceDialect::ClaudeCode,
+            route: "claude_code".to_string(),
+            wire_model: "claude-haiku-4-5-20251001".to_string(),
+            max_output_tokens: 32_000,
+            thinking: AnthropicThinkingPolicy::Budgeted {
+                budget_tokens: 31_999,
+            },
+            supports_disabled_thinking: false,
+        });
+    });
+    let tool_name = codex_tools::ToolName::plain("encrypted_output");
+    let registry = ToolRegistry::from_tools([Arc::new(EncryptedOutputHandler {
+        tool_name: tool_name.clone(),
+    }) as Arc<dyn CoreToolRuntime>]);
+
+    let err = match registry
+        .dispatch_any_with_terminal_outcome(
+            test_invocation(Arc::new(session), Arc::new(turn), "call-1", tool_name),
+            /*terminal_outcome_reached*/ None,
+        )
+        .await
+    {
+        Ok(_) => panic!("native encrypted result should be rejected"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "This tool returned encrypted content that cannot be represented on the active inference wire."
+    );
 }
 
 #[tokio::test]

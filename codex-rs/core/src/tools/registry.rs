@@ -286,6 +286,7 @@ pub(crate) struct RegisteredTool {
 #[derive(Default)]
 pub struct ToolRegistry {
     tools: IndexMap<ToolName, RegisteredTool>,
+    flat_tool_aliases: IndexMap<ToolName, ToolName>,
     first_collision: Option<ToolName>,
 }
 
@@ -395,6 +396,28 @@ impl ToolRegistry {
         self.first_collision.as_ref()
     }
 
+    /// Registers flat call aliases for runtimes whose specs are represented without namespaces.
+    pub(crate) fn enable_flattened_namespace_aliases(&mut self) {
+        self.flat_tool_aliases.clear();
+        let namespaced_tools = self
+            .tools
+            .keys()
+            .filter(|tool_name| !tool_name.is_default_namespace())
+            .cloned()
+            .collect::<Vec<_>>();
+        for tool_name in namespaced_tools {
+            let flat_alias = ToolName::plain(tool_name.canonical_flat_name().into_owned())
+                .with_default_namespace();
+            if self.tools.contains_key(&flat_alias)
+                || self.flat_tool_aliases.contains_key(&flat_alias)
+            {
+                self.record_collision(flat_alias);
+                continue;
+            }
+            self.flat_tool_aliases.insert(flat_alias, tool_name);
+        }
+    }
+
     pub(crate) fn remove(&mut self, tool_name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
         self.tools
             .shift_remove(&tool_name.clone().with_default_namespace())
@@ -457,9 +480,19 @@ impl ToolRegistry {
     }
 
     pub(crate) fn tool(&self, name: &ToolName) -> Option<Arc<dyn CoreToolRuntime>> {
+        let resolved_name = self.resolved_tool_name(name)?;
         self.tools
-            .get(&name.clone().with_default_namespace())
+            .get(&resolved_name)
             .map(|tool| Arc::clone(&tool.runtime))
+    }
+
+    fn resolved_tool_name(&self, name: &ToolName) -> Option<ToolName> {
+        let name = name.clone().with_default_namespace();
+        if self.tools.contains_key(&name) {
+            Some(name)
+        } else {
+            self.flat_tool_aliases.get(&name).cloned()
+        }
     }
 
     #[cfg(test)]
@@ -484,7 +517,8 @@ impl ToolRegistry {
     }
 
     pub(crate) fn supports_parallel_tool_calls(&self, name: &ToolName) -> Option<bool> {
-        let tool = self.tools.get(&name.clone().with_default_namespace())?;
+        let resolved_name = self.resolved_tool_name(name)?;
+        let tool = self.tools.get(&resolved_name)?;
         Some(tool.exposure != ToolExposure::Hidden && tool.runtime.supports_parallel_tool_calls())
     }
 
@@ -513,7 +547,14 @@ impl ToolRegistry {
         }
 
         let dispatch_trace = ToolDispatchTrace::start(&invocation);
-        let tool = match self.tool(&tool_name) {
+        let tool = match self
+            .resolved_tool_name(&tool_name)
+            .and_then(|resolved_name| {
+                self.tools.get(&resolved_name).map(|tool| {
+                    invocation.tool_name = resolved_name;
+                    Arc::clone(&tool.runtime)
+                })
+            }) {
             Some(tool) => tool,
             None => {
                 let message = unsupported_tool_call_message(&invocation.payload, &tool_name);
@@ -776,6 +817,17 @@ async fn handle_any_tool(
     let call_id = invocation.call_id.clone();
     let payload = invocation.payload.clone();
     let output = tool.handle(invocation.clone()).await?;
+    if !crate::tools::wire_adaptation::wire_supports_encrypted_tool_content(
+        &invocation.turn,
+        &invocation.step_context.settings.model_info,
+    ) && crate::tools::wire_adaptation::response_input_contains_encrypted_tool_content(
+        &output.to_response_item(&call_id, &payload),
+    ) {
+        return Err(FunctionCallError::RespondToModel(
+            "This tool returned encrypted content that cannot be represented on the active inference wire."
+                .to_string(),
+        ));
+    }
     if output.contains_external_context()
         && invocation.turn.config.memories.disable_on_external_context
     {

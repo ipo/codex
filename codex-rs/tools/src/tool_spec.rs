@@ -1,6 +1,7 @@
 use crate::FreeformTool;
 use crate::JsonSchema;
 use crate::LoadableToolSpec;
+use crate::NamespaceToolSpecMode;
 use crate::ResponsesApiNamespace;
 use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
@@ -74,6 +75,44 @@ impl From<LoadableToolSpec> for ToolSpec {
             LoadableToolSpec::Namespace(namespace) => ToolSpec::Namespace(namespace),
         }
     }
+}
+
+/// Adapts namespace wrappers to the representation selected for a model request.
+pub fn serialize_tool_specs(
+    specs: impl IntoIterator<Item = ToolSpec>,
+    namespace_tool_spec_mode: NamespaceToolSpecMode,
+) -> Vec<ToolSpec> {
+    match namespace_tool_spec_mode {
+        NamespaceToolSpecMode::Preserve => specs.into_iter().collect(),
+        NamespaceToolSpecMode::Flatten => specs
+            .into_iter()
+            .flat_map(|spec| match spec {
+                ToolSpec::Namespace(namespace) => flatten_namespace(namespace),
+                spec => vec![spec],
+            })
+            .collect(),
+    }
+}
+
+fn flatten_namespace(namespace: ResponsesApiNamespace) -> Vec<ToolSpec> {
+    namespace
+        .tools
+        .into_iter()
+        .map(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(mut tool) => {
+                tool.name = codex_protocol::ToolName::namespaced(&namespace.name, tool.name)
+                    .canonical_flat_name()
+                    .into_owned();
+                ToolSpec::Function(tool)
+            }
+            ResponsesApiNamespaceTool::Custom(mut tool) => {
+                tool.name = codex_protocol::ToolName::namespaced(&namespace.name, tool.name)
+                    .canonical_flat_name()
+                    .into_owned();
+                ToolSpec::Freeform(tool)
+            }
+        })
+        .collect()
 }
 
 /// Returns JSON values that are compatible with Function Calling in the

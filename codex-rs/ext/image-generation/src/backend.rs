@@ -50,7 +50,7 @@ pub(crate) struct CodexImagesBackend {
 }
 
 impl CodexImagesBackend {
-    /// Creates a backend that sends image requests through the active model provider.
+    /// Creates a backend that sends image requests through the auxiliary OpenAI provider.
     pub(crate) fn new(provider: SharedModelProvider, originator: Option<String>) -> Self {
         Self {
             provider,

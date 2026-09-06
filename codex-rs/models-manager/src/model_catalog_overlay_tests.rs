@@ -1,5 +1,6 @@
 use super::*;
 use crate::bundled_models_response;
+use codex_protocol::openai_models::ModelToolCapability;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
@@ -190,9 +191,16 @@ fn allows_typed_inference_and_remaining_staged_deployed_overlay_fields() {
             "wire_model": "grok-4.6"
         },
         "requires_nonempty_assistant_messages": false,
-        "supports_parallel_tool_calls": true
+        "supports_parallel_tool_calls": true,
+        "disabled_tools": ["web_search", "image_generation"]
     }]});
 
-    ModelCatalogOverlay::from_json(&overlay.to_string())
-        .expect("typed and staged deployed fields should remain accepted");
+    let applied = apply(overlay).expect("typed and staged deployed fields should remain accepted");
+    assert_eq!(
+        applied.models[0].disabled_tools,
+        [
+            ModelToolCapability::WebSearch,
+            ModelToolCapability::ImageGeneration,
+        ]
+    );
 }

@@ -43,6 +43,7 @@ const MODEL_INFO_FIELDS: &[&str] = &[
     "comp_hash",
     "effective_context_window_percent",
     "experimental_supported_tools",
+    "disabled_tools",
     "input_modalities",
     "supports_search_tool",
     "use_responses_lite",

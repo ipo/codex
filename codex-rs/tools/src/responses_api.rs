@@ -54,6 +54,13 @@ pub enum LoadableToolSpec {
     Namespace(ResponsesApiNamespace),
 }
 
+/// Controls whether model-visible tools preserve namespace wrappers or use flat names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamespaceToolSpecMode {
+    Preserve,
+    Flatten,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResponsesApiNamespace {
     pub name: String,

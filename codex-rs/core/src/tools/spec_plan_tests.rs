@@ -12,19 +12,24 @@ use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_LUNA_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_6_SOL_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErrorDetails;
+use codex_protocol::model_inference::AnthropicThinkingPolicy;
 use codex_protocol::model_inference::GrokInferenceConfig;
 use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::KimiInferenceConfig;
+use codex_protocol::model_inference::KimiThinkingPolicy;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelToolCapability;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -57,6 +62,10 @@ use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::mcp_config_for_test;
 use crate::session::turn_context::TurnContext;
+use crate::tools::collaboration_wire::adapt_native_plaintext_collaboration_arguments;
+use crate::tools::context::ToolCallSource;
+use crate::tools::context::ToolInvocation;
+use crate::tools::context::ToolPayload;
 use crate::tools::handlers::McpHandler;
 use crate::tools::handlers::ToolSearchHandlerCache;
 use crate::tools::handlers::WaitForEnvironmentHandler;
@@ -68,6 +77,8 @@ use crate::tools::router::ToolSuggestCandidates;
 use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::spec_plan::append_source_tools;
 use crate::tools::spec_plan::build_core_tool_registry;
+use crate::turn_diff_tracker::TurnDiffTracker;
+use tokio_util::sync::CancellationToken;
 
 const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
 
@@ -333,6 +344,36 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
 }
 
+fn use_native_claude(turn: &mut TurnContext) {
+    update_turn_settings_for_test(turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).inference = Some(ModelInferenceConfig::Anthropic {
+            wire_api: WireApi::AnthropicMessages,
+            dialect: InferenceDialect::ClaudeCode,
+            route: "claude_code".to_string(),
+            wire_model: "claude-haiku-4-5-20251001".to_string(),
+            max_output_tokens: 32_000,
+            thinking: AnthropicThinkingPolicy::Budgeted {
+                budget_tokens: 31_999,
+            },
+            supports_disabled_thinking: false,
+        });
+    });
+}
+
+fn use_native_kimi(turn: &mut TurnContext) {
+    update_turn_settings_for_test(turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).inference =
+            Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+                wire_api: WireApi::ChatCompletions,
+                dialect: InferenceDialect::Kimi,
+                route: "kimi_code".to_string(),
+                wire_model: "kimi-for-coding".to_string(),
+                max_output_tokens: 32_768,
+                thinking: KimiThinkingPolicy::Required,
+            }));
+    });
+}
+
 struct TestNamespaceExtensionTool {
     namespace: &'static str,
     tool_name: &'static str,
@@ -404,6 +445,56 @@ impl<'call> ToolExecutor<ExtensionToolCall<'call>> for DeferredExtensionTool {
         Box::pin(async { panic!("spec planning should not execute extension tools") })
     }
 }
+
+struct NativeCollaborationProbe {
+    tool_name: &'static str,
+}
+
+impl ToolExecutor<ToolInvocation> for NativeCollaborationProbe {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain(self.tool_name)
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Function(ResponsesApiTool {
+            name: self.tool_name.to_string(),
+            description: "Native collaboration probe.".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: codex_tools::JsonSchema::default(),
+            output_schema: None,
+        })
+    }
+
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
+        let tool_name = self.tool_name;
+        Box::pin(async move {
+            assert_eq!(invocation.source, ToolCallSource::DirectPlaintextMessage);
+            let ToolPayload::Function { arguments } = invocation.payload else {
+                panic!("expected function payload");
+            };
+            let expected = if tool_name == "spawn_agent" {
+                json!({"task_name": "worker", "message": "continue"})
+            } else {
+                json!({"target": "/root/worker", "message": "continue"})
+            };
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&arguments)
+                    .expect("adapted arguments should parse"),
+                expected
+            );
+            Ok(
+                Box::new(codex_tools::JsonToolOutput::new(json!({"ok": true})))
+                    as Box<dyn ToolOutput>,
+            )
+        })
+    }
+}
+
+impl CoreToolRuntime for NativeCollaborationProbe {}
 
 fn duplicate_primary_environment(turn: &mut TurnContext) {
     let mut second_environment = turn
@@ -1512,6 +1603,140 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
 }
 
 #[tokio::test]
+async fn native_models_use_flat_functions_for_plain_patch_and_deferred_tools() {
+    for configure_native in [
+        use_native_claude as fn(&mut TurnContext),
+        use_native_kimi as fn(&mut TurnContext),
+    ] {
+        let plan = probe_with(
+            configure_native,
+            ToolPlanInputs {
+                tool_runtimes: vec![
+                    mcp_runtime("direct", "mcp__direct", "lookup", ToolExposure::Direct),
+                    mcp_runtime(
+                        "searchable",
+                        "mcp__searchable",
+                        "lookup",
+                        ToolExposure::Deferred,
+                    ),
+                ],
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        plan.assert_visible_contains(&["mcp__direct__lookup", "apply_patch", "tool_search"]);
+        plan.assert_visible_lacks(&["mcp__direct"]);
+        assert!(matches!(
+            plan.visible_spec("apply_patch"),
+            ToolSpec::Function(_)
+        ));
+        assert!(matches!(
+            plan.visible_spec("tool_search"),
+            ToolSpec::Function(_)
+        ));
+        plan.assert_registered_contains(&[
+            &ToolName::namespaced("mcp__direct", "lookup").to_string(),
+            &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
+        ]);
+    }
+}
+
+#[tokio::test]
+async fn responses_models_preserve_namespace_patch_and_search_tool_shapes() {
+    for (slug, use_bedrock) in [("gpt-5.4", false), ("gpt-6-astra", true)] {
+        let (_session, mut turn) = make_session_and_context().await;
+        if use_bedrock {
+            use_bedrock_provider(&mut turn);
+        }
+        let model = bundled_models_response()
+            .expect("bundled model catalog should parse")
+            .models
+            .into_iter()
+            .find(|model| model.slug == slug)
+            .unwrap_or_else(|| panic!("expected bundled model `{slug}`"));
+        let plan = ToolPlanProbe::from_router(plan_with_model(
+            &turn,
+            &model,
+            ToolPlanInputs {
+                tool_runtimes: vec![
+                    mcp_runtime(
+                        "direct",
+                        "mcp__direct",
+                        "lookup",
+                        ToolExposure::DirectModelOnly,
+                    ),
+                    mcp_runtime(
+                        "searchable",
+                        "mcp__searchable",
+                        "lookup",
+                        ToolExposure::Deferred,
+                    ),
+                ],
+                ..ToolPlanInputs::default()
+            },
+        ));
+
+        plan.assert_visible_contains(&["mcp__direct", "tool_search"]);
+        plan.assert_visible_lacks(&["mcp__direct__lookup"]);
+        assert!(matches!(
+            plan.visible_spec("tool_search"),
+            ToolSpec::ToolSearch { .. }
+        ));
+        plan.assert_registered_contains(&["apply_patch"]);
+        if slug == "gpt-6-astra" {
+            plan.assert_visible_lacks(&["apply_patch"]);
+            assert_eq!(
+                plan.code_mode_tool_names.get("apply_patch"),
+                Some(&ToolName::plain("apply_patch"))
+            );
+        } else {
+            assert!(matches!(
+                plan.visible_spec("apply_patch"),
+                ToolSpec::Freeform(_)
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn model_tool_deny_list_hides_only_selected_native_capabilities() {
+    for configure_native in [
+        use_native_claude as fn(&mut TurnContext),
+        use_native_kimi as fn(&mut TurnContext),
+    ] {
+        let plan = probe_with(
+            |turn| {
+                configure_native(turn);
+                update_turn_settings_for_test(turn, |settings| {
+                    Arc::make_mut(&mut settings.model_info).disabled_tools = vec![
+                        ModelToolCapability::ApplyPatch,
+                        ModelToolCapability::ToolSearch,
+                    ];
+                });
+            },
+            ToolPlanInputs {
+                tool_runtimes: vec![
+                    mcp_runtime("direct", "mcp__direct", "lookup", ToolExposure::Direct),
+                    mcp_runtime(
+                        "searchable",
+                        "mcp__searchable",
+                        "lookup",
+                        ToolExposure::Deferred,
+                    ),
+                ],
+                ..ToolPlanInputs::default()
+            },
+        )
+        .await;
+
+        plan.assert_visible_contains(&["mcp__direct__lookup"]);
+        plan.assert_visible_lacks(&["apply_patch", "tool_search", "mcp__searchable__lookup"]);
+        plan.assert_registered_lacks(&["apply_patch", "tool_search"]);
+    }
+}
+
+#[tokio::test]
 async fn tool_namespaces_info_is_opt_in_and_tracks_mcp_exposure() {
     for (enabled, use_responses_lite) in [(false, true), (true, false), (true, true)] {
         let plan = probe_with(
@@ -2348,6 +2573,49 @@ async fn request_plugin_install_requires_all_discovery_features() {
         ]);
     }
 
+    let model_denied_apps = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            set_features(
+                turn,
+                &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+            );
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).disabled_tools =
+                    vec![ModelToolCapability::CodexApps];
+            });
+        },
+        ToolPlanInputs {
+            tool_suggest_candidates: Some(plugin_candidates(ToolSuggestPresentation::ListTool)),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    model_denied_apps.assert_visible_lacks(&[
+        "list_available_plugins_to_install",
+        "request_plugin_install",
+    ]);
+
+    let native_model = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            use_native_claude(turn);
+            set_features(
+                turn,
+                &[Feature::ToolSuggest, Feature::Apps, Feature::Plugins],
+            );
+        },
+        ToolPlanInputs {
+            tool_suggest_candidates: Some(plugin_candidates(ToolSuggestPresentation::ListTool)),
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+    native_model.assert_visible_lacks(&[
+        "list_available_plugins_to_install",
+        "request_plugin_install",
+    ]);
+
     for tool_suggest_candidates in [
         None,
         Some(ToolSuggestCandidates {
@@ -2813,34 +3081,158 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_message_schemas_are_encrypted() {
-    let plan = probe(|turn| {
-        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
-    })
-    .await;
-    let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {
-        panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace");
-    };
-    for tool_name in ["spawn_agent", "send_message", "followup_task"] {
-        let Some(ResponsesApiNamespaceTool::Function(tool)) = namespace.tools.iter().find(|tool| {
-            matches!(
-                tool,
-                ResponsesApiNamespaceTool::Function(tool) if tool.name == tool_name
-            )
-        }) else {
-            panic!("expected {tool_name} in {MULTI_AGENT_V2_NAMESPACE} namespace");
+async fn responses_and_astra_multi_agent_v2_message_schemas_remain_encrypted() {
+    for (slug, use_bedrock) in [("gpt-5.4", false), ("gpt-6-astra", true)] {
+        let (_session, mut turn) = make_session_and_context().await;
+        set_feature(&mut turn, Feature::MultiAgentV2, /*enabled*/ true);
+        if use_bedrock {
+            use_bedrock_provider(&mut turn);
+        }
+        let model = bundled_models_response()
+            .expect("bundled model catalog should parse")
+            .models
+            .into_iter()
+            .find(|model| model.slug == slug)
+            .unwrap_or_else(|| panic!("expected bundled model `{slug}`"));
+        let plan =
+            ToolPlanProbe::from_router(plan_with_model(&turn, &model, ToolPlanInputs::default()));
+        let ToolSpec::Namespace(namespace) = plan.visible_spec(MULTI_AGENT_V2_NAMESPACE) else {
+            panic!("expected {MULTI_AGENT_V2_NAMESPACE} namespace for {slug}");
         };
-        let properties = tool
-            .parameters
-            .properties
-            .as_ref()
-            .expect("tool should use object params");
-        assert_eq!(
-            properties
-                .get("message")
-                .and_then(|schema| schema.encrypted),
-            Some(true)
-        );
+        for tool_name in ["spawn_agent", "send_message", "followup_task"] {
+            let Some(ResponsesApiNamespaceTool::Function(tool)) =
+                namespace.tools.iter().find(|tool| {
+                    matches!(
+                        tool,
+                        ResponsesApiNamespaceTool::Function(tool) if tool.name == tool_name
+                    )
+                })
+            else {
+                panic!("expected {tool_name} in {MULTI_AGENT_V2_NAMESPACE} namespace");
+            };
+            let properties = tool
+                .parameters
+                .properties
+                .as_ref()
+                .expect("tool should use object params");
+            assert_eq!(
+                properties
+                    .get("message")
+                    .and_then(|schema| schema.encrypted),
+                Some(true)
+            );
+            assert!(!properties.contains_key("plaintext_message"));
+            assert!(
+                tool.parameters
+                    .required
+                    .as_ref()
+                    .is_some_and(|required| required.contains(&"message".to_string()))
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn native_multi_agent_v2_message_schemas_require_plaintext() {
+    for configure_native in [
+        use_native_claude as fn(&mut TurnContext),
+        use_native_kimi as fn(&mut TurnContext),
+    ] {
+        let plan = probe(|turn| {
+            set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+            configure_native(turn);
+        })
+        .await;
+
+        for tool_name in ["spawn_agent", "send_message", "followup_task"] {
+            let ToolSpec::Function(tool) = plan.visible_spec(tool_name) else {
+                panic!("expected native {tool_name} function");
+            };
+            let properties = tool
+                .parameters
+                .properties
+                .as_ref()
+                .expect("tool should use object params");
+            assert!(!properties.contains_key("message"));
+            assert_eq!(
+                properties
+                    .get("plaintext_message")
+                    .and_then(|schema| schema.encrypted),
+                None
+            );
+            assert!(
+                tool.parameters
+                    .required
+                    .as_ref()
+                    .is_some_and(|required| required.contains(&"plaintext_message".to_string()))
+            );
+        }
+    }
+}
+
+#[test]
+fn native_collaboration_runtime_translates_only_plaintext_message() {
+    let translated = adapt_native_plaintext_collaboration_arguments(
+        r#"{"target":"/root/worker","plaintext_message":"continue"}"#,
+    )
+    .expect("schema-valid native arguments should adapt");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&translated).expect("adapted JSON should parse"),
+        json!({"target": "/root/worker", "message": "continue"})
+    );
+
+    let encrypted = adapt_native_plaintext_collaboration_arguments(
+        r#"{"target":"/root/worker","message":"enc_opaque"}"#,
+    )
+    .expect_err("native encrypted arguments should be rejected");
+    assert_eq!(
+        encrypted.to_string(),
+        "Encrypted collaboration arguments are unavailable on this inference wire; retry with plaintext_message."
+    );
+}
+
+#[tokio::test]
+async fn native_claude_and_kimi_plaintext_collaboration_calls_reach_runtime() {
+    for configure_native in [
+        use_native_claude as fn(&mut TurnContext),
+        use_native_kimi as fn(&mut TurnContext),
+    ] {
+        let (session, mut turn) = make_session_and_context().await;
+        configure_native(&mut turn);
+        let turn = Arc::new(turn);
+        let step_context = StepContext::for_test(Arc::clone(&turn));
+        let session = Arc::new(session);
+
+        for tool_name in ["spawn_agent", "send_message", "followup_task"] {
+            let runtime = super::multi_agent_v2_handler(
+                NativeCollaborationProbe { tool_name },
+                /*namespace*/ None,
+            );
+            let target = if tool_name == "spawn_agent" {
+                json!({"task_name": "worker", "plaintext_message": "continue"})
+            } else {
+                json!({
+                    "target": "/root/worker",
+                    "plaintext_message": "continue"
+                })
+            };
+            runtime
+                .handle(ToolInvocation {
+                    session: Arc::clone(&session),
+                    turn: Arc::clone(&turn),
+                    step_context: Arc::clone(&step_context),
+                    cancellation_token: CancellationToken::new(),
+                    tracker: Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+                    call_id: format!("call-{tool_name}"),
+                    tool_name: ToolName::plain(tool_name),
+                    source: ToolCallSource::DirectPlaintextMessage,
+                    payload: ToolPayload::Function {
+                        arguments: target.to_string(),
+                    },
+                })
+                .await
+                .expect("schema-valid native collaboration call should reach runtime");
+        }
     }
 }
 
@@ -3165,6 +3557,32 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     .await;
     image_generation.assert_visible_contains(&["image_gen"]);
 
+    let model_denied_image_generation = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).disabled_tools =
+                    vec![ModelToolCapability::ImageGeneration];
+            });
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![image_generation_tool.clone()],
+            ..Default::default()
+        },
+    )
+    .await;
+    model_denied_image_generation.assert_visible_lacks(&["image_gen"]);
+
+    let missing_openai_auth = probe_with(
+        |turn| turn.auth_manager = None,
+        ToolPlanInputs {
+            extension_tool_executors: vec![image_generation_tool.clone()],
+            ..Default::default()
+        },
+    )
+    .await;
+    missing_openai_auth.assert_visible_lacks(&["image_gen"]);
+
     let extension_disabled = probe_with(
         |turn| {
             use_chatgpt_auth(turn);
@@ -3195,7 +3613,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
         },
     )
     .await;
-    text_only_model.assert_visible_lacks(&["image_gen"]);
+    text_only_model.assert_visible_contains(&["image_gen"]);
 
     let unsupported_provider = probe_with(
         |turn| {
@@ -3211,7 +3629,7 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
         },
     )
     .await;
-    unsupported_provider.assert_visible_lacks(&["image_gen"]);
+    unsupported_provider.assert_visible_contains(&["image_gen"]);
 
     let external_responses_model = probe_with(
         |turn| {
@@ -3236,6 +3654,52 @@ async fn hosted_web_search_and_standalone_image_generation_follow_runtime_gates(
     )
     .await;
     external_responses_model.assert_visible_lacks(&["web_search", "image_gen"]);
+    external_responses_model.assert_visible_contains(&["image_gen__imagegen"]);
+
+    let native_auxiliary_tools = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            use_native_claude(turn);
+            set_web_search_mode(turn, WebSearchMode::Live);
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![
+                Arc::new(TestNamespaceExtensionTool {
+                    namespace: "web",
+                    tool_name: "run",
+                }),
+                Arc::new(TestNamespaceExtensionTool {
+                    namespace: "image_gen",
+                    tool_name: "imagegen",
+                }),
+            ],
+            ..Default::default()
+        },
+    )
+    .await;
+    native_auxiliary_tools.assert_visible_contains(&["web__run", "image_gen__imagegen"]);
+    native_auxiliary_tools.assert_visible_lacks(&["web", "image_gen", "web_search"]);
+
+    let native_denied_web_search = probe_with(
+        |turn| {
+            use_chatgpt_auth(turn);
+            use_native_kimi(turn);
+            set_web_search_mode(turn, WebSearchMode::Live);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).disabled_tools =
+                    vec![ModelToolCapability::WebSearch];
+            });
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(TestNamespaceExtensionTool {
+                namespace: "web",
+                tool_name: "run",
+            })],
+            ..Default::default()
+        },
+    )
+    .await;
+    native_denied_web_search.assert_visible_lacks(&["web_search", "web", "web__run"]);
 
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
