@@ -44,6 +44,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
         display_name: preset.display_name.to_string(),
         description: preset.description.to_string(),
         model_specialty: preset.model_specialty,
+        reasoning_display: preset.reasoning_display,
         hidden: !preset.show_in_picker,
         supported_reasoning_efforts: reasoning_efforts_from_preset(
             preset.supported_reasoning_efforts,

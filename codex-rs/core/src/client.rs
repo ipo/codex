@@ -149,6 +149,9 @@ use codex_response_debug_context::extract_response_debug_context_from_api_error;
 use codex_response_debug_context::telemetry_api_error_message;
 use codex_response_debug_context::telemetry_transport_error_message;
 
+#[path = "client/kimi_dispatch.rs"]
+pub(crate) mod kimi_dispatch;
+
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 pub const X_CODEX_ROUTING_HINT_HEADER: &str = "x-codex-routing-hint";
@@ -1289,6 +1292,16 @@ impl ModelClientSession {
         Arc::clone(&self.turn_state)
     }
 
+    pub(crate) fn stream_max_retries(&self, model_info: &ModelInfo) -> Result<u64> {
+        self.client
+            .state
+            .provider
+            .info()
+            .resolve_inference_plan(model_info)
+            .map(|plan| plan.route().stream_max_retries)
+            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.endpoint = None;
@@ -2041,6 +2054,22 @@ impl ModelClientSession {
             codex_model_provider_info::ResolvedInferencePlan::Legacy { route, .. } => {
                 route.wire_api
             }
+            codex_model_provider_info::ResolvedInferencePlan::OpenAi { route, .. } => {
+                route.wire_api
+            }
+            codex_model_provider_info::ResolvedInferencePlan::Kimi { config, route } => {
+                return self
+                    .stream_kimi(
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                        effort,
+                        responses_metadata,
+                        inference_trace,
+                        kimi_dispatch::KimiPlan { config, route },
+                    )
+                    .await;
+            }
             codex_model_provider_info::ResolvedInferencePlan::Grok { config, route } => {
                 return self
                     .stream_grok(
@@ -2055,9 +2084,7 @@ impl ModelClientSession {
                     )
                     .await;
             }
-            codex_model_provider_info::ResolvedInferencePlan::OpenAi { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::Anthropic { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::Kimi { .. }
+            codex_model_provider_info::ResolvedInferencePlan::Anthropic { .. }
             | codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { .. } => {
                 return Err(CodexErr::InvalidRequest(format!(
                     "model `{}` declares explicit native inference routing, which is not active in this build",

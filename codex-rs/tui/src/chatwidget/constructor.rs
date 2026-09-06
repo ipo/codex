@@ -202,6 +202,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             reasoning_header: None,
             reasoning_summary_parts: Vec::new(),
+            kimi_reasoning: KimiReasoningState::default(),
             status_state: StatusState::default(),
             review: ReviewState::default(),
             active_hook_cell: None,

@@ -46,6 +46,8 @@ const OPENAI_ACTOR_AUTHORIZATION_HEADER: &str = "x-openai-actor-authorization";
 pub const OPENAI_PROVIDER_ID: &str = "openai";
 pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 pub const CLAUDEFLARE_PROVIDER_ID: &str = "claudeflare";
+pub const CLAUDEFLARE_RESPONSES_BASE_URL: &str = "http://127.0.0.1:8080/v1/ccflare/openai";
+pub const CLAUDEFLARE_KIMI_BASE_URL: &str = "http://127.0.0.1:8080/v1/kimi";
 pub const CLAUDEFLARE_GROK_BASE_URL: &str = "http://127.0.0.1:8080/v1/grok";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
@@ -738,22 +740,36 @@ pub fn built_in_model_providers(
         P::create_amazon_bedrock_runtime_provider(/*aws*/ None);
     let claudeflare_provider = ModelProviderInfo {
         name: "Claudeflare".to_string(),
-        base_url: Some(CLAUDEFLARE_GROK_BASE_URL.to_string()),
+        base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
         wire_api: WireApi::Responses,
-        wire_routes: HashMap::from([(
-            "grok".to_string(),
-            ModelProviderWireRoute {
-                wire_api: WireApi::Responses,
-                dialect: InferenceDialect::Grok,
-                base_url: CLAUDEFLARE_GROK_BASE_URL.to_string(),
-                request_path: "responses".to_string(),
-                query_params: None,
-                request_max_retries: Some(0),
-                stream_max_retries: Some(10),
-                stream_idle_timeout_ms: None,
-            },
-        )]),
-        request_max_retries: Some(0),
+        wire_routes: HashMap::from([
+            (
+                "kimi_code".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    base_url: CLAUDEFLARE_KIMI_BASE_URL.to_string(),
+                    request_path: "chat/completions".to_string(),
+                    query_params: None,
+                    request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "grok".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::Grok,
+                    base_url: CLAUDEFLARE_GROK_BASE_URL.to_string(),
+                    request_path: "responses".to_string(),
+                    query_params: None,
+                    request_max_retries: Some(0),
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+        ]),
         stream_max_retries: Some(10),
         supports_websockets: false,
         ..ModelProviderInfo::default()

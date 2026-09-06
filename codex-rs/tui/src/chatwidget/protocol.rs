@@ -1,3 +1,4 @@
+use super::kimi_reasoning::KimiReasoningOccurrence;
 use super::*;
 
 impl ChatWidget {
@@ -76,14 +77,24 @@ impl ChatWidget {
                 self.handle_item_completed_notification(notification, replay_kind);
             }
             ServerNotification::AgentMessageDelta(notification) => {
+                self.retain_partial_kimi_reasoning();
                 self.on_agent_message_delta(notification.delta);
             }
-            ServerNotification::PlanDelta(notification) => self.on_plan_delta(notification.delta),
+            ServerNotification::PlanDelta(notification) => {
+                self.retain_partial_kimi_reasoning();
+                self.on_plan_delta(notification.delta);
+            }
             ServerNotification::ReasoningSummaryTextDelta(notification) => {
-                self.on_agent_reasoning_delta(notification.delta);
+                if !self.kimi_reasoning_visible() {
+                    self.on_agent_reasoning_delta(notification.delta);
+                }
             }
             ServerNotification::ReasoningTextDelta(notification) => {
-                if self.config.show_raw_agent_reasoning {
+                if self.kimi_reasoning_model() {
+                    if self.kimi_reasoning_visible() {
+                        self.append_kimi_reasoning(&notification.item_id, notification.delta);
+                    }
+                } else if self.config.show_raw_agent_reasoning {
                     self.on_agent_reasoning_delta(notification.delta);
                 }
             }
@@ -125,6 +136,7 @@ impl ChatWidget {
             }
             ServerNotification::Error(notification) => {
                 if notification.will_retry {
+                    self.discard_kimi_reasoning_draft();
                     if !from_replay {
                         self.on_stream_error(
                             notification.error.message,
@@ -323,6 +335,7 @@ impl ChatWidget {
                         notification.turn.id.clone(),
                         replay_kind
                             .map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+                        None,
                     );
                 }
                 self.last_non_retry_error = None;
@@ -380,7 +393,13 @@ impl ChatWidget {
         notification: ItemStartedNotification,
         from_replay: bool,
     ) {
+        if !matches!(&notification.item, ThreadItem::Reasoning { .. }) {
+            self.retain_partial_kimi_reasoning();
+        }
         match notification.item {
+            ThreadItem::Reasoning { id, .. } => {
+                self.start_kimi_reasoning(KimiReasoningOccurrence::live(notification.turn_id, id))
+            }
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_started(item),
             ThreadItem::FileChange { id: _, changes, .. } => {
                 self.on_patch_apply_begin(file_update_changes_to_display(changes));
@@ -425,12 +444,24 @@ impl ChatWidget {
         notification: ItemCompletedNotification,
         replay_kind: Option<ReplayKind>,
     ) {
+        if let ThreadItem::Reasoning { id, content, .. } = &notification.item
+            && self.kimi_reasoning_model()
+        {
+            if self.kimi_reasoning_visible() {
+                self.finish_kimi_reasoning(
+                    KimiReasoningOccurrence::live(notification.turn_id, id.clone()),
+                    content.clone(),
+                );
+            }
+            return;
+        }
         match notification.item {
             item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_completed(item),
             item => self.handle_thread_item(
                 item,
                 notification.turn_id,
                 replay_kind.map_or(ThreadItemRenderSource::Live, ThreadItemRenderSource::Replay),
+                None,
             ),
         }
     }

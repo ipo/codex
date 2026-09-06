@@ -223,6 +223,16 @@ pub struct ModelServiceTier {
     pub description: String,
 }
 
+/// Catalog-owned policy for presenting a model's reasoning output.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum ModelReasoningDisplay {
+    #[default]
+    Summary,
+    KimiRaw,
+}
+
 /// Metadata describing a Codex-supported model.
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelPreset {
@@ -237,6 +247,9 @@ pub struct ModelPreset {
     pub display_name: String,
     /// Short human description shown in UIs.
     pub description: String,
+    /// How clients should present reasoning emitted by this model.
+    #[serde(default)]
+    pub reasoning_display: ModelReasoningDisplay,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_specialty: Option<String>,
     /// Reasoning effort applied when none is explicitly chosen.
@@ -918,6 +931,14 @@ where
 impl From<ModelInfo> for ModelPreset {
     fn from(info: ModelInfo) -> Self {
         let supports_personality = info.supports_personality();
+        let reasoning_display = match &info.inference {
+            Some(ModelInferenceConfig::Kimi(_)) => ModelReasoningDisplay::KimiRaw,
+            Some(ModelInferenceConfig::OpenAi { .. })
+            | Some(ModelInferenceConfig::Anthropic { .. })
+            | Some(ModelInferenceConfig::Grok(_))
+            | Some(ModelInferenceConfig::LlamaCpp(_))
+            | None => ModelReasoningDisplay::Summary,
+        };
         ModelPreset {
             id: info.slug.clone(),
             model: info.slug.clone(),
@@ -925,6 +946,7 @@ impl From<ModelInfo> for ModelPreset {
             display_name: info.display_name,
             description: info.description.unwrap_or_default(),
             model_specialty: info.model_specialty,
+            reasoning_display,
             default_reasoning_effort: info
                 .default_reasoning_level
                 .unwrap_or(ReasoningEffort::None),

@@ -2599,6 +2599,40 @@ fn reasoning_summary_block() {
 }
 
 #[test]
+fn kimi_reasoning_live_display_keeps_every_accumulated_line() {
+    let cell = KimiReasoningCell::live(
+        "first line\nsecond line wraps here\nthird line".to_string(),
+        /*animations_enabled*/ false,
+    );
+
+    insta::assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 80)).join("\n"), @r"
+    • thinking…
+      first line
+      second line wraps here
+      third line
+    ");
+    insta::assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 16)).join("\n"), @r"
+    • thinking…
+      first line
+      second line
+      wraps here
+      third line
+    ");
+}
+
+#[test]
+fn kimi_reasoning_completed_wraps_full_content() {
+    let cell = KimiReasoningCell::completed("first line\nsecond line\nthird line".to_string());
+
+    insta::assert_snapshot!(render_lines(&cell.display_lines(/*width*/ 12)).join("\n"), @r"
+    • first line
+      second
+      line
+      third line
+    ");
+}
+
+#[test]
 fn reasoning_summary_height_matches_wrapped_rendering_for_url_like_content() {
     let summary = "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/that/keeps/going";
     let cell: Box<dyn HistoryCell> = Box::new(ReasoningSummaryCell::new(

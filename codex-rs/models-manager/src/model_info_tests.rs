@@ -3,6 +3,8 @@ use crate::ModelsManagerConfig;
 use codex_protocol::config_types::Personality;
 use codex_protocol::model_inference::GrokInferenceConfig;
 use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::KimiInferenceConfig;
+use codex_protocol::model_inference::KimiThinkingPolicy;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ApprovalMessages;
@@ -352,6 +354,120 @@ fn external_inference_uses_neutral_identity_without_rewriting_openai_instruction
     assert!(openai_instructions.starts_with("You are Codex, an agent based on GPT-6."));
     assert!(external_instructions.starts_with("You are Codex, an AI coding agent."));
     assert!(!external_instructions.contains("based on GPT-6"));
+}
+
+#[test]
+fn bundled_kimi_profiles_resolve_inherited_runtime_metadata() {
+    let catalog = crate::bundled_models_response().expect("bundled catalog should parse");
+    let profiles = [
+        "kimi/k3",
+        "kimi/k3-256k",
+        "kimi/kimi-for-coding",
+        "kimi/kimi-for-coding-highspeed",
+    ]
+    .map(|slug| {
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.slug == slug)
+            .unwrap_or_else(|| panic!("missing bundled profile {slug}"));
+        (
+            model.slug.as_str(),
+            model.context_window,
+            model.max_context_window,
+            model.auto_compact_token_limit,
+            model.effective_context_window_percent,
+            model.input_modalities.clone(),
+            model.default_reasoning_level.clone(),
+            model.inference.clone(),
+        )
+    });
+
+    assert_eq!(
+        profiles,
+        [
+            (
+                "kimi/k3",
+                Some(1_048_576),
+                Some(1_048_576),
+                Some(891_289),
+                100,
+                vec![
+                    codex_protocol::openai_models::InputModality::Text,
+                    codex_protocol::openai_models::InputModality::Image,
+                ],
+                Some(codex_protocol::openai_models::ReasoningEffort::High),
+                Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    route: "kimi_code".to_string(),
+                    wire_model: "k3".to_string(),
+                    max_output_tokens: 131_072,
+                    thinking: KimiThinkingPolicy::RequiredWithEffort,
+                })),
+            ),
+            (
+                "kimi/k3-256k",
+                Some(262_144),
+                Some(262_144),
+                Some(212_144),
+                100,
+                vec![
+                    codex_protocol::openai_models::InputModality::Text,
+                    codex_protocol::openai_models::InputModality::Image,
+                ],
+                Some(codex_protocol::openai_models::ReasoningEffort::High),
+                Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    route: "kimi_code".to_string(),
+                    wire_model: "k3-256k".to_string(),
+                    max_output_tokens: 131_072,
+                    thinking: KimiThinkingPolicy::RequiredWithEffort,
+                })),
+            ),
+            (
+                "kimi/kimi-for-coding",
+                Some(262_144),
+                Some(262_144),
+                Some(212_144),
+                100,
+                vec![
+                    codex_protocol::openai_models::InputModality::Text,
+                    codex_protocol::openai_models::InputModality::Image,
+                ],
+                None,
+                Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    route: "kimi_code".to_string(),
+                    wire_model: "kimi-for-coding".to_string(),
+                    max_output_tokens: 32_768,
+                    thinking: KimiThinkingPolicy::Required,
+                })),
+            ),
+            (
+                "kimi/kimi-for-coding-highspeed",
+                Some(262_144),
+                Some(262_144),
+                Some(212_144),
+                100,
+                vec![
+                    codex_protocol::openai_models::InputModality::Text,
+                    codex_protocol::openai_models::InputModality::Image,
+                ],
+                None,
+                Some(ModelInferenceConfig::Kimi(KimiInferenceConfig {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    route: "kimi_code".to_string(),
+                    wire_model: "kimi-for-coding-highspeed".to_string(),
+                    max_output_tokens: 32_768,
+                    thinking: KimiThinkingPolicy::Required,
+                })),
+            ),
+        ]
+    );
 }
 
 #[test]

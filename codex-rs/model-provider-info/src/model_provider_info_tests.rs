@@ -606,6 +606,49 @@ fn test_built_in_model_providers_include_amazon_bedrock_runtime() {
 }
 
 #[test]
+fn test_built_in_model_providers_include_native_kimi_route() {
+    let providers = built_in_model_providers(/*openai_base_url*/ None);
+    let expected = ModelProviderInfo {
+        name: "Claudeflare".to_string(),
+        base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
+        wire_api: WireApi::Responses,
+        wire_routes: HashMap::from([
+            (
+                "kimi_code".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    base_url: CLAUDEFLARE_KIMI_BASE_URL.to_string(),
+                    request_path: "chat/completions".to_string(),
+                    query_params: None,
+                    request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "grok".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::Grok,
+                    base_url: CLAUDEFLARE_GROK_BASE_URL.to_string(),
+                    request_path: "responses".to_string(),
+                    query_params: None,
+                    request_max_retries: Some(0),
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+        ]),
+        stream_max_retries: Some(10),
+        supports_websockets: false,
+        ..ModelProviderInfo::default()
+    };
+
+    assert_eq!(providers.get(CLAUDEFLARE_PROVIDER_ID), Some(&expected));
+}
+
+#[test]
 fn test_merge_configured_model_providers_adds_custom_provider() {
     let custom_provider = ModelProviderInfo {
         name: "Custom".to_string(),

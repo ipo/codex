@@ -1671,6 +1671,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
         display_name: model.display_name,
         description: model.description,
         model_specialty: model.model_specialty,
+        reasoning_display: model.reasoning_display,
         default_reasoning_effort: model.default_reasoning_effort,
         supported_reasoning_efforts: model
             .supported_reasoning_efforts
@@ -2432,6 +2433,7 @@ mod tests {
             display_name: "Current model".to_string(),
             description: "A test model".to_string(),
             model_specialty: None,
+            reasoning_display: codex_protocol::openai_models::ModelReasoningDisplay::Summary,
             hidden: false,
             supported_reasoning_efforts: Vec::new(),
             default_reasoning_effort: ReasoningEffort::Medium,

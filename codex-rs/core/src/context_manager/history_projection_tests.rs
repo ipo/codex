@@ -31,12 +31,15 @@ fn marked_model_projection_omits_only_empty_assistant_messages() {
         name: "tool".to_string(),
         namespace: None,
         arguments: "{}".to_string(),
+        encrypted_function_args: None,
         call_id: "call-1".to_string(),
         internal_chat_message_metadata_passthrough: None,
     };
     let function_output = ResponseItem::FunctionCallOutput {
         id: None,
-        call_id: "call-1".to_string(),
+        call_id: Some("call-1".to_string()),
+        name: None,
+        namespace: None,
         output: FunctionCallOutputPayload::from_text("result".to_string()),
         internal_chat_message_metadata_passthrough: None,
     };

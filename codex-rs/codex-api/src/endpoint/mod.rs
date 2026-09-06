@@ -7,7 +7,7 @@ pub(crate) mod realtime_websocket;
 pub(crate) mod responses;
 pub(crate) mod responses_websocket;
 pub(crate) mod search;
-mod session;
+pub(crate) mod session;
 
 pub use compact::CompactClient;
 pub use images::ImagesClient;
