@@ -34,6 +34,7 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
     Model {
         id: preset.id.clone(),
         model: preset.model.clone(),
+        aliases: preset.aliases.clone(),
         upgrade: preset.upgrade.as_ref().map(|upgrade| upgrade.id.clone()),
         upgrade_info: preset.upgrade.as_ref().map(|upgrade| ModelUpgradeInfo {
             model: upgrade.id.clone(),
@@ -165,6 +166,7 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
         .map(|(priority, retirement_at)| {
             serde_json::from_value::<ModelInfo>(json!({
                 "slug": format!("chatgpt-remote-only-{priority}"),
+                "aliases": [format!("remote-{priority}"), format!("provider/remote-{priority}")],
                 "display_name": "ChatGPT Remote Only",
                 "description": "Remote-only model for app-server model/list coverage",
                 "model_specialty": MODEL_SPECIALTY_CYBER,

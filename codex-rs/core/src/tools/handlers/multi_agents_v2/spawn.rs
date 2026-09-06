@@ -135,7 +135,7 @@ async fn handle_spawn_agent(
     )
     .await?;
     if !is_full_history_fork || role_name.is_some() {
-        apply_spawn_agent_role(&session, &mut config, role_name).await?;
+        apply_spawn_agent_role(&session, &mut config, role_name, turn.multi_agent_version).await?;
         if is_full_history_fork && config.developer_instructions.is_none() {
             config
                 .developer_instructions

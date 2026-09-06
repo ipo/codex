@@ -17,6 +17,7 @@ use crate::agent_communication::AgentCommunicationKind;
 use crate::attestation::AttestationProvider;
 use crate::compact;
 use crate::compact::CompactedHistoryMetadata;
+use crate::config::ConstraintError;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
 use crate::context::ContextualUserFragment;
@@ -59,6 +60,7 @@ use codex_analytics::ImagePreparationMetadata;
 use codex_analytics::SubAgentThreadStartedInput;
 use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
+use codex_config::RequirementSource;
 use codex_connectors::connector_runtime_context_key;
 use codex_context_fragments::RenderedFragment;
 use codex_exec_server::Environment;
@@ -82,6 +84,7 @@ use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::McpRuntimeInput;
+use codex_models_manager::manager::ModelSelectionError;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_network_proxy::NetworkProxy;
@@ -605,7 +608,6 @@ impl Session {
             )
         };
 
-        let mut config = Arc::new(config);
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
@@ -621,6 +623,39 @@ impl Session {
                 .list_models(refresh_strategy, config.http_client_factory())
                 .await;
         }
+        if let Some(requested_model) = config.model.clone() {
+            match models_manager
+                .resolve_model(
+                    &requested_model,
+                    RefreshStrategy::Offline,
+                    config.http_client_factory(),
+                )
+                .await
+            {
+                Ok(canonical_model) => config.model = Some(canonical_model),
+                Err(ModelSelectionError::BackendIncompatible {
+                    canonical_model, ..
+                }) if allow_provider_model_fallback => {
+                    info!(
+                        model_provider = %config.model_provider_id,
+                        requested_model,
+                        canonical_model,
+                        "canonicalized requested model before applying provider fallback behavior"
+                    );
+                    config.model = Some(canonical_model);
+                }
+                Err(err @ ModelSelectionError::Unknown { .. }) => {
+                    info!(
+                        model_provider = %config.model_provider_id,
+                        requested_model,
+                        error = %err,
+                        "requested model is not in the catalog; retaining provider-specific selector"
+                    );
+                }
+                Err(err) => return Err(CodexErr::InvalidRequest(err.to_string())),
+            }
+        }
+        let mut config = Arc::new(config);
         let model = models_manager
             .get_default_model(
                 &config.model,
@@ -3828,6 +3863,72 @@ impl Session {
             .step_settings
             .collaboration_mode
             .clone()
+    }
+
+    pub(crate) async fn canonicalize_settings_update(
+        &self,
+        updates: &mut SessionSettingsUpdate,
+    ) -> ConstraintResult<()> {
+        let requested = updates
+            .step_settings
+            .collaboration_mode
+            .as_ref()
+            .map(|mode| mode.model().to_string())
+            .or_else(|| updates.step_settings.model.clone());
+        let Some(requested) = requested else {
+            return Ok(());
+        };
+        let canonical = self
+            .resolve_model_selector(&requested)
+            .await
+            .map_err(|err| ConstraintError::InvalidValue {
+                field_name: "model",
+                candidate: requested,
+                allowed: format!("(catalog resolution failed: {err})"),
+                requirement_source: RequirementSource::Unknown,
+            })?;
+        if let Some(mode) = updates.step_settings.collaboration_mode.take() {
+            updates.step_settings.collaboration_mode = Some(mode.with_updates(
+                Some(canonical),
+                /*effort*/ None,
+                /*developer_instructions*/ None,
+            ));
+        } else {
+            updates.step_settings.model = Some(canonical);
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn resolve_model_selector(
+        &self,
+        requested: &str,
+    ) -> Result<String, ModelSelectionError> {
+        let (current_model, http_client_factory) = {
+            let state = self.state.lock().await;
+            (
+                state
+                    .session_configuration
+                    .step_settings
+                    .collaboration_mode
+                    .model()
+                    .to_string(),
+                state
+                    .session_configuration
+                    .original_config_do_not_use
+                    .http_client_factory(),
+            )
+        };
+        match self
+            .services
+            .models_manager
+            .resolve_model(requested, RefreshStrategy::Offline, http_client_factory)
+            .await
+        {
+            Err(ModelSelectionError::Unknown { .. }) if requested == current_model => {
+                Ok(current_model)
+            }
+            result => result,
+        }
     }
 
     pub(crate) fn multi_agent_version(&self) -> Option<MultiAgentVersion> {

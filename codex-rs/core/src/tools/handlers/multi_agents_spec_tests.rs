@@ -1,10 +1,16 @@
 use super::*;
+use crate::tools::handlers::multi_agents_common::model_supports_multi_agent_backend;
+use crate::tools::handlers::multi_agents_spec_model_catalog::MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES;
+use crate::tools::handlers::multi_agents_spec_model_catalog::SPAWN_AGENT_MODEL_CATALOG_TOO_LARGE;
+use crate::tools::handlers::multi_agents_spec_model_catalog::preferred_spawn_agent_model_selector;
+use codex_models_manager::bundled_models_response;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_tools::JsonSchemaPrimitiveType;
 use codex_tools::JsonSchemaType;
+use codex_utils_string::approx_token_count;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -12,6 +18,7 @@ fn model_preset(id: &str, show_in_picker: bool) -> ModelPreset {
     ModelPreset {
         id: id.to_string(),
         model: format!("{id}-model"),
+        aliases: Vec::new(),
         display_name: format!("{id} display"),
         description: format!("{id} description"),
         model_specialty: None,
@@ -84,12 +91,11 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
         description
             .contains("Available model overrides (optional; inherited parent model is preferred):")
     );
-    assert!(description.contains(
-        "- `visible-model`: visible description Reasoning efforts: medium (default). Service tiers: priority."
-    ));
-    assert!(description.contains(
-        "- `legacy-model`: legacy description Reasoning efforts: medium (default). Service tiers: priority."
-    ));
+    assert!(description.contains("Efforts: medium*\nModels: visible-model, legacy-model"));
+    assert_eq!(description.matches("* = default").count(), 1);
+    assert!(!description.contains("(default)"));
+    assert!(!description.contains("visible description"));
+    assert!(!description.contains("Service tiers"));
     assert!(!description.contains("hidden-model"));
     assert!(!description.contains("disabled-model"));
     assert!(properties.contains_key("task_name"));
@@ -196,10 +202,12 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 }
 
 #[test]
-fn spawn_agent_tool_caps_visible_model_summaries() {
+fn spawn_agent_tool_lists_more_than_five_visible_models() {
+    let mut first = model_preset("first", /*show_in_picker*/ true);
+    first.aliases = vec!["first-preferred".to_string(), "first-secondary".to_string()];
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
         available_models: vec![
-            model_preset("first", /*show_in_picker*/ true),
+            first,
             model_preset("second", /*show_in_picker*/ true),
             model_preset("third", /*show_in_picker*/ true),
             model_preset("fourth", /*show_in_picker*/ true),
@@ -218,34 +226,129 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
         panic!("spawn_agent should be a function tool");
     };
 
-    for model in ["first", "second", "third", "fourth", "fifth"] {
+    for model in [
+        "first-preferred",
+        "second-model",
+        "third-model",
+        "fourth-model",
+        "fifth-model",
+        "sixth-model",
+    ] {
         assert!(
-            description.contains(&format!("`{model}-model`")),
+            description.contains(model),
             "expected {model} model summary in spawn_agent description: {description:?}"
         );
     }
-    assert!(!description.contains("`sixth-model`"));
+    assert!(!description.contains("first-model"));
+    assert!(!description.contains("first-secondary"));
 }
 
 #[test]
-fn spawn_agent_tool_caps_reasoning_effort_value_length() {
+fn spawn_agent_tool_preserves_exact_long_reasoning_effort_values() {
     let mut model = model_preset("visible", /*show_in_picker*/ true);
-    let custom_effort = ReasoningEffort::Custom(
-        "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION + 1),
-    );
+    let custom_effort = ReasoningEffort::Custom(format!("effort-{}", "é".repeat(20)));
     model.default_reasoning_effort = custom_effort.clone();
     model.supported_reasoning_efforts = vec![ReasoningEffortPreset {
-        effort: custom_effort,
+        effort: custom_effort.clone(),
         description: "Model-defined".to_string(),
     }];
 
     assert_eq!(
         spawn_agent_models_description(&[model], MultiAgentVersion::V2),
         format!(
-            "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {} (default). Service tiers: priority.",
-            "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+            "Available model overrides (optional; inherited parent model is preferred):\nEffort values are valid `reasoning_effort` inputs; * = default when omitted. Models in each group share that signature.\nEfforts: {custom_effort}*\nModels: visible-model"
         )
     );
+}
+
+#[test]
+fn spawn_agent_model_catalog_groups_matching_efforts_and_distinct_defaults() {
+    let mut first = model_preset("first", /*show_in_picker*/ true);
+    first.aliases = vec!["first-preferred".to_string(), "first-secondary".to_string()];
+    first.default_reasoning_effort = ReasoningEffort::Low;
+    first.supported_reasoning_efforts = vec![
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::Low,
+            description: "Quick".to_string(),
+        },
+        ReasoningEffortPreset {
+            effort: ReasoningEffort::High,
+            description: "Deep".to_string(),
+        },
+    ];
+    let mut second = first.clone();
+    second.model = "second-model".to_string();
+    second.aliases = Vec::new();
+    let mut third = first.clone();
+    third.model = "third-model".to_string();
+    third.aliases = vec!["third-preferred".to_string()];
+    third.default_reasoning_effort = ReasoningEffort::High;
+
+    assert_eq!(
+        spawn_agent_models_description(&[first, second, third], MultiAgentVersion::V2),
+        "Available model overrides (optional; inherited parent model is preferred):\nEffort values are valid `reasoning_effort` inputs; * = default when omitted. Models in each group share that signature.\nEfforts: low*, high\nModels: first-preferred, second-model\nEfforts: low, high*\nModels: third-preferred"
+    );
+}
+
+fn max_length_selector_model(index: usize) -> ModelPreset {
+    const SELECTOR_BYTES: usize = 96;
+    let mut model = model_preset(&format!("model-{index}"), /*show_in_picker*/ true);
+    let alias_prefix = format!("alias-{index}-");
+    model.aliases = vec![format!(
+        "{alias_prefix}{}",
+        "a".repeat(SELECTOR_BYTES - alias_prefix.len())
+    )];
+    model
+}
+
+#[test]
+fn spawn_agent_model_catalog_preserves_exact_selectors_at_aggregate_boundary() {
+    let models = (0..412).map(max_length_selector_model).collect::<Vec<_>>();
+    let exact_selectors = models
+        .iter()
+        .map(|model| model.aliases[0].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let description = spawn_agent_models_description(&models, MultiAgentVersion::V2);
+
+    assert_eq!(description, exact_selectors);
+    assert!(description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert!(approx_token_count(&description) < 10_000);
+}
+
+#[test]
+fn spawn_agent_model_catalog_warns_when_exact_selectors_exceed_aggregate_bound() {
+    let models = (0..413).map(max_length_selector_model).collect::<Vec<_>>();
+
+    assert_eq!(
+        spawn_agent_models_description(&models, MultiAgentVersion::V2),
+        SPAWN_AGENT_MODEL_CATALOG_TOO_LARGE
+    );
+}
+
+#[test]
+fn bundled_spawn_agent_model_catalog_is_fully_representable() {
+    let models = bundled_models_response()
+        .expect("bundled catalog should parse")
+        .models
+        .into_iter()
+        .map(ModelPreset::from)
+        .collect::<Vec<_>>();
+    let preferred_selectors = models
+        .iter()
+        .filter(|model| model.show_in_picker)
+        .filter(|model| model_supports_multi_agent_backend(model, MultiAgentVersion::V2))
+        .map(preferred_spawn_agent_model_selector)
+        .collect::<Vec<_>>();
+
+    let description = spawn_agent_models_description(&models, MultiAgentVersion::V2);
+
+    assert!(description.len() <= MAX_SPAWN_AGENT_MODELS_DESCRIPTION_BYTES);
+    assert!(!description.contains(SPAWN_AGENT_MODEL_CATALOG_TOO_LARGE));
+    for selector in preferred_selectors {
+        assert_eq!(description.matches(selector).count(), 1);
+    }
 }
 
 #[test]
