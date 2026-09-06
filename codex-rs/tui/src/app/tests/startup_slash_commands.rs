@@ -212,7 +212,7 @@ async fn startup_goal_is_persisted_active_and_starts_canonical_continuation() ->
             && let ServerNotification::TurnStarted(notification) = notification.as_ref()
             && notification.thread_id == thread_id.to_string()
         {
-            continuation_turn = Some(notification.turn);
+            continuation_turn = Some(notification.turn.clone());
             break;
         }
     }
