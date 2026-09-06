@@ -277,7 +277,7 @@ async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
     let event = rx.try_recv().expect("expected AppEvent");
     assert_matches!(
         event,
-        AppEvent::OpenPlanReasoningScopePrompt {
+        AppEvent::OpenModelSelectionScopePrompt {
             model,
             effort: Some(_)
         } if model == "gpt-5.4"
@@ -285,7 +285,7 @@ async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
 }
 
 #[tokio::test]
-async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_scope_prompt_event() {
+async fn reasoning_selection_skips_scope_prompt_for_full_no_op() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
@@ -296,6 +296,10 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     set_chatgpt_auth(&mut chat);
 
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.record_persisted_model_selection(
+        "gpt-5.4".to_string(),
+        Some(ReasoningEffortConfig::Medium),
+    );
 
     let preset = get_available_model(&chat, "gpt-5.4");
     chat.open_reasoning_popup(preset);
@@ -303,17 +307,15 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(
-        events.iter().any(|event| matches!(
+        events.iter().all(|event| !matches!(
             event,
-            AppEvent::UpdateModel(model) if model == "gpt-5.4"
+            AppEvent::OpenModelSelectionScopePrompt { .. }
+                | AppEvent::UpdateModel(_)
+                | AppEvent::UpdateReasoningEffort(_)
+                | AppEvent::PersistModelSelection { .. }
+                | AppEvent::PersistPlanModeReasoningEffort(_)
         )),
-        "expected model update event; events: {events:?}"
-    );
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
-        "expected reasoning update event; events: {events:?}"
+        "expected a full no-op; events: {events:?}"
     );
 }
 
@@ -341,7 +343,7 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
     let event = rx.try_recv().expect("expected AppEvent");
     assert_matches!(
         event,
-        AppEvent::OpenPlanReasoningScopePrompt {
+        AppEvent::OpenModelSelectionScopePrompt {
             model,
             effort: Some(ReasoningEffortConfig::Medium)
         } if model == "gpt-5.4"
@@ -372,7 +374,7 @@ async fn reasoning_shortcut_in_plan_mode_updates_plan_override_without_prompt_or
     assert!(
         events
             .iter()
-            .all(|event| !matches!(event, AppEvent::OpenPlanReasoningScopePrompt { .. })),
+            .all(|event| !matches!(event, AppEvent::OpenModelSelectionScopePrompt { .. })),
         "expected no Plan reasoning scope prompt event; events: {events:?}"
     );
     assert!(
@@ -415,29 +417,18 @@ async fn advanced_reasoning_selection_in_plan_mode_uses_expected_scope() {
         chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
         let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-        if effort == ReasoningEffortConfig::Ultra {
-            assert!(events.iter().any(|event| matches!(
-                event,
-                AppEvent::ApplyAdvancedReasoning {
-                    model,
-                    effort: ReasoningEffortConfig::Ultra,
-                } if model == "gpt-5.4"
-            )));
-            assert!(events.iter().all(|event| !matches!(
-                event,
-                AppEvent::OpenPlanReasoningScopePrompt { .. }
-                    | AppEvent::PersistPlanModeReasoningEffort(_)
-                    | AppEvent::PersistModelSelection { .. }
-            )));
-        } else {
-            assert!(events.iter().any(|event| matches!(
-                event,
-                AppEvent::OpenPlanReasoningScopePrompt {
-                    model,
-                    effort: Some(ReasoningEffortConfig::Max),
-                } if model == "gpt-5.4"
-            )));
-        }
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AppEvent::OpenModelSelectionScopePrompt {
+                model,
+                effort: Some(selected_effort),
+            } if model == "gpt-5.4" && selected_effort == &effort
+        )));
+        assert!(events.iter().all(|event| !matches!(
+            event,
+            AppEvent::PersistPlanModeReasoningEffort(_)
+                | AppEvent::PersistModelSelection { .. }
+        )));
     }
 }
 
@@ -465,7 +456,7 @@ async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
 }
 
 #[tokio::test]
-async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_prompt_event() {
+async fn reasoning_selection_in_plan_mode_model_switch_opens_scope_prompt_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
@@ -479,26 +470,23 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
     chat.open_reasoning_popup(preset);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateModel(model) if model == "gpt-5.2"
-        )),
-        "expected model update event; events: {events:?}"
-    );
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
-        "expected reasoning update event; events: {events:?}"
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenModelSelectionScopePrompt {
+            model,
+            effort: Some(_)
+        }) if model == "gpt-5.2"
     );
 }
 
 #[tokio::test]
-async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override() {
+async fn model_selection_scope_popup_all_modes_persists_global_and_plan_override() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.open_plan_reasoning_scope_prompt("gpt-5.4".to_string(), Some(ReasoningEffortConfig::High));
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    chat.open_model_selection_scope_prompt("gpt-5.4".to_string(), Some(ReasoningEffortConfig::High));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -526,6 +514,243 @@ async fn plan_reasoning_scope_popup_all_modes_persists_global_and_plan_override(
         )),
         "expected global model reasoning selection persistence; events: {events:?}"
     );
+}
+
+#[tokio::test]
+async fn temporary_model_selection_uses_live_turn_and_restores_defaults() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let codex_home = tempdir().expect("tempdir");
+    let config_path = codex_home.path().join("config.toml");
+    let original_config = "model = \"gpt-5.4\"\nmodel_reasoning_effort = \"medium\"\nplan_mode_reasoning_effort = \"low\"\n";
+    std::fs::write(&config_path, original_config).expect("write config");
+    chat.config.codex_home = codex_home.path().to_path_buf().abs();
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    chat.open_model_selection_scope_prompt(
+        "gpt-5.2".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_matches!(
+        events.as_slice(),
+        [AppEvent::ApplyTemporaryModelSelection {
+            model,
+            effort: Some(ReasoningEffortConfig::High),
+        }] if model == "gpt-5.2"
+    );
+    for event in events {
+        match event {
+            AppEvent::ApplyTemporaryModelSelection { model, effort } => {
+                chat.apply_temporary_model_selection(&model, effort);
+            }
+            _ => unreachable!("selection events asserted above"),
+        }
+    }
+
+    assert_eq!(
+        (chat.current_model(), chat.current_reasoning_effort()),
+        ("gpt-5.2", Some(ReasoningEffortConfig::High))
+    );
+    chat.thread_id = Some(ThreadId::new());
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask_from_user_action(plan_mask);
+    assert_eq!(
+        (chat.current_model(), chat.current_reasoning_effort()),
+        ("gpt-5.2", Some(ReasoningEffortConfig::High))
+    );
+    let saved_collaboration_mode = chat.persisted_effective_collaboration_mode();
+    chat.bottom_pane.set_composer_text(
+        "temporary selection turn".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    match next_submit_op(&mut _op_rx) {
+        Op::UserTurn {
+            model,
+            effort,
+            collaboration_mode: Some(mode),
+            ..
+        } => {
+            assert_eq!(model, "gpt-5.2");
+            assert_eq!(effort, Some(ReasoningEffortConfig::High));
+            assert_eq!(mode.settings.model, "gpt-5.2");
+            assert_eq!(
+                mode.settings.reasoning_effort,
+                Some(ReasoningEffortConfig::High)
+            );
+        }
+        other => panic!("expected temporary selection turn, got {other:?}"),
+    };
+    let temporary_collaboration_mode = chat.effective_collaboration_mode();
+    chat.mark_temporary_settings_restore_pending(
+        chat.thread_id.expect("configured thread"),
+        saved_collaboration_mode.clone(),
+        temporary_collaboration_mode.clone(),
+    );
+    chat.on_thread_settings_updated(
+        codex_app_server_protocol::ThreadSettingsUpdatedNotification {
+            thread_id: chat.thread_id.expect("configured thread").to_string(),
+            thread_settings: codex_app_server_protocol::ThreadSettings {
+                cwd: chat.config.cwd.clone(),
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
+                sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                    network_access: false,
+                },
+                active_permission_profile: None,
+                model: temporary_collaboration_mode.model().to_string(),
+                model_provider: "test-provider".to_string(),
+                service_tier: None,
+                effort: temporary_collaboration_mode.reasoning_effort(),
+                summary: None,
+                collaboration_mode: temporary_collaboration_mode,
+                multi_agent_mode: Default::default(),
+                personality: None,
+            },
+        },
+    );
+    assert!(chat.has_pending_temporary_settings_restore());
+    chat.on_thread_settings_updated(
+        codex_app_server_protocol::ThreadSettingsUpdatedNotification {
+            thread_id: chat.thread_id.expect("configured thread").to_string(),
+            thread_settings: codex_app_server_protocol::ThreadSettings {
+                cwd: chat.config.cwd.clone(),
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::User,
+                sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                    network_access: false,
+                },
+                active_permission_profile: None,
+                model: saved_collaboration_mode.model().to_string(),
+                model_provider: "test-provider".to_string(),
+                service_tier: None,
+                effort: saved_collaboration_mode.reasoning_effort(),
+                summary: None,
+                collaboration_mode: saved_collaboration_mode.clone(),
+                multi_agent_mode: Default::default(),
+                personality: None,
+            },
+        },
+    );
+    assert!(!chat.has_pending_temporary_settings_restore());
+    let default_mask = collaboration_modes::default_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+    chat.set_collaboration_mask_from_user_action(default_mask);
+    assert_eq!(
+        (chat.current_model(), chat.current_reasoning_effort()),
+        ("gpt-5.2", Some(ReasoningEffortConfig::High))
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "temporary mode switches must not submit persistent thread settings"
+    );
+    let (mut resumed, _resumed_rx, _resumed_op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    resumed.set_effective_collaboration_mode(saved_collaboration_mode);
+    assert_eq!(
+        (resumed.current_model(), resumed.current_reasoning_effort()),
+        ("gpt-5.4", Some(ReasoningEffortConfig::Low))
+    );
+    assert_eq!(
+        std::fs::read_to_string(config_path).expect("read config"),
+        original_config
+    );
+}
+
+#[tokio::test]
+async fn rejected_temporary_model_turn_preserves_mixed_input_and_mention_bindings() {
+    let (mut chat, _rx, mut _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let local_image = LocalImageAttachment {
+        placeholder: "[Image #1]".to_string(),
+        path: PathBuf::from("/tmp/temporary-model.png"),
+    };
+    let mention_binding = MentionBinding {
+        sigil: '$',
+        mention: "skill-name".to_string(),
+        path: "/tmp/SKILL.md".to_string(),
+    };
+    let submitted_message = UserMessage {
+        text: "use $skill-name [Image #1]".to_string(),
+        local_images: vec![local_image.clone()],
+        remote_image_urls: vec!["data:image/png;base64,AAA".to_string()],
+        text_elements: vec![TextElement::new(
+            (16..26).into(),
+            Some("[Image #1]".to_string()),
+        )],
+        mention_bindings: vec![mention_binding.clone()],
+    };
+    let items = vec![
+        UserInput::Text {
+            text: submitted_message.text.clone(),
+            text_elements: Vec::new(),
+        },
+        UserInput::Image {
+            url: "data:image/png;base64,AAA".to_string(),
+            detail: None,
+        },
+        UserInput::LocalImage {
+            path: local_image.path.clone(),
+            detail: None,
+        },
+        UserInput::Audio {
+            url: "data:audio/wav;base64,BBB".to_string(),
+        },
+        UserInput::LocalAudio {
+            path: PathBuf::from("/tmp/temporary-model.wav"),
+        },
+        UserInput::Skill {
+            name: "skill-name".to_string(),
+            path: PathBuf::from("/tmp/SKILL.md"),
+        },
+        UserInput::Mention {
+            name: "plugin-name".to_string(),
+            path: "plugin://plugin-name@marketplace".to_string(),
+        },
+    ];
+
+    chat.restore_rejected_temporary_user_turn_input(&items, Some(submitted_message.clone()));
+
+    let rejected = chat
+        .rejected_temporary_user_turn_input
+        .as_ref()
+        .expect("rejected input should be retained");
+    assert_eq!(rejected.items, items);
+    assert_eq!(
+        rejected.submitted_user_message,
+        Some(submitted_message.clone())
+    );
+    let restored = chat.bottom_pane.composer_draft_snapshot();
+    assert_eq!(
+        (
+            restored.text,
+            restored.local_images,
+            restored.remote_image_urls,
+            restored.text_elements,
+            restored.mention_bindings,
+        ),
+        (
+            submitted_message.text,
+            submitted_message.local_images,
+            submitted_message.remote_image_urls,
+            submitted_message.text_elements,
+            submitted_message.mention_bindings,
+        )
+    );
+    chat.submit_user_message(submitted_message);
+    let Op::UserTurn {
+        items: replayed, ..
+    } = next_submit_op(&mut _op_rx)
+    else {
+        panic!("expected restored user turn");
+    };
+    assert_eq!(replayed, items);
 }
 
 #[test]
@@ -561,16 +786,20 @@ async fn open_plan_implementation_prompt_sets_pending_notification() {
 }
 
 #[tokio::test]
-async fn open_plan_reasoning_scope_prompt_sets_pending_notification() {
+async fn open_model_selection_scope_prompt_sets_pending_notification_in_plan_mode() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     chat.config.tui_notifications.notifications =
         Notifications::Custom(vec!["plan-mode-prompt".to_string()]);
 
-    chat.open_plan_reasoning_scope_prompt("gpt-5.4".to_string(), Some(ReasoningEffortConfig::High));
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    chat.open_model_selection_scope_prompt("gpt-5.4".to_string(), Some(ReasoningEffortConfig::High));
 
     assert_matches!(
         chat.pending_notification,
-        Some(Notification::PlanModePrompt { ref title }) if title == PLAN_MODE_REASONING_SCOPE_TITLE
+        Some(Notification::PlanModePrompt { ref title }) if title == MODEL_SELECTION_SCOPE_TITLE
     );
 }
 
@@ -653,26 +882,31 @@ async fn handle_request_user_input_sets_pending_notification() {
 }
 
 #[tokio::test]
-async fn plan_reasoning_scope_popup_mentions_selected_reasoning() {
+async fn model_selection_scope_popup_in_plan_mode_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
     chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
-    chat.open_plan_reasoning_scope_prompt(
+    chat.record_persisted_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
+    chat.open_model_selection_scope_prompt(
         "gpt-5.4".to_string(),
         Some(ReasoningEffortConfig::Medium),
     );
 
     let popup = render_bottom_popup(&chat, /*width*/ 100);
-    assert!(popup.contains("Choose where to apply medium reasoning."));
-    assert!(popup.contains("Always use medium reasoning in Plan mode."));
-    assert!(popup.contains("Apply to Plan mode override"));
-    assert!(popup.contains("Apply to global default and Plan mode override"));
-    assert!(popup.contains("user-chosen Plan override (low)"));
+    assert_chatwidget_snapshot!("model_selection_scope_plan_mode", popup);
 }
 
 #[tokio::test]
-async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_override() {
+async fn model_selection_scope_popup_mentions_built_in_plan_default_when_no_override() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.open_plan_reasoning_scope_prompt(
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    chat.open_model_selection_scope_prompt(
         "gpt-5.4".to_string(),
         Some(ReasoningEffortConfig::Medium),
     );
@@ -682,9 +916,13 @@ async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_overr
 }
 
 #[tokio::test]
-async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasoning() {
+async fn model_selection_scope_popup_plan_only_does_not_update_global_reasoning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.open_plan_reasoning_scope_prompt("gpt-5.4".to_string(), Some(ReasoningEffortConfig::High));
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+    chat.open_model_selection_scope_prompt("gpt-5.4".to_string(), Some(ReasoningEffortConfig::High));
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 

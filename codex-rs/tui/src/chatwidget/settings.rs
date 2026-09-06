@@ -140,6 +140,7 @@ impl ChatWidget {
     /// so the footer reflects it without waiting for the next mode switch.
     /// Passing `None` resets to the Plan-mode preset default.
     pub(crate) fn set_plan_mode_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.temporary_model_selection = None;
         self.config.plan_mode_reasoning_effort = effort.clone();
         if self.collaboration_modes_enabled()
             && let Some(mask) = self.active_collaboration_mask.as_mut()
@@ -161,6 +162,7 @@ impl ChatWidget {
     /// Does not touch the active Plan mask — Plan reasoning is controlled
     /// exclusively by the Plan preset and `set_plan_mode_reasoning_effort`.
     pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        self.temporary_model_selection = None;
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             /*model*/ None,
             Some(effort.clone()),
@@ -261,6 +263,7 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy and stored collaboration mode.
     pub(crate) fn set_model(&mut self, model: &str) {
+        self.temporary_model_selection = None;
         self.current_collaboration_mode = self.current_collaboration_mode.with_updates(
             Some(model.to_string()),
             /*effort*/ None,
@@ -275,7 +278,23 @@ impl ChatWidget {
         self.refresh_model_dependent_surfaces();
     }
 
+    /// Update model state for the current TUI session without changing defaults.
+    pub(crate) fn apply_temporary_model_selection(
+        &mut self,
+        model: &str,
+        effort: Option<ReasoningEffortConfig>,
+    ) {
+        self.temporary_model_selection = Some(TemporaryModelSelection {
+            model: model.to_string(),
+            reasoning_effort: effort,
+        });
+        self.refresh_model_dependent_surfaces();
+    }
+
     pub(crate) fn current_model(&self) -> &str {
+        if let Some(temporary) = self.temporary_model_selection.as_ref() {
+            return &temporary.model;
+        }
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.model();
         }
@@ -357,6 +376,51 @@ impl ChatWidget {
         self.effective_reasoning_effort()
     }
 
+    pub(crate) fn mark_temporary_settings_restore_pending(
+        &mut self,
+        thread_id: ThreadId,
+        saved_settings: CollaborationMode,
+        temporary_settings: CollaborationMode,
+    ) {
+        self.pending_temporary_settings_restores.insert(
+            thread_id,
+            PendingTemporarySettingsRestore {
+                saved_settings,
+                temporary_settings,
+                temporary_settings_seen: false,
+            },
+        );
+    }
+
+    pub(crate) fn has_temporary_model_selection(&self) -> bool {
+        self.temporary_model_selection.is_some()
+    }
+
+    pub(crate) fn has_pending_temporary_settings_restore(&self) -> bool {
+        !self.pending_temporary_settings_restores.is_empty()
+    }
+
+    pub(crate) fn pending_temporary_settings_restores(&self) -> Vec<(ThreadId, CollaborationMode)> {
+        self.pending_temporary_settings_restores
+            .iter()
+            .map(|(thread_id, restore)| (*thread_id, restore.saved_settings.clone()))
+            .collect()
+    }
+
+    pub(crate) fn restore_rejected_temporary_user_turn_input(
+        &mut self,
+        items: &[UserInput],
+        submitted_user_message: Option<UserMessage>,
+    ) {
+        self.rejected_temporary_user_turn_input = Some(RejectedTemporaryUserTurnInput {
+            items: items.to_vec(),
+            submitted_user_message: submitted_user_message.clone(),
+        });
+        if let Some(user_message) = submitted_user_message {
+            self.restore_user_message_to_composer(user_message);
+        }
+    }
+
     pub(crate) fn on_thread_settings_updated(
         &mut self,
         notification: ThreadSettingsUpdatedNotification,
@@ -368,10 +432,25 @@ impl ChatWidget {
             );
             return;
         };
+        let restore_confirmed = self
+            .pending_temporary_settings_restores
+            .get_mut(&thread_id)
+            .is_some_and(|pending_restore| {
+                let settings = &notification.thread_settings.collaboration_mode;
+                if settings == &pending_restore.temporary_settings {
+                    pending_restore.temporary_settings_seen = true;
+                    false
+                } else {
+                    pending_restore.temporary_settings_seen
+                        && settings == &pending_restore.saved_settings
+                }
+            });
+        if restore_confirmed {
+            self.pending_temporary_settings_restores.remove(&thread_id);
+        }
         if self.thread_id != Some(thread_id) {
             return;
         }
-
         self.apply_thread_settings(notification.thread_settings);
     }
 
@@ -408,6 +487,9 @@ impl ChatWidget {
     }
 
     pub(super) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
+        if let Some(temporary) = self.temporary_model_selection.as_ref() {
+            return temporary.reasoning_effort.clone();
+        }
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.reasoning_effort();
         }
@@ -418,7 +500,7 @@ impl ChatWidget {
             .unwrap_or(current_effort)
     }
 
-    pub(crate) fn effective_collaboration_mode(&self) -> CollaborationMode {
+    pub(crate) fn persisted_effective_collaboration_mode(&self) -> CollaborationMode {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.clone();
         }
@@ -426,6 +508,18 @@ impl ChatWidget {
             || self.current_collaboration_mode.clone(),
             |mask| self.current_collaboration_mode.apply_mask(mask),
         )
+    }
+
+    pub(crate) fn effective_collaboration_mode(&self) -> CollaborationMode {
+        let mut effective = self.persisted_effective_collaboration_mode();
+        if let Some(temporary) = self.temporary_model_selection.as_ref() {
+            effective = effective.with_updates(
+                Some(temporary.model.clone()),
+                Some(temporary.reasoning_effort.clone()),
+                /*developer_instructions*/ None,
+            );
+        }
+        effective
     }
 
     pub(super) fn refresh_model_display(&mut self) {
@@ -646,7 +740,9 @@ impl ChatWidget {
 
     pub(crate) fn set_collaboration_mask_from_user_action(&mut self, mask: CollaborationModeMask) {
         self.set_collaboration_mask(mask);
-        self.submit_collaboration_mode_settings_update();
+        if self.temporary_model_selection.is_none() {
+            self.submit_collaboration_mode_settings_update();
+        }
     }
 
     /// Update the active collaboration mask.

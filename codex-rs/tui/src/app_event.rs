@@ -971,6 +971,12 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Apply a model selection only to the current TUI session.
+    ApplyTemporaryModelSelection {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 
@@ -1023,8 +1029,8 @@ pub(crate) enum AppEvent {
         effort: ReasoningEffort,
     },
 
-    /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
-    OpenPlanReasoningScopePrompt {
+    /// Open the scope prompt for applying the selected model and effort.
+    OpenModelSelectionScopePrompt {
         model: String,
         effort: Option<ReasoningEffort>,
     },
