@@ -1,0 +1,22 @@
+[package]
+edition = "2024"
+license = "Apache-2.0"
+name = "codex-claude-code"
+version = "0.153.4"
+
+[lib]
+doctest = false
+name = "codex_claude_code"
+path = "src/lib.rs"
+
+# Keep this provisional crate independent until the shared inference contracts land.
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v5"] }
+
+[dev-dependencies]
+pretty_assertions = "1"
