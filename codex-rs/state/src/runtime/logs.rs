@@ -1,7 +1,5 @@
 use super::*;
 
-const LOG_RETENTION_DAYS: i64 = 10;
-
 impl StateRuntime {
     pub async fn insert_log(&self, entry: &LogEntry) -> anyhow::Result<()> {
         self.insert_logs(std::slice::from_ref(entry)).await
@@ -280,30 +278,6 @@ WHERE id IN (
         Ok(())
     }
 
-    pub(crate) async fn delete_logs_before(&self, cutoff_ts: i64) -> anyhow::Result<u64> {
-        let result = sqlx::query("DELETE FROM logs WHERE ts < ?")
-            .bind(cutoff_ts)
-            .execute(self.logs_pool.as_ref())
-            .await?;
-        Ok(result.rows_affected())
-    }
-
-    pub(crate) async fn run_logs_startup_maintenance(&self) -> anyhow::Result<()> {
-        let Some(cutoff) =
-            Utc::now().checked_sub_signed(chrono::Duration::days(LOG_RETENTION_DAYS))
-        else {
-            return Ok(());
-        };
-        self.delete_logs_before(cutoff.timestamp()).await?;
-        // Startup cleanup should not wait behind or block foreground work.
-        // PASSIVE checkpoints copy whatever is immediately available and skip
-        // frames that would require waiting on active readers or writers.
-        sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
-            .execute(self.logs_pool.as_ref())
-            .await?;
-        Ok(())
-    }
-
     /// Query logs with optional filters.
     pub async fn query_logs(&self, query: &LogQuery) -> anyhow::Result<Vec<LogRow>> {
         let mut builder = QueryBuilder::<Sqlite>::new(
@@ -549,6 +523,8 @@ mod tests {
     use std::borrow::Cow;
     use std::path::Path;
 
+    const TEST_LOG_TS_BASE: i64 = 4_000_000_000;
+
     async fn open_db_pool(path: &Path) -> SqlitePool {
         crate::SqliteConfig::new_for_testing(path.parent().unwrap_or(path).abs())
             .open_read_write_pool(path)
@@ -578,7 +554,7 @@ mod tests {
 
         runtime
             .insert_logs(&[LogEntry {
-                ts: 1,
+                ts: TEST_LOG_TS_BASE + 1,
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
@@ -764,7 +740,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1_700_000_001,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -777,7 +753,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 1_700_000_002,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -820,7 +796,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "TRACE".to_string(),
                     target: "cli".to_string(),
@@ -833,7 +809,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -846,7 +822,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 3,
+                    ts: TEST_LOG_TS_BASE + 3,
                     ts_nanos: 0,
                     level: "warn".to_string(),
                     target: "cli".to_string(),
@@ -859,7 +835,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 4,
+                    ts: TEST_LOG_TS_BASE + 4,
                     ts_nanos: 0,
                     level: "ERROR".to_string(),
                     target: "cli".to_string(),
@@ -909,7 +885,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -922,7 +898,7 @@ mod tests {
                     module_path: Some("mod".to_string()),
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -947,7 +923,7 @@ mod tests {
             .expect("query thread logs");
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].ts, 2);
+        assert_eq!(rows[0].ts, TEST_LOG_TS_BASE + 2);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -965,7 +941,7 @@ mod tests {
         let eleven_mebibytes = "d".repeat(11 * 1024 * 1024);
         runtime
             .insert_logs(&[LogEntry {
-                ts: 1,
+                ts: TEST_LOG_TS_BASE + 1,
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
@@ -1007,7 +983,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1020,7 +996,7 @@ mod tests {
                     module_path: Some("mod".to_string()),
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1033,7 +1009,7 @@ mod tests {
                     module_path: Some("mod".to_string()),
                 },
                 LogEntry {
-                    ts: 3,
+                    ts: TEST_LOG_TS_BASE + 3,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1060,7 +1036,7 @@ mod tests {
 
         let mut timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
         timestamps.sort_unstable();
-        assert_eq!(timestamps, vec![2, 3]);
+        assert_eq!(timestamps, vec![TEST_LOG_TS_BASE + 2, TEST_LOG_TS_BASE + 3]);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1078,7 +1054,7 @@ mod tests {
         let eleven_mebibytes = "e".repeat(11 * 1024 * 1024);
         runtime
             .insert_logs(&[LogEntry {
-                ts: 1,
+                ts: TEST_LOG_TS_BASE + 1,
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
@@ -1120,7 +1096,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1133,7 +1109,7 @@ mod tests {
                     module_path: Some("mod".to_string()),
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1146,7 +1122,7 @@ mod tests {
                     module_path: Some("mod".to_string()),
                 },
                 LogEntry {
-                    ts: 3,
+                    ts: TEST_LOG_TS_BASE + 3,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1172,7 +1148,7 @@ mod tests {
 
         let mut timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
         timestamps.sort_unstable();
-        assert_eq!(timestamps, vec![2, 3]);
+        assert_eq!(timestamps, vec![TEST_LOG_TS_BASE + 2, TEST_LOG_TS_BASE + 3]);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1190,7 +1166,7 @@ mod tests {
         let eleven_mebibytes = "f".repeat(11 * 1024 * 1024);
         runtime
             .insert_logs(&[LogEntry {
-                ts: 1,
+                ts: TEST_LOG_TS_BASE + 1,
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
@@ -1230,7 +1206,7 @@ mod tests {
 
         let entries: Vec<LogEntry> = (1..=1_001)
             .map(|ts| LogEntry {
-                ts,
+                ts: TEST_LOG_TS_BASE + ts,
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
@@ -1258,8 +1234,8 @@ mod tests {
 
         let timestamps: Vec<i64> = rows.into_iter().map(|row| row.ts).collect();
         assert_eq!(timestamps.len(), 1_000);
-        assert_eq!(timestamps.first().copied(), Some(2));
-        assert_eq!(timestamps.last().copied(), Some(1_001));
+        assert_eq!(timestamps.first().copied(), Some(TEST_LOG_TS_BASE + 2));
+        assert_eq!(timestamps.last().copied(), Some(TEST_LOG_TS_BASE + 1_001));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1276,7 +1252,7 @@ mod tests {
 
         let entries: Vec<LogEntry> = (1..=1_001)
             .map(|ts| LogEntry {
-                ts,
+                ts: TEST_LOG_TS_BASE + ts,
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
@@ -1308,8 +1284,8 @@ mod tests {
             .map(|row| row.ts)
             .collect();
         assert_eq!(timestamps.len(), 1_000);
-        assert_eq!(timestamps.first().copied(), Some(2));
-        assert_eq!(timestamps.last().copied(), Some(1_001));
+        assert_eq!(timestamps.first().copied(), Some(TEST_LOG_TS_BASE + 2));
+        assert_eq!(timestamps.last().copied(), Some(TEST_LOG_TS_BASE + 1_001));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1326,7 +1302,7 @@ mod tests {
 
         let entries: Vec<LogEntry> = (1..=1_001)
             .map(|ts| LogEntry {
-                ts,
+                ts: TEST_LOG_TS_BASE + ts,
                 ts_nanos: 0,
                 level: "INFO".to_string(),
                 target: "cli".to_string(),
@@ -1358,8 +1334,8 @@ mod tests {
             .map(|row| row.ts)
             .collect();
         assert_eq!(timestamps.len(), 1_000);
-        assert_eq!(timestamps.first().copied(), Some(2));
-        assert_eq!(timestamps.last().copied(), Some(1_001));
+        assert_eq!(timestamps.first().copied(), Some(TEST_LOG_TS_BASE + 2));
+        assert_eq!(timestamps.last().copied(), Some(TEST_LOG_TS_BASE + 1_001));
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -1377,7 +1353,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1390,7 +1366,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1403,7 +1379,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 3,
+                    ts: TEST_LOG_TS_BASE + 3,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1427,9 +1403,24 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
             [
-                format_feedback_log_line(/*ts*/ 1, /*ts_nanos*/ 0, "INFO", "alpha"),
-                format_feedback_log_line(/*ts*/ 2, /*ts_nanos*/ 0, "INFO", "bravo"),
-                format_feedback_log_line(/*ts*/ 3, /*ts_nanos*/ 0, "INFO", "charlie"),
+                format_feedback_log_line(
+                    /*ts*/ TEST_LOG_TS_BASE + 1,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "alpha"
+                ),
+                format_feedback_log_line(
+                    /*ts*/ TEST_LOG_TS_BASE + 2,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "bravo"
+                ),
+                format_feedback_log_line(
+                    /*ts*/ TEST_LOG_TS_BASE + 3,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "charlie"
+                ),
             ]
             .concat()
         );
@@ -1451,7 +1442,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1464,7 +1455,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1503,7 +1494,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1516,7 +1507,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1529,7 +1520,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 3,
+                    ts: TEST_LOG_TS_BASE + 3,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1542,7 +1533,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 4,
+                    ts: TEST_LOG_TS_BASE + 4,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1567,19 +1558,19 @@ mod tests {
             String::from_utf8(bytes).expect("valid utf-8"),
             [
                 format_feedback_log_line(
-                    /*ts*/ 1,
+                    /*ts*/ TEST_LOG_TS_BASE + 1,
                     /*ts_nanos*/ 0,
                     "INFO",
                     "threadless-before"
                 ),
                 format_feedback_log_line(
-                    /*ts*/ 2,
+                    /*ts*/ TEST_LOG_TS_BASE + 2,
                     /*ts_nanos*/ 0,
                     "INFO",
                     "thread-scoped"
                 ),
                 format_feedback_log_line(
-                    /*ts*/ 3,
+                    /*ts*/ TEST_LOG_TS_BASE + 3,
                     /*ts_nanos*/ 0,
                     "INFO",
                     "threadless-after"
@@ -1604,7 +1595,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1617,7 +1608,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1630,7 +1621,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 3,
+                    ts: TEST_LOG_TS_BASE + 3,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1643,7 +1634,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 4,
+                    ts: TEST_LOG_TS_BASE + 4,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1668,19 +1659,19 @@ mod tests {
             String::from_utf8(bytes).expect("valid utf-8"),
             [
                 format_feedback_log_line(
-                    /*ts*/ 2,
+                    /*ts*/ TEST_LOG_TS_BASE + 2,
                     /*ts_nanos*/ 0,
                     "INFO",
                     "old-process-thread"
                 ),
                 format_feedback_log_line(
-                    /*ts*/ 3,
+                    /*ts*/ TEST_LOG_TS_BASE + 3,
                     /*ts_nanos*/ 0,
                     "INFO",
                     "new-process-thread"
                 ),
                 format_feedback_log_line(
-                    /*ts*/ 4,
+                    /*ts*/ TEST_LOG_TS_BASE + 4,
                     /*ts_nanos*/ 0,
                     "INFO",
                     "new-process-threadless"
@@ -1714,7 +1705,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1727,7 +1718,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1740,7 +1731,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 3,
+                    ts: TEST_LOG_TS_BASE + 3,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1783,7 +1774,7 @@ mod tests {
         runtime
             .insert_logs(&[
                 LogEntry {
-                    ts: 1,
+                    ts: TEST_LOG_TS_BASE + 1,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1796,7 +1787,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 2,
+                    ts: TEST_LOG_TS_BASE + 2,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1809,7 +1800,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 3,
+                    ts: TEST_LOG_TS_BASE + 3,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1822,7 +1813,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 4,
+                    ts: TEST_LOG_TS_BASE + 4,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1835,7 +1826,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 5,
+                    ts: TEST_LOG_TS_BASE + 5,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1848,7 +1839,7 @@ mod tests {
                     module_path: None,
                 },
                 LogEntry {
-                    ts: 6,
+                    ts: TEST_LOG_TS_BASE + 6,
                     ts_nanos: 0,
                     level: "INFO".to_string(),
                     target: "cli".to_string(),
@@ -1872,16 +1863,26 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).expect("valid utf-8"),
             [
-                format_feedback_log_line(/*ts*/ 1, /*ts_nanos*/ 0, "INFO", "thread-1"),
-                format_feedback_log_line(/*ts*/ 2, /*ts_nanos*/ 0, "INFO", "thread-2"),
                 format_feedback_log_line(
-                    /*ts*/ 3,
+                    /*ts*/ TEST_LOG_TS_BASE + 1,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "thread-1"
+                ),
+                format_feedback_log_line(
+                    /*ts*/ TEST_LOG_TS_BASE + 2,
+                    /*ts_nanos*/ 0,
+                    "INFO",
+                    "thread-2"
+                ),
+                format_feedback_log_line(
+                    /*ts*/ TEST_LOG_TS_BASE + 3,
                     /*ts_nanos*/ 0,
                     "INFO",
                     "threadless-proc-1"
                 ),
                 format_feedback_log_line(
-                    /*ts*/ 4,
+                    /*ts*/ TEST_LOG_TS_BASE + 4,
                     /*ts_nanos*/ 0,
                     "INFO",
                     "threadless-proc-2"

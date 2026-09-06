@@ -13,7 +13,9 @@ use crate::telemetry::DbKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use log::LevelFilter;
 use sqlx::ConnectOptions;
+use sqlx::Connection;
 use sqlx::Error;
+use sqlx::SqliteConnection;
 use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::SqliteAutoVacuum;
@@ -260,10 +262,20 @@ impl SqliteConfig {
             RuntimeDbInitError::new(spec.label, "lock", path.as_path(), source)
         })?;
         let started = Instant::now();
-        let pool_result = self
-            .open_read_write_pool(&path)
-            .await
-            .map_err(anyhow::Error::from);
+        let pool_result = if matches!(spec.kind, DbKind::Logs) {
+            self.try_open_current_logs_pool(&path, migrator).await
+        } else {
+            Ok(None)
+        };
+        let pool_result = match pool_result {
+            Ok(Some(pool)) => Ok((pool, false)),
+            Ok(None) => self
+                .open_read_write_pool(&path)
+                .await
+                .map(|pool| (pool, true))
+                .map_err(anyhow::Error::from),
+            Err(err) => Err(err),
+        };
         telemetry::record_init_result(
             telemetry_override,
             spec.kind,
@@ -271,15 +283,18 @@ impl SqliteConfig {
             started.elapsed(),
             &pool_result,
         );
-        let pool = pool_result.map_err(|source| {
+        let (pool, needs_migration) = pool_result.map_err(|source| {
             RuntimeDbInitError::new(spec.label, "open", path.as_path(), source)
         })?;
         let started = Instant::now();
         let migrate_result = async {
-            if matches!(spec.kind, DbKind::State) {
-                repair_legacy_recency_migration_version(&pool, migrator).await?;
+            if needs_migration {
+                if matches!(spec.kind, DbKind::State) {
+                    repair_legacy_recency_migration_version(&pool, migrator).await?;
+                }
+                migrator.run(&pool).await.map_err(anyhow::Error::from)?;
             }
-            migrator.run(&pool).await.map_err(anyhow::Error::from)
+            Ok::<_, anyhow::Error>(())
         }
         .await;
         telemetry::record_init_result(
@@ -296,6 +311,33 @@ impl SqliteConfig {
             );
         }
         Ok(pool)
+    }
+
+    async fn try_open_current_logs_pool(
+        &self,
+        path: &Path,
+        migrator: &Migrator,
+    ) -> anyhow::Result<Option<SqlitePool>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(false)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(5))
+            .log_statements(LevelFilter::Off);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await?;
+        let current_result = logs_database_is_current(&pool, migrator).await;
+        if matches!(current_result, Ok(true)) {
+            Ok(Some(pool))
+        } else {
+            pool.close().await;
+            Ok(None)
+        }
     }
 
     /// Open a writable Codex SQLite database, creating it if necessary.
@@ -333,6 +375,45 @@ impl SqliteConfig {
             .connect_with(options)
             .await
     }
+
+    pub(crate) async fn open_log_maintenance_connection(
+        &self,
+        busy_timeout: Duration,
+    ) -> Result<SqliteConnection, Error> {
+        let options = SqliteConnectOptions::new()
+            .filename(self.logs_db_path())
+            .create_if_missing(false)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(busy_timeout)
+            .log_statements(LevelFilter::Off);
+        SqliteConnection::connect_with(&options).await
+    }
+}
+
+async fn logs_database_is_current(pool: &SqlitePool, migrator: &Migrator) -> anyhow::Result<bool> {
+    let journal_mode = sqlx::query_scalar::<_, String>("PRAGMA journal_mode")
+        .fetch_one(pool)
+        .await?;
+    if !journal_mode.eq_ignore_ascii_case("wal") {
+        return Ok(false);
+    }
+    let applied = sqlx::query_as::<_, (i64, bool, Vec<u8>)>(
+        "SELECT version, success, checksum FROM _sqlx_migrations ORDER BY version",
+    )
+    .fetch_all(pool)
+    .await?;
+    if applied.iter().any(|(_, success, _)| !success) {
+        return Ok(false);
+    }
+    Ok(migrator
+        .migrations
+        .iter()
+        .filter(|migration| migration.migration_type.is_up_migration())
+        .all(|migration| {
+            applied.iter().any(|(version, _, checksum)| {
+                *version == migration.version && checksum.as_slice() == migration.checksum.as_ref()
+            })
+        }))
 }
 
 struct InitLock {
@@ -373,7 +454,7 @@ fn init_lock_path(db_path: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
-fn open_owner_only_lock_file(path: &Path) -> io::Result<File> {
+pub(crate) fn open_owner_only_lock_file(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
