@@ -1529,6 +1529,7 @@ async fn app_server_safety_access_errors_render_dedicated_notice() {
     for (case, message) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
         chat.handle_non_retry_error(
+            "turn-1".to_string(),
             message,
             /*codex_error_info*/ None,
             SafetyStopSource::Live,

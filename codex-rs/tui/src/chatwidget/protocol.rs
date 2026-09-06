@@ -132,20 +132,30 @@ impl ChatWidget {
                         );
                     }
                 } else {
-                    self.last_non_retry_error = Some((
-                        notification.turn_id.clone(),
-                        notification.error.message.clone(),
-                    ));
-                    self.handle_non_retry_error(
-                        notification.error.message,
-                        notification.error.codex_error_info,
-                        match replay_kind {
-                            None => SafetyStopSource::Live,
-                            Some(
-                                ReplayKind::ResumeInitialMessages | ReplayKind::ThreadSnapshot,
-                            ) => SafetyStopSource::Replay,
-                        },
-                    );
+                    let duplicate = self.last_non_retry_error.as_ref()
+                        == Some(&(
+                            notification.turn_id.clone(),
+                            notification.error.message.clone(),
+                        ));
+                    if duplicate {
+                        self.last_non_retry_error = None;
+                    } else {
+                        self.last_non_retry_error = Some((
+                            notification.turn_id.clone(),
+                            notification.error.message.clone(),
+                        ));
+                        self.handle_non_retry_error(
+                            notification.turn_id,
+                            notification.error.message,
+                            notification.error.codex_error_info,
+                            match replay_kind {
+                                None => SafetyStopSource::Live,
+                                Some(
+                                    ReplayKind::ResumeInitialMessages | ReplayKind::ThreadSnapshot,
+                                ) => SafetyStopSource::Replay,
+                            },
+                        );
+                    }
                 }
             }
             ServerNotification::SkillsChanged(_) => {
@@ -342,6 +352,7 @@ impl ChatWidget {
                         self.last_non_retry_error = None;
                     } else {
                         self.handle_non_retry_error(
+                            notification.turn.id.clone(),
                             error.message,
                             error.codex_error_info,
                             match replay_kind {

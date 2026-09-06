@@ -428,6 +428,7 @@ impl ChatWidget {
 
     pub(super) fn handle_non_retry_error(
         &mut self,
+        turn_id: String,
         message: String,
         codex_error_info: Option<AppServerCodexErrorInfo>,
         source: SafetyStopSource,
@@ -441,6 +442,9 @@ impl ChatWidget {
             return;
         }
         if self.try_handle_safety_stop(&message, codex_error_info.as_ref(), source) {
+            if source == SafetyStopSource::Live {
+                self.last_non_retry_error = Some((turn_id, message));
+            }
             return;
         }
         if let Some(info) = codex_error_info

@@ -152,6 +152,35 @@ async fn paired_live_error_and_failed_turn_emit_once() {
 }
 
 #[tokio::test]
+async fn paired_failed_turn_and_live_error_emit_once() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    handle_turn_started(&mut chat, "turn-1");
+    drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        failed_turn(
+            "turn-1",
+            "server fallback message",
+            Some(CodexErrorInfo::CyberPolicy),
+        ),
+        /*replay_kind*/ None,
+    );
+    chat.handle_server_notification(
+        safety_error(
+            "turn-1",
+            "server fallback message",
+            Some(CodexErrorInfo::CyberPolicy),
+        ),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(
+        take_safety_outcome(&mut chat, &mut rx),
+        stopped_with(Some(Notification::SafetyAlert))
+    );
+}
+
+#[tokio::test]
 async fn unrelated_errors_and_cyber_verification_warning_do_not_notify() {
     for (message, codex_error_info) in [
         ("permission denied", None),
