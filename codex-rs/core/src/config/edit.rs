@@ -47,6 +47,8 @@ pub enum ConfigEdit {
     SetNoticeHideWorldWritableWarning(bool),
     /// Toggle the rate limit model nudge acknowledgement flag.
     SetNoticeHideRateLimitModelNudge(bool),
+    /// Toggle the safety-buffering prompt acknowledgement flag.
+    SetNoticeHideSafetyBufferingPrompt(bool),
     /// Toggle the model migration prompt acknowledgement flag.
     SetNoticeHideModelMigrationPrompt(String, bool),
     /// Toggle the home external config migration prompt acknowledgement flag.
@@ -259,6 +261,10 @@ impl ConfigDocument {
             )),
             ConfigEdit::SetNoticeHideRateLimitModelNudge(acknowledged) => Ok(self.write_value(
                 &[NOTICE_TABLE_KEY, "hide_rate_limit_model_nudge"],
+                value(*acknowledged),
+            )),
+            ConfigEdit::SetNoticeHideSafetyBufferingPrompt(acknowledged) => Ok(self.write_value(
+                &[NOTICE_TABLE_KEY, "hide_safety_buffering_prompt"],
                 value(*acknowledged),
             )),
             ConfigEdit::SetNoticeHideModelMigrationPrompt(migration_config, acknowledged) => {
@@ -839,6 +845,12 @@ impl ConfigEditsBuilder {
     pub fn set_hide_rate_limit_model_nudge(mut self, acknowledged: bool) -> Self {
         self.edits
             .push(ConfigEdit::SetNoticeHideRateLimitModelNudge(acknowledged));
+        self
+    }
+
+    pub fn set_hide_safety_buffering_prompt(mut self, acknowledged: bool) -> Self {
+        self.edits
+            .push(ConfigEdit::SetNoticeHideSafetyBufferingPrompt(acknowledged));
         self
     }
 

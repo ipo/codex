@@ -124,7 +124,8 @@ impl ChatWidget {
         };
         let thread_id = self.thread_id;
         let retry_prompt = self.safety_buffering_prompt.clone();
-        let can_offer_retry = faster_model.is_some()
+        let can_offer_retry = self.config.notices.hide_safety_buffering_prompt != Some(true)
+            && faster_model.is_some()
             && retry_turn.is_some()
             && retry_prompt.is_some()
             && thread_id.is_some();
@@ -157,6 +158,16 @@ impl ChatWidget {
         );
 
         if !should_show_prompt {
+            return;
+        }
+        if self
+            .config
+            .notices
+            .hide_safety_buffering_prompt
+            .unwrap_or(false)
+        {
+            self.bottom_pane
+                .dismiss_view_by_id(SAFETY_BUFFERING_PROMPT_VIEW_ID);
             return;
         }
         self.bottom_pane

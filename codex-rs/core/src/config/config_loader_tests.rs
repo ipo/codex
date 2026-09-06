@@ -31,6 +31,7 @@ use codex_config::loader::load_config_layers_state;
 use codex_config::loader::load_requirements_toml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::test_support::CloudConfigBundleFixture;
+use codex_config::types::Notice;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_protocol::config_types::EnvironmentVariablePattern;
@@ -42,6 +43,20 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+
+#[test]
+fn safety_buffering_notice_defaults_and_deserializes() {
+    let absent: Notice = toml::from_str("").expect("absent notice");
+    assert_eq!(absent.hide_safety_buffering_prompt, None);
+
+    let false_value: Notice =
+        toml::from_str("hide_safety_buffering_prompt = false").expect("false notice");
+    assert_eq!(false_value.hide_safety_buffering_prompt, Some(false));
+
+    let true_value: Notice =
+        toml::from_str("hide_safety_buffering_prompt = true").expect("true notice");
+    assert_eq!(true_value.hide_safety_buffering_prompt, Some(true));
+}
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
