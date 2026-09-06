@@ -365,25 +365,38 @@ impl ChatWidget {
             .filter(|_| self.current_model_supports_personality());
         let service_tier = self.service_tier_update_for_core();
         let active_permission_profile = self.config.permissions.active_permission_profile();
-        let op = AppCommand::user_turn(
-            items,
-            self.config.cwd.to_path_buf(),
-            AskForApproval::from(self.config.permissions.approval_policy.value()),
-            active_permission_profile,
-            effective_mode.model().to_string(),
-            effective_mode.reasoning_effort(),
-            /*summary*/ None,
-            service_tier,
-            /*final_output_json_schema*/ None,
-            collaboration_mode,
-            personality,
-        );
         let submitted_message = UserMessage {
             text,
             local_images,
             remote_image_urls,
             text_elements,
             mention_bindings,
+        };
+        let reused_rejected_items = self
+            .rejected_temporary_user_turn_input
+            .as_ref()
+            .filter(|rejected| rejected.submitted_user_message.as_ref() == Some(&submitted_message))
+            .map(|rejected| rejected.items.clone());
+        let items = if let Some(items) = reused_rejected_items {
+            self.rejected_temporary_user_turn_input = None;
+            items
+        } else {
+            items
+        };
+        let op = AppCommand::UserTurn {
+            items,
+            cwd: self.config.cwd.to_path_buf(),
+            approval_policy: AskForApproval::from(self.config.permissions.approval_policy.value()),
+            approvals_reviewer: None,
+            active_permission_profile,
+            model: effective_mode.model().to_string(),
+            effort: effective_mode.reasoning_effort(),
+            summary: None,
+            service_tier,
+            final_output_json_schema: None,
+            collaboration_mode,
+            personality,
+            submitted_user_message: Some(submitted_message.clone()),
         };
 
         // App-event submissions are handled serially, and turn/start can wait on remote work.

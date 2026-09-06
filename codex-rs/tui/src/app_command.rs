@@ -21,6 +21,8 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::chatwidget::UserMessage;
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) enum AppCommand {
@@ -42,6 +44,8 @@ pub(crate) enum AppCommand {
         final_output_json_schema: Option<Value>,
         collaboration_mode: Option<CollaborationMode>,
         personality: Option<Personality>,
+        #[serde(skip)]
+        submitted_user_message: Option<UserMessage>,
     },
     OverrideTurnContext {
         cwd: Option<PathBuf>,
@@ -138,6 +142,7 @@ impl AppCommand {
             final_output_json_schema,
             collaboration_mode,
             personality,
+            submitted_user_message: None,
         }
     }
 

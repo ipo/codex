@@ -717,6 +717,10 @@ impl Session {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        config
+            .model_provider
+            .resolve_inference_plan(&model_info)
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
         let auth = auth_manager.auth_cached();
         token_budget::apply_experimental_context(Arc::make_mut(&mut config), auth.as_ref())?;
         // Intentionally resolve `enabled` and `use_history_notes_extension` only at

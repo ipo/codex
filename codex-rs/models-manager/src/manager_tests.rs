@@ -18,6 +18,10 @@ use codex_login::ExternalAuth;
 use codex_login::ExternalAuthRefreshContext;
 use codex_login::TokenData;
 use codex_protocol::auth::AuthMode;
+use codex_protocol::model_inference::GrokInferenceConfig;
+use codex_protocol::model_inference::InferenceDialect;
+use codex_protocol::model_inference::ModelInferenceConfig;
+use codex_protocol::model_inference::WireApi;
 use codex_protocol::openai_models::ModelsResponse;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -1667,4 +1671,29 @@ fn bundled_models_json_roundtrips() {
         !response.models.is_empty(),
         "bundled models.json should contain at least one model"
     );
+}
+
+#[test]
+fn inference_metadata_is_not_inherited_by_model_name_prefixes() {
+    let mut candidate = remote_model("native-model", "Native", /*priority*/ 0);
+    candidate.inference = Some(ModelInferenceConfig::Grok(GrokInferenceConfig {
+        wire_api: WireApi::Responses,
+        dialect: InferenceDialect::Grok,
+        route: "grok".to_string(),
+        wire_model: "grok-4.6".to_string(),
+    }));
+
+    let exact = construct_model_info_from_candidates(
+        "native-model",
+        std::slice::from_ref(&candidate),
+        &ModelsManagerConfig::default(),
+    );
+    let prefixed = construct_model_info_from_candidates(
+        "native-model-custom",
+        &[candidate],
+        &ModelsManagerConfig::default(),
+    );
+
+    assert!(exact.inference.is_some());
+    assert_eq!(prefixed.inference, None);
 }

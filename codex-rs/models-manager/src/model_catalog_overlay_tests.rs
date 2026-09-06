@@ -170,7 +170,7 @@ fn rejects_duplicate_slugs_invalid_inherits_and_unknown_fields() {
 }
 
 #[test]
-fn allows_staged_deployed_overlay_fields() {
+fn allows_typed_inference_and_remaining_staged_deployed_overlay_fields() {
     let parent = bundled_models_response()
         .expect("bundled catalog should parse")
         .models
@@ -182,11 +182,17 @@ fn allows_staged_deployed_overlay_fields() {
         "slug": parent,
         "aliases": ["short-name"],
         "history_compatibility_group": "provider",
-        "inference": {"route": "future-contract"},
+        "inference": {
+            "family": "grok",
+            "wire_api": "responses",
+            "dialect": "grok",
+            "route": "grok",
+            "wire_model": "grok-4.6"
+        },
         "requires_nonempty_assistant_messages": false,
         "supports_parallel_tool_calls": true
     }]});
 
     ModelCatalogOverlay::from_json(&overlay.to_string())
-        .expect("staged deployed fields should remain accepted");
+        .expect("typed and staged deployed fields should remain accepted");
 }

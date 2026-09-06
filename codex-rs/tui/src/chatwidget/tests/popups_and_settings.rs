@@ -3236,6 +3236,75 @@ async fn model_selection_popup_snapshot() {
     assert_chatwidget_snapshot!("model_selection_popup", popup);
 }
 
+fn open_model_selection_scope_from_next_event(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) {
+    match rx.try_recv().expect("expected model selection scope event") {
+        AppEvent::OpenModelSelectionScopePrompt { model, effort } => {
+            chat.open_model_selection_scope_prompt(model, effort);
+        }
+        event => panic!("expected model selection scope event, got {event:?}"),
+    }
+}
+
+#[tokio::test]
+async fn changed_quick_model_opens_scope_prompt_before_updating_or_persisting() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.thread_id = Some(ThreadId::new());
+    let mut preset = get_available_model(&chat, "gpt-5.6-terra");
+    preset.model = "codex-auto-fast".to_string();
+    preset.id = "codex-auto-fast".to_string();
+    chat.open_model_popup_with_presets(vec![preset]);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenModelSelectionScopePrompt { model, .. }) if model == "codex-auto-fast"
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn model_selection_scope_popup_in_default_mode_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.open_model_selection_scope_prompt(
+        "gpt-5.2".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert_chatwidget_snapshot!("model_selection_scope_default_mode", popup);
+    assert!(chat.pending_notification.is_none());
+}
+
+#[tokio::test]
+async fn default_mode_scope_persists_only_global_defaults() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.open_model_selection_scope_prompt(
+        "gpt-5.2".to_string(),
+        Some(ReasoningEffortConfig::High),
+    );
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_matches!(
+        events.as_slice(),
+        [
+            AppEvent::UpdateModel(model),
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::High)),
+            AppEvent::PersistModelSelection {
+                model: persisted_model,
+                effort: Some(ReasoningEffortConfig::High),
+            },
+        ] if model == "gpt-5.2" && persisted_model == "gpt-5.2"
+    );
+}
+
 fn apply_model_list_response(chat: &mut ChatWidget, presets: Vec<ModelPreset>) {
     let request_id = chat.model_popup_request_id.expect("pending model request");
     assert!(chat.on_models_loaded(request_id, Ok(presets)));
@@ -3584,8 +3653,8 @@ async fn model_picker_hides_show_in_picker_false_models_from_cache() {
 }
 
 #[tokio::test]
-async fn model_picker_displays_and_searches_aliases_without_duplicate_rows() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("canonical-model")).await;
+async fn model_picker_alias_selection_emits_the_canonical_model_id() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("canonical-model")).await;
     let mut canonical = model_picker_preset("canonical-model", true);
     canonical.aliases = vec!["short-name".to_string(), "provider/canonical".to_string()];
     chat.model_catalog = Arc::new(ModelCatalog::new(vec![
@@ -3604,6 +3673,17 @@ async fn model_picker_displays_and_searches_aliases_without_duplicate_rows() {
     let filtered = render_bottom_popup(&chat, /*width*/ 100);
     assert!(filtered.contains("canonical-model"));
     assert!(!filtered.contains("other-model"));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    let preset = assert_matches!(rx.try_recv(), Ok(AppEvent::OpenReasoningPopup { model }) => model);
+    chat.open_reasoning_popup(preset);
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenModelSelectionScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::Medium),
+        }) if model == "canonical-model"
+    );
 }
 
 #[tokio::test]
@@ -3731,6 +3811,8 @@ async fn model_reasoning_selection_popup_applies_custom_effort() {
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    open_model_selection_scope_from_next_event(&mut chat, &mut rx);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let selected_effort_events = std::iter::from_fn(|| rx.try_recv().ok())
         .filter_map(|event| match event {
@@ -3779,15 +3861,14 @@ async fn select_ultra_with_multi_agent_thread_limit(max_threads: usize) -> (bool
     });
     chat.open_advanced_reasoning_popup(advanced_preset.expect("advanced reasoning popup"));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    open_model_selection_scope_from_next_event(&mut chat, &mut rx);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let mut selected_ultra = false;
     let mut warnings = Vec::new();
     while let Ok(event) = rx.try_recv() {
         match event {
-            AppEvent::ApplyAdvancedReasoning {
-                effort: ReasoningEffortConfig::Ultra,
-                ..
-            } => {
+            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Ultra)) => {
                 selected_ultra = true;
             }
             AppEvent::InsertHistoryCell(cell) => {
@@ -3831,6 +3912,8 @@ async fn max_reasoning_selection_persists_model_selection() {
         description: "Maximum reasoning".to_string(),
     }];
     chat.open_advanced_reasoning_popup(preset);
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+    open_model_selection_scope_from_next_event(&mut chat, &mut rx);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
@@ -4080,7 +4163,7 @@ async fn reasoning_popup_shows_extra_high_with_space() {
 }
 
 #[tokio::test]
-async fn single_reasoning_option_skips_selection() {
+async fn single_reasoning_option_skips_selection_and_opens_scope_prompt() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     let single_effort = vec![ReasoningEffortPreset {
@@ -4116,16 +4199,12 @@ async fn single_reasoning_option_skips_selection() {
         "expected reasoning selection popup to be skipped"
     );
 
-    let mut events = Vec::new();
-    while let Ok(ev) = rx.try_recv() {
-        events.push(ev);
-    }
-
-    assert!(
-        events
-            .iter()
-            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
-        "expected reasoning effort to be applied automatically; events: {events:?}"
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenModelSelectionScopePrompt {
+            model,
+            effort: Some(ReasoningEffortConfig::High),
+        }) if model == "model-with-single-reasoning"
     );
 }
 

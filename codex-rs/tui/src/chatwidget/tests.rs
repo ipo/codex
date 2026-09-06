@@ -259,6 +259,7 @@ mod popups_and_settings;
 #[path = "tests/rate_limit_recovery_tests.rs"]
 mod rate_limit_recovery_tests;
 mod review_mode;
+mod safety_stops;
 mod side;
 mod slash_commands;
 mod status_and_layout;

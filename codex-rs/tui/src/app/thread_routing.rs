@@ -9,6 +9,7 @@ use super::*;
 use crate::app_event::ThreadTitleDestination;
 use crate::chatwidget::ThreadInputStateRestoreMode;
 use crate::session_resume::read_session_model;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -671,7 +672,15 @@ impl App {
                 final_output_json_schema,
                 collaboration_mode,
                 personality,
+                submitted_user_message,
             } => {
+                let temporary_model_selection = self.chat_widget.has_temporary_model_selection();
+                let temporary_settings_restore = temporary_model_selection.then(|| {
+                    (
+                        self.chat_widget.persisted_effective_collaboration_mode(),
+                        self.chat_widget.effective_collaboration_mode(),
+                    )
+                });
                 let mut should_start_turn = true;
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     let mut steer_turn_id = turn_id;
@@ -738,6 +747,64 @@ impl App {
                     }
                 }
                 if should_start_turn {
+                    if let Some((saved_collaboration_mode, _)) = temporary_settings_restore.as_ref()
+                    {
+                        let message = "Temporary model selection requires thread settings updates, but this app server does not support them.";
+                        if !app_server.thread_settings_update_is_available() {
+                            self.chat_widget.restore_rejected_temporary_user_turn_input(
+                                items,
+                                submitted_user_message.clone(),
+                            );
+                            if !self
+                                .chat_widget
+                                .handle_turn_start_rejection(message.to_string())
+                            {
+                                self.chat_widget.add_error_message(message.to_string());
+                            }
+                            return Ok(true);
+                        }
+                        match app_server
+                            .thread_settings_update(ThreadSettingsUpdateParams {
+                                thread_id: thread_id.to_string(),
+                                model: Some(saved_collaboration_mode.model().to_string()),
+                                effort: saved_collaboration_mode.reasoning_effort(),
+                                collaboration_mode: Some(saved_collaboration_mode.clone()),
+                                ..ThreadSettingsUpdateParams::default()
+                            })
+                            .await
+                        {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                self.chat_widget.restore_rejected_temporary_user_turn_input(
+                                    items,
+                                    submitted_user_message.clone(),
+                                );
+                                if !self
+                                    .chat_widget
+                                    .handle_turn_start_rejection(message.to_string())
+                                {
+                                    self.chat_widget.add_error_message(message.to_string());
+                                }
+                                return Ok(true);
+                            }
+                            Err(error) => {
+                                let message = format!(
+                                    "Temporary model selection could not verify thread settings updates: {error}"
+                                );
+                                self.chat_widget.restore_rejected_temporary_user_turn_input(
+                                    items,
+                                    submitted_user_message.clone(),
+                                );
+                                if !self
+                                    .chat_widget
+                                    .handle_turn_start_rejection(message.clone())
+                                {
+                                    self.chat_widget.add_error_message(message);
+                                }
+                                return Ok(true);
+                            }
+                        }
+                    }
                     let config = self.chat_widget.config_ref();
                     let approvals_reviewer =
                         approvals_reviewer.unwrap_or(config.approvals_reviewer);
@@ -766,6 +833,37 @@ impl App {
                             final_output_json_schema.clone(),
                         )
                         .await?;
+                    if let Some((saved_collaboration_mode, temporary_collaboration_mode)) =
+                        temporary_settings_restore
+                    {
+                        let requires_restore =
+                            temporary_collaboration_mode != saved_collaboration_mode;
+                        if requires_restore {
+                            self.chat_widget.mark_temporary_settings_restore_pending(
+                                thread_id,
+                                saved_collaboration_mode.clone(),
+                                temporary_collaboration_mode,
+                            );
+                        }
+                        match app_server
+                            .thread_settings_update(ThreadSettingsUpdateParams {
+                                thread_id: thread_id.to_string(),
+                                model: Some(saved_collaboration_mode.model().to_string()),
+                                effort: saved_collaboration_mode.reasoning_effort(),
+                                collaboration_mode: Some(saved_collaboration_mode),
+                                ..ThreadSettingsUpdateParams::default()
+                            })
+                            .await
+                        {
+                            Ok(true) => {}
+                            Ok(false) => self.chat_widget.add_error_message(
+                                "Temporary model settings could not be restored. Retry exit after reconnecting to an app server that supports thread settings updates.".to_string(),
+                            ),
+                            Err(error) => self.chat_widget.add_error_message(format!(
+                                "Temporary model settings could not be restored: {error}. Retry exit to try again."
+                            )),
+                        }
+                    }
                     if self.active_thread_id == Some(thread_id)
                         && self.chat_widget.thread_id() == Some(thread_id)
                     {

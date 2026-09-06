@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/app_server.rs
+expression: status_details
+---
+Our systems are thinking a bit more about this request before responding.

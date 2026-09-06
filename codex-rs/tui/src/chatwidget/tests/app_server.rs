@@ -172,6 +172,48 @@ async fn safety_buffering_offers_one_retry_with_app_wording() {
 }
 
 #[tokio::test]
+async fn safety_buffering_prompt_can_be_hidden_by_notice_setting() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.notices.hide_safety_buffering_prompt = Some(true);
+    let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ModelSafetyBufferingUpdated(safety_buffering_notification(
+            thread_id,
+            turn_id,
+            Some("faster-model"),
+        )),
+        /*replay_kind*/ None,
+    );
+
+    assert!(!render_bottom_popup(&chat, /*width*/ 80).contains(SAFETY_BUFFERING_HEADER_TEXT));
+    assert!(chat.bottom_pane.status_widget().is_some());
+}
+
+#[tokio::test]
+async fn safety_buffering_hidden_mode_snapshot_keeps_short_status_only() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.notices.hide_safety_buffering_prompt = Some(true);
+    let (thread_id, turn_id, _) = start_safety_buffering_test_turn(&mut chat, &mut op_rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ModelSafetyBufferingUpdated(safety_buffering_notification(
+            thread_id,
+            turn_id,
+            Some("faster-model"),
+        )),
+        /*replay_kind*/ None,
+    );
+
+    let status_details = chat
+        .bottom_pane
+        .status_widget()
+        .and_then(|status| status.details())
+        .unwrap_or_default();
+    assert_chatwidget_snapshot!("safety_buffering_hidden_status_only", status_details);
+}
+
+#[tokio::test]
 async fn safety_buffering_does_not_offer_retry_in_side_conversation() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_side_conversation_active(/*active*/ true);
@@ -1502,6 +1544,7 @@ async fn live_app_server_cyber_policy_error_renders_dedicated_notice() {
     assert!(rendered.contains("extra caution with cybersecurity requests"));
     assert!(!rendered.contains("server fallback message"));
     assert!(!chat.bottom_pane.is_task_running());
+    assert_eq!(chat.pending_notification, Some(Notification::SafetyAlert));
 }
 
 #[tokio::test]
@@ -1527,13 +1570,19 @@ async fn app_server_safety_access_errors_render_dedicated_notice() {
     let mut rendered_cases = Vec::new();
     for (case, message) in cases {
         let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-        chat.handle_non_retry_error(message, /*codex_error_info*/ None);
+        chat.handle_non_retry_error(
+            "turn-1".to_string(),
+            message,
+            /*codex_error_info*/ None,
+            SafetyStopSource::Live,
+        );
 
         let cells = drain_insert_history(&mut rx);
         assert_eq!(cells.len(), 1);
         let rendered = lines_to_single_string(&cells[0]);
         assert!(rendered.contains("This content can't be shown"));
         assert!(rendered.contains("biological research"));
+        assert_eq!(chat.pending_notification, Some(Notification::SafetyAlert));
         rendered_cases.push((case, rendered));
     }
 
@@ -1567,6 +1616,7 @@ async fn live_app_server_model_verification_renders_warning() {
     assert!(rendered.contains("extra safety checks are on"));
     assert!(rendered.contains("Trusted Access for Cyber"));
     assert!(rendered.contains("https://chatgpt.com/cyber"));
+    assert_eq!(chat.pending_notification, None);
 }
 
 #[tokio::test]

@@ -49,6 +49,8 @@ use uuid::Uuid;
 use crate::app_command::AppCommand;
 use crate::app_server_session::AppServerStartedThread;
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::PathCompletionRequest;
+use crate::bottom_pane::PathCompletionResult;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::ConnectorScopeGeneration;
@@ -489,6 +491,10 @@ pub(crate) enum AppEvent {
         query: String,
         matches: Vec<FileMatch>,
     },
+
+    StartPathCompletion(PathCompletionRequest),
+
+    PathCompletionResult(PathCompletionResult),
 
     /// Same-host task results for the active unified mention query.
     TaskSearchResult {
@@ -965,6 +971,12 @@ pub(crate) enum AppEvent {
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
 
+    /// Apply a model selection only to the current TUI session.
+    ApplyTemporaryModelSelection {
+        model: String,
+        effort: Option<ReasoningEffort>,
+    },
+
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 
@@ -1017,8 +1029,8 @@ pub(crate) enum AppEvent {
         effort: ReasoningEffort,
     },
 
-    /// Open the Plan-mode reasoning scope prompt for the selected model/effort.
-    OpenPlanReasoningScopePrompt {
+    /// Open the scope prompt for applying the selected model and effort.
+    OpenModelSelectionScopePrompt {
         model: String,
         effort: Option<ReasoningEffort>,
     },

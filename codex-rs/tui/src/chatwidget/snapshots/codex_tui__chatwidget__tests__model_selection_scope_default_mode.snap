@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Apply model change
+  Choose whether to save gpt-5.2 with high reasoning.
+
+› 1. Apply to global default                         Use gpt-5.2 with high reasoning as the global
+                                                     default. The Plan mode reasoning override
+                                                     will not change.
+  2. Apply to global default and Plan mode override  Use gpt-5.2 with high reasoning as the global
+                                                     default and Plan mode override. This replaces
+                                                     the current built-in Plan default (medium).
+  3. Do not change defaults                          Use gpt-5.2 with high reasoning in Default
+                                                     and Plan until this TUI session ends.
+
+  Press enter to confirm or esc to go back

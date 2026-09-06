@@ -1,5 +1,6 @@
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
@@ -16,6 +17,7 @@ use tracing::warn;
 
 pub const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 const DEFAULT_PERSONALITY_HEADER: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
+const EXTERNAL_MODEL_IDENTITY: &str = "You are Codex, an AI coding agent.";
 const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
@@ -98,6 +100,23 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
             }
             model_messages.instructions_variables = None;
         }
+
+        if matches!(
+            model.inference.as_ref(),
+            Some(
+                ModelInferenceConfig::Anthropic { .. }
+                    | ModelInferenceConfig::Kimi(_)
+                    | ModelInferenceConfig::Grok(_)
+                    | ModelInferenceConfig::LlamaCpp(_)
+            )
+        ) && let Some(instructions_template) = model
+            .model_messages
+            .as_mut()
+            .and_then(|messages| messages.instructions_template.as_mut())
+            && let Some(sentence_end) = instructions_template.find(". ")
+        {
+            instructions_template.replace_range(..sentence_end + 1, EXTERNAL_MODEL_IDENTITY);
+        }
     }
 
     model
@@ -144,6 +163,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
     ModelInfo {
         slug: slug.to_string(),
+        inference: None,
         aliases: Vec::new(),
         display_name: slug.to_string(),
         description: None,

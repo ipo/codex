@@ -38,6 +38,8 @@ mod startup;
 mod startup_slash_commands;
 #[path = "tests/stream_animation_tests.rs"]
 mod stream_animation_tests;
+#[path = "tests/temporary_model_selection.rs"]
+mod temporary_model_selection;
 #[path = "tests/thread_usage.rs"]
 mod thread_usage;
 #[path = "tests/turn_submission.rs"]

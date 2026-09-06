@@ -9519,6 +9519,24 @@ async fn model_catalog_overlay_json_loads_the_deployed_nineteen_entry_shape() ->
         "anthropic/claude-opus-4-8",
         "anthropic/claude-sonnet-5",
         "anthropic/claude-haiku-4-5-20251001",
+    ] {
+        models.push(json!({
+            "slug": slug,
+            "inherits": "gpt-5.6-sol",
+            "aliases": [slug],
+            "inference": {
+                "family": "anthropic",
+                "wire_api": "anthropic_messages",
+                "dialect": "claude_code",
+                "route": "claude_code",
+                "wire_model": slug,
+                "max_output_tokens": 64000,
+                "thinking": {"type": "adaptive"},
+                "supports_disabled_thinking": true
+            }
+        }));
+    }
+    for slug in [
         "kimi/k3",
         "kimi/k3-256k",
         "kimi/kimi-for-coding",
@@ -9528,14 +9546,32 @@ async fn model_catalog_overlay_json_loads_the_deployed_nineteen_entry_shape() ->
             "slug": slug,
             "inherits": "gpt-5.6-sol",
             "aliases": [slug],
-            "inference": {"route": "future-contract"}
+            "inference": {
+                "family": "kimi",
+                "wire_api": "chat_completions",
+                "dialect": "kimi",
+                "route": "kimi_code",
+                "wire_model": slug,
+                "max_output_tokens": 32768,
+                "thinking": "required"
+            }
         }));
     }
     models.push(json!({
         "slug": "local/qwen3.8-27b",
         "auto_compact_token_limit": 121856,
         "context_window": 131072,
-        "inference": {"route": "llama_cpp"},
+        "inference": {
+            "family": "llama_cpp",
+            "wire_api": "responses",
+            "dialect": "llama_cpp",
+            "route": "llama_cpp",
+            "expected_model_basename": "Qwen3.8-27B-Uncensored-Q4_K_M.gguf",
+            "context_window": 131072,
+            "max_input_tokens": 121856,
+            "max_output_tokens": 8192,
+            "safety_margin_tokens": 1024
+        },
         "max_context_window": 131072
     }));
     std::fs::write(

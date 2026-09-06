@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/chat_composer/path_completion_tests.rs
+expression: terminal.backend()
+---
+"                                                            "
+"› ./s                                                       "
+"                                                            "
+"  ./src/                                                    "
+"  ./script.rs                                               "

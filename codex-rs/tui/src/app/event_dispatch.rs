@@ -1205,6 +1205,16 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
+            AppEvent::StartPathCompletion(request) => {
+                let tx = self.app_event_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = crate::bottom_pane::complete_path_completion(request);
+                    tx.send(AppEvent::PathCompletionResult(result));
+                });
+            }
+            AppEvent::PathCompletionResult(result) => {
+                self.chat_widget.apply_path_completion_result(result);
+            }
             AppEvent::TaskSearchResult {
                 thread_id,
                 query,
@@ -1552,6 +1562,10 @@ impl App {
                         .await;
                 }
             }
+            AppEvent::ApplyTemporaryModelSelection { model, effort } => {
+                self.chat_widget
+                    .apply_temporary_model_selection(&model, effort);
+            }
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
                 self.sync_active_thread_personality_setting(app_server, personality)
@@ -1640,9 +1654,9 @@ impl App {
                     );
                 }
             }
-            AppEvent::OpenPlanReasoningScopePrompt { model, effort } => {
+            AppEvent::OpenModelSelectionScopePrompt { model, effort } => {
                 self.chat_widget
-                    .open_plan_reasoning_scope_prompt(model, effort);
+                    .open_model_selection_scope_prompt(model, effort);
             }
             AppEvent::OpenAllModelsPopup => {
                 self.chat_widget.open_all_models_popup();
@@ -2183,6 +2197,8 @@ impl App {
                             message.push_str(&label);
                         }
                         self.chat_widget.add_info_message(message, /*hint*/ None);
+                        self.chat_widget
+                            .record_persisted_model_selection(model, effort);
                     }
                     Err(err) => {
                         let error = format_config_error(&err);
@@ -2474,7 +2490,7 @@ impl App {
             }
             AppEvent::PersistPlanModeReasoningEffort(effort) => {
                 let key_path = "plan_mode_reasoning_effort";
-                let edit = if let Some(effort) = effort {
+                let edit = if let Some(effort) = effort.as_ref() {
                     crate::config_update::replace_config_value(
                         key_path,
                         serde_json::json!(effort.to_string()),
@@ -2482,19 +2498,24 @@ impl App {
                 } else {
                     crate::config_update::clear_config_value(key_path)
                 };
-                if let Err(err) = crate::config_update::write_config_batch(
+                match crate::config_update::write_config_batch(
                     app_server.request_handle(),
                     vec![edit],
                 )
                 .await
                 {
-                    tracing::error!(
-                        error = %err,
-                        "failed to persist plan mode reasoning effort"
-                    );
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to save Plan mode reasoning effort: {err}"
-                    ));
+                    Ok(_) => self
+                        .chat_widget
+                        .record_persisted_plan_mode_reasoning_effort(effort),
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist plan mode reasoning effort"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save Plan mode reasoning effort: {err}"
+                        ));
+                    }
                 }
             }
             AppEvent::PersistModelMigrationPromptAcknowledged {
@@ -3184,6 +3205,38 @@ impl App {
         app_server: &mut AppServerSession,
         mode: ExitMode,
     ) -> AppRunControl {
+        if matches!(
+            mode,
+            ExitMode::ShutdownFirst | ExitMode::ShutdownAfterInterrupt
+        ) && self.chat_widget.has_pending_temporary_settings_restore()
+        {
+            for (thread_id, saved_settings) in
+                self.chat_widget.pending_temporary_settings_restores()
+            {
+                match app_server
+                    .thread_settings_update(codex_app_server_protocol::ThreadSettingsUpdateParams {
+                        thread_id: thread_id.to_string(),
+                        model: Some(saved_settings.model().to_string()),
+                        effort: saved_settings.reasoning_effort(),
+                        collaboration_mode: Some(saved_settings),
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    Ok(true) => self.chat_widget.add_info_message(
+                        "Waiting for temporary model settings to be restored.".to_string(),
+                        /*hint*/ None,
+                    ),
+                    Ok(false) => self.chat_widget.add_error_message(
+                        "Temporary model settings are still pending restoration because this app server does not support thread settings updates.".to_string(),
+                    ),
+                    Err(error) => self.chat_widget.add_error_message(format!(
+                        "Temporary model settings are still pending restoration: {error}. Retry exit to try again."
+                    )),
+                }
+            }
+            return AppRunControl::Continue;
+        }
         for (request_id, (_, task)) in self.dynamic_tool_tasks.drain() {
             task.abort();
             let response = crate::dynamic_tools::failure_response(

@@ -190,9 +190,11 @@ const MEMORIES_ENABLE_TITLE: &str = "Enable memories?";
 const MEMORIES_ENABLE_YES: &str = "Yes, enable";
 const MEMORIES_ENABLE_NO: &str = "Not now";
 const MEMORIES_ENABLE_NOTICE: &str = "Memories will be enabled in the next session.";
-const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
-const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
-const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
+const MODEL_SELECTION_SCOPE_TITLE: &str = "Apply model change";
+const MODEL_SELECTION_SCOPE_GLOBAL: &str = "Apply to global default";
+const MODEL_SELECTION_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
+const MODEL_SELECTION_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
+const MODEL_SELECTION_SCOPE_NO_DEFAULTS: &str = "Do not change defaults";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
 const PET_SELECTION_LOADING_VIEW_ID: &str = "pet-selection-loading";
 const AMBIENT_PET_WRAP_GAP_COLUMNS: u16 = 2;
@@ -289,6 +291,7 @@ use crate::bottom_pane::McpElicitationApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::MemoriesSettingsView;
 use crate::bottom_pane::MentionBinding;
+use crate::bottom_pane::PathCompletionResult;
 use crate::bottom_pane::PermissionsApprovalRequest;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::QueuedInputAction;
@@ -416,6 +419,8 @@ use self::review::ReviewState;
 #[cfg(test)]
 pub(crate) use self::review_popups::show_review_commit_picker_with_entries;
 mod safety_buffering;
+mod safety_stop;
+use self::safety_stop::SafetyStopSource;
 mod service_tiers;
 mod settings;
 mod settings_popups;
@@ -540,6 +545,35 @@ pub(crate) enum ExternalEditorState {
     Active,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PersistedModelSelectionDefaults {
+    model: String,
+    reasoning_effort: Option<ReasoningEffortConfig>,
+    plan_mode_reasoning_effort: Option<ReasoningEffortConfig>,
+}
+
+/// A model selection that changes only the running TUI's display state.
+#[derive(Clone, Debug)]
+struct TemporaryModelSelection {
+    model: String,
+    reasoning_effort: Option<ReasoningEffortConfig>,
+}
+
+/// A restore request that must be confirmed after its temporary settings update.
+#[derive(Clone, Debug)]
+struct PendingTemporarySettingsRestore {
+    saved_settings: CollaborationMode,
+    temporary_settings: CollaborationMode,
+    temporary_settings_seen: bool,
+}
+
+/// Input retained when a temporary model turn is rejected before it reaches app-server.
+#[derive(Clone, Debug, PartialEq)]
+struct RejectedTemporaryUserTurnInput {
+    items: Vec<UserInput>,
+    submitted_user_message: Option<UserMessage>,
+}
+
 /// Maintains the per-session UI state and interaction state machines for the chat screen.
 ///
 /// `ChatWidget` owns the state derived from the protocol event stream (history cells, streaming
@@ -565,6 +599,14 @@ pub(crate) struct ChatWidget {
     ///
     /// Masks are applied on top of this base mode to derive the effective mode.
     current_collaboration_mode: CollaborationMode,
+    /// Last successfully persisted defaults, kept separate from temporary runtime selections.
+    persisted_model_selection_defaults: PersistedModelSelectionDefaults,
+    /// A local-only model selection layered over the saved thread settings.
+    temporary_model_selection: Option<TemporaryModelSelection>,
+    /// Exact input retained when a temporary model turn is rejected before starting.
+    rejected_temporary_user_turn_input: Option<RejectedTemporaryUserTurnInput>,
+    /// Saved settings awaiting restore confirmation from the app server.
+    pending_temporary_settings_restores: HashMap<ThreadId, PendingTemporarySettingsRestore>,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
     has_chatgpt_account: bool,
@@ -1604,6 +1646,10 @@ impl ChatWidget {
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
+    }
+
+    pub(crate) fn apply_path_completion_result(&mut self, result: PathCompletionResult) {
+        self.bottom_pane.on_path_completion_result(result);
     }
 
     /// Return the markdown body width available to an active stream.
