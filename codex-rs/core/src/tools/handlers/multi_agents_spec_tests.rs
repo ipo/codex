@@ -156,16 +156,13 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
             .and_then(|schema| schema.encrypted),
         Some(true)
     );
-    assert!(properties.contains_key("plaintext_message"));
+    // The base spec matches the official reserved shape; non-encrypted wires get
+    // plaintext_message injected during wire adaptation instead.
+    assert!(!properties.contains_key("plaintext_message"));
     assert!(properties.contains_key("fork_turns"));
-    assert_eq!(
-        properties
-            .get("cwd")
-            .and_then(|schema| schema.description.as_deref()),
-        Some(
-            "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
-        )
-    );
+    // The official reserved spawn_agent schema has no cwd; wire adaptation
+    // advertises it on wires without encrypted-content support.
+    assert!(!properties.contains_key("cwd"));
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
@@ -185,7 +182,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
     assert!(!properties.contains_key("service_tier"));
     assert_eq!(
         parameters.required.as_ref(),
-        Some(&vec!["task_name".to_string()])
+        Some(&vec!["task_name".to_string(), "message".to_string()])
     );
     assert_eq!(
         output_schema.expect("spawn_agent output schema")["required"],
@@ -224,14 +221,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
         .expect("spawn_agent should use object params");
 
     assert!(properties.contains_key("fork_context"));
-    assert_eq!(
-        properties
-            .get("cwd")
-            .and_then(|schema| schema.description.as_deref()),
-        Some(
-            "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
-        )
-    );
+    assert!(!properties.contains_key("cwd"));
     assert!(!properties.contains_key("fork_turns"));
     assert_eq!(
         properties.get("agent_type"),
@@ -471,7 +461,7 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
 }
 
 #[test]
-fn send_message_tool_exposes_encrypted_and_plaintext_inputs() {
+fn send_message_tool_matches_official_reserved_shape() {
     let ToolSpec::Function(ResponsesApiTool {
         parameters,
         output_schema,
@@ -488,17 +478,14 @@ fn send_message_tool_exposes_encrypted_and_plaintext_inputs() {
         .properties
         .as_ref()
         .expect("send_message should use object params");
-    assert!(properties.contains_key("target"));
-    assert!(properties.contains_key("message"));
+    assert_eq!(properties.keys().collect::<Vec<_>>(), ["message", "target"]);
     assert_eq!(
         properties
             .get("message")
             .and_then(|schema| schema.encrypted),
         Some(true)
     );
-    assert!(properties.contains_key("plaintext_message"));
     assert!(!properties.contains_key("interrupt"));
-    assert!(!properties.contains_key("items"));
     assert_eq!(
         properties
             .get("target")
@@ -507,13 +494,13 @@ fn send_message_tool_exposes_encrypted_and_plaintext_inputs() {
     );
     assert_eq!(
         parameters.required.as_ref(),
-        Some(&vec!["target".to_string()])
+        Some(&vec!["target".to_string(), "message".to_string()])
     );
     assert_eq!(output_schema, None);
 }
 
 #[test]
-fn followup_task_tool_exposes_encrypted_and_plaintext_inputs() {
+fn followup_task_tool_matches_official_reserved_shape() {
     let ToolSpec::Function(ResponsesApiTool {
         name,
         description,
@@ -537,19 +524,16 @@ fn followup_task_tool_exposes_encrypted_and_plaintext_inputs() {
         .properties
         .as_ref()
         .expect("followup_task should use object params");
-    assert!(properties.contains_key("target"));
-    assert!(properties.contains_key("message"));
+    assert_eq!(properties.keys().collect::<Vec<_>>(), ["message", "target"]);
     assert_eq!(
         properties
             .get("message")
             .and_then(|schema| schema.encrypted),
         Some(true)
     );
-    assert!(properties.contains_key("plaintext_message"));
-    assert!(!properties.contains_key("items"));
     assert_eq!(
         parameters.required.as_ref(),
-        Some(&vec!["target".to_string()])
+        Some(&vec!["target".to_string(), "message".to_string()])
     );
     assert_eq!(output_schema, None);
 }

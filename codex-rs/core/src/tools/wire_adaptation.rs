@@ -17,6 +17,8 @@ use crate::util::error_or_panic;
 
 const MAX_WIRE_TOOL_NAME_BYTES: usize = 64;
 
+const SPAWN_AGENT_CWD_DESCRIPTION: &str = "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions.";
+
 pub(crate) fn adapt_spec_for_wire(
     turn_context: &TurnContext,
     model_info: &ModelInfo,
@@ -58,6 +60,7 @@ fn adapt_spec_for_wire_kind(
             if matches!(kind, WireSpecKind::CollaborationMessage) {
                 adapt_collaboration_message_parameter(&tool.name, &mut tool.parameters);
             }
+            adapt_spawn_agent_cwd_parameter(&tool.name, &mut tool.parameters);
             strip_encrypted_parameters(&mut tool.parameters);
         }
         ToolSpec::Namespace(namespace) => {
@@ -66,6 +69,7 @@ fn adapt_spec_for_wire_kind(
                     if matches!(kind, WireSpecKind::CollaborationMessage) {
                         adapt_collaboration_message_parameter(&tool.name, &mut tool.parameters);
                     }
+                    adapt_spawn_agent_cwd_parameter(&tool.name, &mut tool.parameters);
                     strip_encrypted_parameters(&mut tool.parameters);
                 }
             }
@@ -74,6 +78,26 @@ fn adapt_spec_for_wire_kind(
         ToolSpec::WebSearch { .. } | ToolSpec::Freeform(_) => {}
     }
     spec
+}
+
+/// The server-pinned reserved `spawn_agent` schema on encrypted wires does not
+/// include `cwd`, so the base spec omits it; wires without encrypted-content
+/// support advertise it here so per-subagent working directories remain
+/// available on native wires.
+fn adapt_spawn_agent_cwd_parameter(tool_name: &str, schema: &mut JsonSchema) {
+    if tool_name != "spawn_agent" {
+        return;
+    }
+    let Some(properties) = schema.properties.as_mut() else {
+        return;
+    };
+    if properties.contains_key("cwd") {
+        return;
+    }
+    properties.insert(
+        "cwd".to_string(),
+        JsonSchema::string(Some(SPAWN_AGENT_CWD_DESCRIPTION.to_string())),
+    );
 }
 
 fn adapt_collaboration_message_parameter(tool_name: &str, schema: &mut JsonSchema) {

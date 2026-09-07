@@ -3166,7 +3166,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
 }
 
 #[tokio::test]
-async fn responses_and_astra_multi_agent_v2_message_schemas_expose_both_message_forms() {
+async fn responses_and_astra_multi_agent_v2_message_schemas_match_reserved_shapes() {
     for (slug, use_bedrock) in [("gpt-5.4", false), ("gpt-6-astra", true)] {
         let (_session, mut turn) = make_session_and_context().await;
         set_feature(&mut turn, Feature::MultiAgentV2, /*enabled*/ true);
@@ -3200,17 +3200,33 @@ async fn responses_and_astra_multi_agent_v2_message_schemas_expose_both_message_
                 .properties
                 .as_ref()
                 .expect("tool should use object params");
+            // Server-pinned reserved shapes on encrypted wires: no
+            // plaintext_message, message stays required.
             assert_eq!(
                 properties
                     .get("message")
                     .and_then(|schema| schema.encrypted),
                 Some(true)
             );
+            assert!(!properties.contains_key("plaintext_message"));
+            // The official reserved spawn_agent schema does not include cwd.
+            if tool_name == "spawn_agent" {
+                assert!(!properties.contains_key("cwd"));
+            }
+            let expected_required: &[&str] = if tool_name == "spawn_agent" {
+                &["task_name", "message"]
+            } else {
+                &["target", "message"]
+            };
             assert_eq!(
-                properties
-                    .get("plaintext_message")
-                    .and_then(|schema| schema.encrypted),
-                None
+                tool.parameters.required.as_ref(),
+                Some(
+                    &expected_required
+                        .iter()
+                        .map(|field| field.to_string())
+                        .collect::<Vec<_>>()
+                ),
+                "unexpected required fields for {tool_name} on {slug}"
             );
         }
     }
@@ -3251,6 +3267,16 @@ async fn native_multi_agent_v2_message_schemas_require_plaintext() {
                     .as_ref()
                     .is_some_and(|required| required.contains(&"plaintext_message".to_string()))
             );
+            if tool_name == "spawn_agent" {
+                assert_eq!(
+                    properties
+                        .get("cwd")
+                        .and_then(|schema| schema.description.as_deref()),
+                    Some(
+                        "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
+                    )
+                );
+            }
         }
     }
 }

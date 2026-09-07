@@ -237,6 +237,10 @@ async fn grok_root_routes_plaintext_task_to_openai_child() -> Result<()> {
             .expect("required fields")
             .contains(&json!("plaintext_message"))
     );
+    assert!(
+        spawn["parameters"]["properties"].get("cwd").is_some(),
+        "native wires should advertise the spawn_agent cwd parameter"
+    );
     let continuation: Value = grok_requests[1].body_json()?;
     assert!(continuation.to_string().contains(SPAWN_CALL_ID));
     assert!(continuation.to_string().contains("function_call_output"));

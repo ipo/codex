@@ -128,7 +128,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(
             properties,
-            Some(vec!["task_name".to_string()]),
+            Some(vec!["task_name".to_string(), "message".to_string()]),
             Some(false.into()),
         ),
         output_schema: Some(spawn_agent_output_schema_v2(
@@ -186,17 +186,9 @@ pub fn create_send_message_tool() -> ToolSpec {
         (
             "message".to_string(),
             JsonSchema::string(Some(
-                "Encrypted message text. Use exactly one of message or plaintext_message."
-                    .to_string(),
+                "Message text to queue on the target agent.".to_string(),
             ))
             .with_encrypted(),
-        ),
-        (
-            "plaintext_message".to_string(),
-            JsonSchema::string(Some(
-                "Plaintext message text. Required instead of message when crossing model families."
-                    .to_string(),
-            )),
         ),
     ]);
 
@@ -208,7 +200,7 @@ pub fn create_send_message_tool() -> ToolSpec {
         defer_loading: None,
         parameters: JsonSchema::object(
             properties,
-            Some(vec!["target".to_string()]),
+            Some(vec!["target".to_string(), "message".to_string()]),
             Some(false.into()),
         ),
         output_schema: None,
@@ -227,16 +219,9 @@ pub fn create_followup_task_tool() -> ToolSpec {
         (
             "message".to_string(),
             JsonSchema::string(Some(
-                "Encrypted task text. Use exactly one of message or plaintext_message.".to_string(),
+                "Message text to send to the target agent.".to_string(),
             ))
             .with_encrypted(),
-        ),
-        (
-            "plaintext_message".to_string(),
-            JsonSchema::string(Some(
-                "Plaintext task text. Required instead of message when crossing model families."
-                    .to_string(),
-            )),
         ),
     ]);
 
@@ -246,7 +231,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
             .to_string(),
         strict: false,
         defer_loading: None,
-        parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
+        parameters: JsonSchema::object(properties, Some(vec!["target".to_string(), "message".to_string()]), Some(false.into())),
         output_schema: None,
     })
 }
@@ -626,13 +611,6 @@ fn spawn_agent_common_properties_v1(agent_type_description: &str) -> BTreeMap<St
                     .to_string(),
             )),
         ),
-        (
-            "cwd".to_string(),
-            JsonSchema::string(Some(
-                "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
-                    .to_string(),
-            )),
-        ),
     ])
 }
 
@@ -641,17 +619,9 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
         (
             "message".to_string(),
             JsonSchema::string(Some(
-                "Encrypted initial task. Use exactly one of message or plaintext_message."
-                    .to_string(),
+                "Initial plain-text task for the new agent.".to_string(),
             ))
             .with_encrypted(),
-        ),
-        (
-            "plaintext_message".to_string(),
-            JsonSchema::string(Some(
-                "Plaintext initial task. Required instead of message when crossing model families."
-                    .to_string(),
-            )),
         ),
         (
             "agent_type".to_string(),
@@ -676,13 +646,6 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
             "reasoning_effort".to_string(),
             JsonSchema::string(Some(
                 "Reasoning effort override for the new agent. Full-history forks must use the parent's effective effort."
-                    .to_string(),
-            )),
-        ),
-        (
-            "cwd".to_string(),
-            JsonSchema::string(Some(
-                "Optional working directory in the inherited primary environment. Relative paths resolve from the parent cwd. Selecting a cwd does not grant additional filesystem permissions."
                     .to_string(),
             )),
         ),
