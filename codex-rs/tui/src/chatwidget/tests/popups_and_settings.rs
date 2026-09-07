@@ -3612,6 +3612,7 @@ fn model_picker_preset(slug: &str, show_in_picker: bool) -> ModelPreset {
         display_name: slug.to_string(),
         description: format!("{slug} description"),
         model_specialty: None,
+        reasoning_display: Default::default(),
         default_reasoning_effort: ReasoningEffortConfig::Medium,
         supported_reasoning_efforts: vec![ReasoningEffortPreset {
             effort: ReasoningEffortConfig::Medium,
@@ -4177,6 +4178,7 @@ async fn single_reasoning_option_skips_selection_and_opens_scope_prompt() {
         display_name: "model-with-single-reasoning".to_string(),
         description: "".to_string(),
         model_specialty: None,
+        reasoning_display: Default::default(),
         default_reasoning_effort: ReasoningEffortConfig::High,
         supported_reasoning_efforts: single_effort,
         supports_personality: false,

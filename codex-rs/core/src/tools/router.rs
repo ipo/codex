@@ -16,6 +16,7 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::registry::ToolRegistry;
 #[cfg(test)]
 use crate::tools::spec_plan::finalize_tool_router;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::SearchToolCallParams;
 #[cfg(test)]
@@ -399,6 +400,12 @@ impl ToolRouter {
         source: ToolCallSource,
         terminal_outcome_reached: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        if matches!(
+            step_context.settings.model_info.inference.as_ref(),
+            Some(ModelInferenceConfig::LlamaCpp(_))
+        ) {
+            self.validate_model_visible_function_call(&call)?;
+        }
         if call.encrypted_function_args.is_some()
             && !crate::tools::wire_adaptation::wire_supports_encrypted_tool_content(
                 &step_context.turn,
@@ -436,6 +443,45 @@ impl ToolRouter {
         self.registry
             .dispatch_any_with_terminal_outcome(invocation, terminal_outcome_reached)
             .await
+    }
+
+    fn validate_model_visible_function_call(
+        &self,
+        call: &ToolCall,
+    ) -> Result<(), FunctionCallError> {
+        let ToolPayload::Function { arguments } = &call.payload else {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "local llama.cpp emitted unsupported non-function tool call `{}`",
+                call.tool_name
+            )));
+        };
+        let name = call.tool_name.canonical_flat_name();
+        let schema = self
+            .model_visible_specs
+            .iter()
+            .find_map(|spec| match spec {
+                ToolSpec::Function(tool) if tool.name == name => Some(&tool.parameters),
+                ToolSpec::Function(_)
+                | ToolSpec::Namespace(_)
+                | ToolSpec::ToolSearch { .. }
+                | ToolSpec::WebSearch { .. }
+                | ToolSpec::Freeform(_) => None,
+            })
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(format!(
+                    "local llama.cpp called unknown or unadvertised tool `{name}`"
+                ))
+            })?;
+        let input = serde_json::from_str(arguments).map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "local llama.cpp produced malformed JSON arguments for `{name}`: {error}"
+            ))
+        })?;
+        codex_tools::validate_tool_input(schema, &input).map_err(|error| {
+            FunctionCallError::RespondToModel(format!(
+                "local llama.cpp arguments for `{name}` failed schema validation: {error}"
+            ))
+        })
     }
 }
 

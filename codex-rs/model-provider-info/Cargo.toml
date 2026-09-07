@@ -24,5 +24,6 @@ serde = { workspace = true, features = ["derive"] }
 codex-utils-absolute-path = { workspace = true }
 maplit = { workspace = true }
 pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }

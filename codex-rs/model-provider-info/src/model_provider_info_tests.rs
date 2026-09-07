@@ -220,6 +220,63 @@ fn named_routes_resolve_every_typed_family_with_route_retry_policy() {
 }
 
 #[test]
+fn built_in_claudeflare_resolves_grok_route() {
+    let provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove(CLAUDEFLARE_PROVIDER_ID)
+        .expect("Claudeflare provider should be built in");
+    let model: ModelInfo = serde_json::from_value(serde_json::json!({
+        "slug": "xai/grok-4.6",
+        "inference": {
+            "family": "grok",
+            "wire_api": "responses",
+            "dialect": "grok",
+            "route": "grok",
+            "wire_model": "grok-4.6"
+        },
+        "display_name": "Grok 4.6",
+        "description": null,
+        "supported_reasoning_levels": [],
+        "shell_type": "unified_exec",
+        "visibility": "none",
+        "supported_in_api": true,
+        "priority": 1,
+        "availability_nux": null,
+        "upgrade": null,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "tokens", "limit": 10000},
+        "experimental_supported_tools": []
+    }))
+    .expect("Grok model fixture");
+
+    assert_eq!(
+        provider
+            .resolve_inference_plan(&model)
+            .expect("Grok route should resolve"),
+        ResolvedInferencePlan::Grok {
+            config: GrokInferenceConfig {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::Grok,
+                route: "grok".to_string(),
+                wire_model: "grok-4.6".to_string(),
+            },
+            route: ResolvedWireRoute {
+                name: Some("grok".to_string()),
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::Grok,
+                base_url: Some(CLAUDEFLARE_GROK_BASE_URL.to_string()),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: 0,
+                stream_max_retries: 10,
+                stream_idle_timeout: Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+            },
+        }
+    );
+}
+
+#[test]
 fn legacy_metadata_and_invalid_native_routes_resolve_before_sampling() {
     let provider = ModelProviderInfo {
         base_url: Some("https://legacy.example/v1".to_string()),
@@ -537,13 +594,12 @@ fn built_in_claudeflare_provider_has_managed_native_claude_route() {
         .remove(CLAUDEFLARE_PROVIDER_ID)
         .expect("Claudeflare provider should be built in");
 
-    assert_eq!(
-        provider,
-        ModelProviderInfo {
-            name: "Claudeflare".to_string(),
-            base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
-            wire_api: WireApi::Responses,
-            wire_routes: HashMap::from([(
+    let mut expected = ModelProviderInfo {
+        name: "Claudeflare".to_string(),
+        base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
+        wire_api: WireApi::Responses,
+        wire_routes: HashMap::from([
+            (
                 "claude_code".to_string(),
                 ModelProviderWireRoute {
                     wire_api: WireApi::AnthropicMessages,
@@ -555,12 +611,41 @@ fn built_in_claudeflare_provider_has_managed_native_claude_route() {
                     stream_max_retries: Some(10),
                     stream_idle_timeout_ms: None,
                 },
-            )]),
-            stream_max_retries: Some(10),
-            supports_websockets: false,
-            ..ModelProviderInfo::default()
-        }
-    );
+            ),
+            (
+                "kimi_code".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    base_url: CLAUDEFLARE_KIMI_BASE_URL.to_string(),
+                    request_path: "chat/completions".to_string(),
+                    query_params: None,
+                    request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "grok".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::Grok,
+                    base_url: CLAUDEFLARE_GROK_BASE_URL.to_string(),
+                    request_path: "responses".to_string(),
+                    query_params: None,
+                    request_max_retries: Some(0),
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+        ]),
+        stream_max_retries: Some(10),
+        supports_websockets: false,
+        ..ModelProviderInfo::default()
+    };
+    expected.install_llama_cpp_route();
+
+    assert_eq!(provider, expected);
 }
 
 #[test]
@@ -578,6 +663,63 @@ fn test_built_in_model_providers_include_amazon_bedrock_runtime() {
             .expect("Amazon Bedrock provider should be built in")
             .is_amazon_bedrock_runtime()
     );
+}
+
+#[test]
+fn test_built_in_model_providers_include_native_kimi_route() {
+    let providers = built_in_model_providers(/*openai_base_url*/ None);
+    let mut expected = ModelProviderInfo {
+        name: "Claudeflare".to_string(),
+        base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
+        wire_api: WireApi::Responses,
+        wire_routes: HashMap::from([
+            (
+                "claude_code".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::AnthropicMessages,
+                    dialect: InferenceDialect::ClaudeCode,
+                    base_url: CLAUDEFLARE_CLAUDE_BASE_URL.to_string(),
+                    request_path: "v1/messages".to_string(),
+                    query_params: Some(HashMap::from([("beta".to_string(), "true".to_string())])),
+                    request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "kimi_code".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::ChatCompletions,
+                    dialect: InferenceDialect::Kimi,
+                    base_url: CLAUDEFLARE_KIMI_BASE_URL.to_string(),
+                    request_path: "chat/completions".to_string(),
+                    query_params: None,
+                    request_max_retries: None,
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "grok".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::Grok,
+                    base_url: CLAUDEFLARE_GROK_BASE_URL.to_string(),
+                    request_path: "responses".to_string(),
+                    query_params: None,
+                    request_max_retries: Some(0),
+                    stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+        ]),
+        stream_max_retries: Some(10),
+        supports_websockets: false,
+        ..ModelProviderInfo::default()
+    };
+    expected.install_llama_cpp_route();
+
+    assert_eq!(providers.get(CLAUDEFLARE_PROVIDER_ID), Some(&expected));
 }
 
 #[test]

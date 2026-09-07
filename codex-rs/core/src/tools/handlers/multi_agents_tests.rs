@@ -233,9 +233,9 @@ fn heterogeneous_catalog() -> ModelsResponse {
                 })),
             ),
             model(
-                "qwen/qwen-test",
+                "local/qwen-test.gguf",
                 "qwen-test",
-                "qwen",
+                "local_llama_cpp_qwen3_8",
                 Some(ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
                     wire_api: WireApi::Responses,
                     dialect: InferenceDialect::LlamaCpp,
@@ -245,6 +245,21 @@ fn heterogeneous_catalog() -> ModelsResponse {
                     max_input_tokens: 96_000,
                     max_output_tokens: 32_000,
                     safety_margin_tokens: 4_000,
+                })),
+            ),
+            model(
+                "local/qwen-small.gguf",
+                "qwen-small",
+                "local_llama_cpp_qwen3_8",
+                Some(ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::LlamaCpp,
+                    route: "llama_cpp".to_string(),
+                    expected_model_basename: "qwen-small.gguf".to_string(),
+                    context_window: 32_768,
+                    max_input_tokens: 23_552,
+                    max_output_tokens: 8_192,
+                    safety_margin_tokens: 1_024,
                 })),
             ),
         ],
@@ -733,6 +748,112 @@ async fn multi_agent_v2_bounded_and_clean_forks_enforce_history_groups() {
             .resolve_agent_reference(session.thread_id, &turn.session_source, "claude_bounded")
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_local_root_preserves_local_history_and_plaintext_lineage() {
+    #[derive(Debug, Deserialize)]
+    struct SpawnAgentResult {
+        task_name: String,
+    }
+
+    let (session, turn, manager) = heterogeneous_v2_harness("local/qwen-test.gguf").await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+
+    let local_output = spawn_v2(
+        &session,
+        &turn,
+        json!({
+            "plaintext_message": "continue with the smaller local model",
+            "task_name": "local_worker",
+            "model": "qwen-small",
+            "fork_turns": "1"
+        }),
+    )
+    .await
+    .expect("compatible local bounded fork should succeed");
+    let (local_content, _) = expect_text_output(local_output);
+    let local_result: SpawnAgentResult =
+        serde_json::from_str(&local_content).expect("spawn result should parse");
+    assert_eq!(local_result.task_name, "/root/local_worker");
+    let local_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "local_worker")
+        .await
+        .expect("local child should resolve");
+    let local_snapshot = manager
+        .get_thread(local_id)
+        .await
+        .expect("local child thread")
+        .config_snapshot()
+        .await;
+    assert_eq!(
+        (
+            local_snapshot.model.as_str(),
+            local_snapshot.session_source.get_agent_path().as_deref(),
+        ),
+        ("local/qwen-small.gguf", Some("/root/local_worker"))
+    );
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == local_id
+            && matches!(op, Op::InterAgentCommunication { communication, .. }
+                if communication.author == AgentPath::root()
+                    && communication.recipient.as_str() == "/root/local_worker"
+                    && communication.content == "continue with the smaller local model"
+                    && communication.encrypted_content.is_none())
+    }));
+
+    let nonlocal_output = spawn_v2(
+        &session,
+        &turn,
+        json!({
+            "plaintext_message": "work without inherited local history",
+            "task_name": "openai_worker",
+            "model": "gpt-test",
+            "fork_turns": "none"
+        }),
+    )
+    .await
+    .expect("local root should spawn nonlocal model with plaintext");
+    let (nonlocal_content, _) = expect_text_output(nonlocal_output);
+    let nonlocal_result: SpawnAgentResult =
+        serde_json::from_str(&nonlocal_content).expect("spawn result should parse");
+    assert_eq!(nonlocal_result.task_name, "/root/openai_worker");
+    let nonlocal_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "openai_worker")
+        .await
+        .expect("nonlocal child should resolve");
+    assert_eq!(
+        manager
+            .get_thread(nonlocal_id)
+            .await
+            .expect("nonlocal child thread")
+            .config_snapshot()
+            .await
+            .model,
+        "openai/gpt-test"
+    );
+
+    let error = spawn_v2(
+        &session,
+        &turn,
+        json!({
+            "plaintext_message": "incompatible inherited history",
+            "task_name": "rejected_openai_worker",
+            "model": "gpt-test",
+            "fork_turns": "1"
+        }),
+    )
+    .await
+    .err()
+    .expect("incompatible bounded history should fail");
+    assert!(
+        matches!(error, FunctionCallError::RespondToModel(message) if message.contains("fork_turns=\"none\""))
     );
 }
 

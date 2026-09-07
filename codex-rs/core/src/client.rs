@@ -151,6 +151,8 @@ use codex_response_debug_context::telemetry_transport_error_message;
 
 #[path = "client/claude_dispatch.rs"]
 mod claude_dispatch;
+#[path = "client/kimi_dispatch.rs"]
+pub(crate) mod kimi_dispatch;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
@@ -176,6 +178,8 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 // period between stream events.
 const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
+mod grok_dispatch;
+mod llama_cpp_dispatch;
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -1314,6 +1318,16 @@ impl ModelClientSession {
         Arc::clone(&self.turn_state)
     }
 
+    pub(crate) fn stream_max_retries(&self, model_info: &ModelInfo) -> Result<u64> {
+        self.client
+            .state
+            .provider
+            .info()
+            .resolve_inference_plan(model_info)
+            .map(|plan| plan.route().stream_max_retries)
+            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.endpoint = None;
@@ -2094,13 +2108,48 @@ impl ModelClientSession {
                     )
                     .await;
             }
-            codex_model_provider_info::ResolvedInferencePlan::Kimi { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::Grok { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { .. } => {
-                return Err(CodexErr::InvalidRequest(format!(
-                    "model `{}` declares explicit native inference routing, which is not active in this build",
-                    model_info.slug
-                )));
+            codex_model_provider_info::ResolvedInferencePlan::Kimi { config, route } => {
+                return self
+                    .stream_kimi(
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                        effort,
+                        responses_metadata,
+                        inference_trace,
+                        kimi_dispatch::KimiPlan { config, route },
+                    )
+                    .await;
+            }
+            codex_model_provider_info::ResolvedInferencePlan::Grok { config, route } => {
+                return self
+                    .stream_grok(
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                        effort,
+                        summary,
+                        responses_metadata,
+                        inference_trace,
+                        grok_dispatch::GrokPlan { config, route },
+                    )
+                    .await;
+            }
+            codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { config, route } => {
+                return self
+                    .stream_llama_cpp(
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                        effort,
+                        summary,
+                        service_tier,
+                        responses_metadata,
+                        inference_trace,
+                        config,
+                        route,
+                    )
+                    .await;
             }
         };
         match wire_api {

@@ -23,6 +23,7 @@ use codex_protocol::model_inference::GrokInferenceConfig;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::KimiInferenceConfig;
 use codex_protocol::model_inference::KimiThinkingPolicy;
+use codex_protocol::model_inference::LlamaCppInferenceConfig;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::model_inference::WireApi;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -374,6 +375,41 @@ fn use_native_kimi(turn: &mut TurnContext) {
                 max_output_tokens: 32_768,
                 thinking: KimiThinkingPolicy::Required,
             }));
+    });
+}
+
+fn use_grok(turn: &mut TurnContext) {
+    update_turn_settings_for_test(turn, |settings| {
+        Arc::make_mut(&mut settings.model_info).inference =
+            Some(ModelInferenceConfig::Grok(GrokInferenceConfig {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::Grok,
+                route: "grok".to_string(),
+                wire_model: "grok-4.6".to_string(),
+            }));
+    });
+}
+
+fn use_llama_cpp(turn: &mut TurnContext) {
+    update_turn_settings_for_test(turn, |settings| {
+        let model = Arc::make_mut(&mut settings.model_info);
+        model.inference = Some(ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
+            wire_api: WireApi::Responses,
+            dialect: InferenceDialect::LlamaCpp,
+            route: "llama_cpp".to_string(),
+            expected_model_basename: "qwen-test.gguf".to_string(),
+            context_window: 32_768,
+            max_input_tokens: 23_552,
+            max_output_tokens: 8_192,
+            safety_margin_tokens: 1_024,
+        }));
+        model.apply_patch_tool_type = None;
+        model.disabled_tools = vec![
+            ModelToolCapability::ToolSearch,
+            ModelToolCapability::WebSearch,
+            ModelToolCapability::ImageGeneration,
+            ModelToolCapability::CodexApps,
+        ];
     });
 }
 
@@ -1371,6 +1407,20 @@ async fn environment_count_controls_environment_backed_tools() {
 }
 
 #[tokio::test]
+async fn llama_cpp_exposes_apply_patch_and_only_plain_function_specs() {
+    let plan = probe(use_llama_cpp).await;
+
+    plan.assert_visible_contains(&["apply_patch"]);
+    assert!(
+        plan.visible_specs
+            .iter()
+            .all(|spec| matches!(spec, ToolSpec::Function(_))),
+        "llama.cpp received non-function specs: {:?}",
+        plan.visible_specs
+    );
+}
+
+#[tokio::test]
 async fn environment_tools_follow_the_step_context() {
     let (_session, mut turn) = make_session_and_context().await;
     update_turn_settings_for_test(&mut turn, |settings| {
@@ -1610,6 +1660,7 @@ async fn native_models_use_flat_functions_for_plain_patch_and_deferred_tools() {
     for configure_native in [
         use_native_claude as fn(&mut TurnContext),
         use_native_kimi as fn(&mut TurnContext),
+        use_grok as fn(&mut TurnContext),
     ] {
         let plan = probe_with(
             configure_native,
@@ -1643,6 +1694,36 @@ async fn native_models_use_flat_functions_for_plain_patch_and_deferred_tools() {
             &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
         ]);
     }
+}
+
+#[tokio::test]
+async fn grok_tool_wire_extension_does_not_change_standard_responses_shapes() {
+    let plan = probe_with(
+        |turn| {
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
+            });
+        },
+        ToolPlanInputs {
+            tool_runtimes: vec![mcp_runtime(
+                "searchable",
+                "mcp__searchable",
+                "lookup",
+                ToolExposure::Deferred,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    assert!(matches!(
+        plan.visible_spec("apply_patch"),
+        ToolSpec::Freeform(_)
+    ));
+    assert!(matches!(
+        plan.visible_spec("tool_search"),
+        ToolSpec::ToolSearch { .. }
+    ));
 }
 
 #[tokio::test]
@@ -1707,6 +1788,7 @@ async fn model_tool_deny_list_hides_only_selected_native_capabilities() {
     for configure_native in [
         use_native_claude as fn(&mut TurnContext),
         use_native_kimi as fn(&mut TurnContext),
+        use_grok as fn(&mut TurnContext),
     ] {
         let plan = probe_with(
             |turn| {
@@ -3139,6 +3221,7 @@ async fn native_multi_agent_v2_message_schemas_require_plaintext() {
     for configure_native in [
         use_native_claude as fn(&mut TurnContext),
         use_native_kimi as fn(&mut TurnContext),
+        use_grok as fn(&mut TurnContext),
     ] {
         let plan = probe(|turn| {
             set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
@@ -3194,10 +3277,11 @@ fn native_collaboration_runtime_preserves_only_plaintext_message() {
 }
 
 #[tokio::test]
-async fn native_claude_and_kimi_plaintext_collaboration_calls_return_continuation_results() {
+async fn native_plaintext_collaboration_calls_return_continuation_results() {
     for configure_native in [
         use_native_claude as fn(&mut TurnContext),
         use_native_kimi as fn(&mut TurnContext),
+        use_grok as fn(&mut TurnContext),
     ] {
         let (session, mut turn) = make_session_and_context().await;
         configure_native(&mut turn);

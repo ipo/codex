@@ -14968,6 +14968,9 @@
             ],
             "description": "Multi-agent runtime declared by this model, when available."
           },
+          "reasoningDisplay": {
+            "$ref": "#/definitions/v2/ModelReasoningDisplay"
+          },
           "serviceTiers": {
             "default": [],
             "items": {
@@ -15011,6 +15014,7 @@
           "id",
           "isDefault",
           "model",
+          "reasoningDisplay",
           "supportedReasoningEfforts"
         ],
         "type": "object"
@@ -15104,6 +15108,14 @@
         ],
         "title": "ModelProviderCapabilitiesReadResponse",
         "type": "object"
+      },
+      "ModelReasoningDisplay": {
+        "description": "Catalog-owned policy for presenting a model's reasoning output.",
+        "enum": [
+          "summary",
+          "kimiRaw"
+        ],
+        "type": "string"
       },
       "ModelRerouteReason": {
         "enum": [

@@ -79,6 +79,7 @@ use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -677,6 +678,14 @@ pub(crate) fn search_tool_enabled(turn_context: &TurnContext, model_info: &Model
         && (model_info.supports_search_tool || native_wire(turn_context, model_info))
 }
 
+fn requires_function_tool_specs(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
+    native_wire(turn_context, model_info)
+        || matches!(
+            model_info.inference.as_ref(),
+            Some(ModelInferenceConfig::LlamaCpp(_))
+        )
+}
+
 pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
     let features = turn_context.config.features.get();
     turn_context.apps_enabled()
@@ -688,6 +697,7 @@ pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
 pub(super) fn namespace_tools_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
     turn_context.provider.capabilities().namespace_tools
         && model_info.supports_responses_capabilities(turn_context.provider.info().wire_api)
+        && !requires_function_tool_specs(turn_context, model_info)
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
@@ -1282,11 +1292,11 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         && !context
             .model_info
             .disables_tool(ModelToolCapability::ApplyPatch)
-        && (native_wire(turn_context, context.model_info)
+        && (requires_function_tool_specs(turn_context, context.model_info)
             || context.model_info.apply_patch_tool_type.is_some())
     {
         let include_environment_id = matches!(environment_mode, ToolEnvironmentMode::Multiple);
-        if native_wire(turn_context, context.model_info) {
+        if requires_function_tool_specs(turn_context, context.model_info) {
             registry.add(ApplyPatchHandler::function(include_environment_id));
         } else {
             registry.add(ApplyPatchHandler::new(include_environment_id));
@@ -1456,7 +1466,7 @@ fn append_tool_search_executor(
         ToolSearchSourceListing::Include
     };
     let index = tool_search_handler_cache.get_or_build(registry);
-    if native_wire(turn_context, model_info) {
+    if requires_function_tool_specs(turn_context, model_info) {
         let state = Arc::new(crate::tools::deferred_tool_state::DeferredToolLoadState::default());
         registry.register_trusted(Arc::new(ToolSearchHandler::function(
             index,

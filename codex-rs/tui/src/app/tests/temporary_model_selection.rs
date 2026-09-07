@@ -1,4 +1,6 @@
 use super::*;
+use crate::chatwidget::UserMessage;
+use pretty_assertions::assert_eq;
 
 fn temporary_user_turn(app: &App) -> Op {
     let temporary_mode = app.chat_widget.effective_collaboration_mode();

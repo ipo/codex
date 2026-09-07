@@ -11,6 +11,7 @@ use crate::tools::handlers::McpHandler;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::RegisteredTool;
 use crate::tools::registry::ToolExposure;
+use crate::tools::registry::ToolRegistry;
 use crate::tools::spec_plan::append_source_tools;
 use crate::tools::spec_plan::build_core_tool_registry;
 use crate::tools::spec_plan::extension_tool_executors;
@@ -93,6 +94,95 @@ fn native_and_flattened_collaboration_plaintext_calls_use_plaintext_source() {
         encrypted_function_args: Some(vec!["enc_metadata".to_string()]),
     };
     assert_eq!(encrypted.direct_source(), ToolCallSource::Direct);
+}
+
+#[test]
+fn llama_cpp_accepts_only_advertised_schema_valid_function_calls() {
+    let parameters = codex_extension_api::parse_tool_input_schema(&json!({
+        "type": "object",
+        "properties": {"path": {"type": "string"}},
+        "required": ["path"],
+        "additionalProperties": false
+    }))
+    .expect("schema should parse");
+    let router = ToolRouter::from_parts(
+        ToolRegistry::default(),
+        vec![ToolSpec::Function(ResponsesApiTool {
+            name: "read_file".to_string(),
+            description: "Read a file".to_string(),
+            strict: true,
+            parameters,
+            output_schema: None,
+            defer_loading: None,
+        })],
+        codex_protocol::openai_models::ToolMode::Direct,
+        BTreeMap::new(),
+        None,
+        &[],
+    );
+    let call = |tool_name: &str, payload: ToolPayload| ToolCall {
+        tool_name: ToolName::plain(tool_name),
+        call_id: "call-1".to_string(),
+        payload,
+        encrypted_function_args: None,
+    };
+
+    router
+        .validate_model_visible_function_call(&call(
+            "read_file",
+            ToolPayload::Function {
+                arguments: json!({"path": "Cargo.toml"}).to_string(),
+            },
+        ))
+        .expect("advertised schema-valid function call should pass");
+
+    let cases = [
+        (
+            call(
+                "read_file",
+                ToolPayload::Custom {
+                    input: "Cargo.toml".to_string(),
+                },
+            ),
+            "unsupported non-function tool call",
+        ),
+        (
+            call(
+                "missing_tool",
+                ToolPayload::Function {
+                    arguments: "{}".to_string(),
+                },
+            ),
+            "unknown or unadvertised tool",
+        ),
+        (
+            call(
+                "read_file",
+                ToolPayload::Function {
+                    arguments: "{".to_string(),
+                },
+            ),
+            "malformed JSON arguments",
+        ),
+        (
+            call(
+                "read_file",
+                ToolPayload::Function {
+                    arguments: json!({"path": 7}).to_string(),
+                },
+            ),
+            "failed schema validation",
+        ),
+    ];
+    for (call, expected) in cases {
+        let error = router
+            .validate_model_visible_function_call(&call)
+            .expect_err("invalid local call should fail");
+        assert!(
+            error.to_string().contains(expected),
+            "expected `{expected}` in `{error}`"
+        );
+    }
 }
 
 #[tokio::test]

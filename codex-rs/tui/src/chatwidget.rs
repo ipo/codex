@@ -375,6 +375,7 @@ use self::session_header::SessionHeader;
 mod hook_lifecycle;
 mod hooks;
 mod interaction;
+mod kimi_reasoning;
 mod skills;
 mod slash_dispatch;
 use self::skills::collect_tool_mentions;
@@ -446,6 +447,7 @@ mod transcript_export;
 use self::transcript::TranscriptState;
 mod turn_lifecycle;
 mod turn_runtime;
+use self::kimi_reasoning::KimiReasoningState;
 use self::turn_lifecycle::TurnLifecycleState;
 mod usage;
 mod user_messages;
@@ -700,6 +702,7 @@ pub(crate) struct ChatWidget {
     reasoning_header: Option<String>,
     // Preserves reasoning-summary part boundaries for transcript-only recording.
     reasoning_summary_parts: Vec<String>,
+    kimi_reasoning: KimiReasoningState,
     status_state: StatusState,
     review: ReviewState,
     // Active hook runs render in a dedicated live cell so they can run alongside tools.
@@ -1244,6 +1247,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn pre_draw_tick(&mut self) {
+        self.publish_kimi_reasoning_draft();
         self.update_due_hook_visibility();
         self.schedule_hook_timer_if_needed();
         self.bottom_pane.pre_draw_tick();

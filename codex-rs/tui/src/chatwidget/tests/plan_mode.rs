@@ -518,7 +518,7 @@ async fn model_selection_scope_popup_all_modes_persists_global_and_plan_override
 
 #[tokio::test]
 async fn temporary_model_selection_uses_live_turn_and_restores_defaults() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let (mut chat, mut rx, mut _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
     let codex_home = tempdir().expect("tempdir");
     let config_path = codex_home.path().join("config.toml");
     let original_config = "model = \"gpt-5.4\"\nmodel_reasoning_effort = \"medium\"\nplan_mode_reasoning_effort = \"low\"\n";
@@ -736,11 +736,11 @@ async fn rejected_temporary_model_turn_preserves_mixed_input_and_mention_binding
             restored.mention_bindings,
         ),
         (
-            submitted_message.text,
-            submitted_message.local_images,
-            submitted_message.remote_image_urls,
-            submitted_message.text_elements,
-            submitted_message.mention_bindings,
+            submitted_message.text.clone(),
+            submitted_message.local_images.clone(),
+            submitted_message.remote_image_urls.clone(),
+            submitted_message.text_elements.clone(),
+            submitted_message.mention_bindings.clone(),
         )
     );
     chat.submit_user_message(submitted_message);

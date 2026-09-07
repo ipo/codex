@@ -13,6 +13,7 @@ use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_remote_auto_compact_task_v2;
 use crate::connectors;
 use crate::context::ContextualUserFragment;
+use crate::context::world_state::WorldState;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
 use crate::hook_runtime::drain_async_hook_results;
@@ -397,6 +398,7 @@ pub(crate) async fn run_turn(
                 &mut client_session,
                 &responses_metadata,
                 sampling_request_input,
+                Arc::clone(&world_state),
                 cancellation_token.child_token(),
             )
             .await
@@ -1239,7 +1241,18 @@ async fn run_auto_compact(
         return Ok(());
     }
 
-    match turn_context.provider.capabilities().remote_compaction {
+    let remote_compaction = if matches!(
+        turn_context
+            .provider
+            .info()
+            .resolve_inference_plan(turn_context.model_info()),
+        Ok(codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { .. })
+    ) {
+        RemoteCompactionSupport::Unsupported
+    } else {
+        turn_context.provider.capabilities().remote_compaction
+    };
+    match remote_compaction {
         RemoteCompactionSupport::V2
             if turn_context
                 .config
@@ -1387,6 +1400,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     responses_metadata: &CodexResponsesMetadata,
     input: Vec<ResponseItem>,
+    world_state: Arc<WorldState>,
     cancellation_token: CancellationToken,
 ) -> CodexResult<(SamplingRequestResult, Vec<ResponseItem>)> {
     let turn_context = Arc::clone(&step_context.turn);
@@ -1407,6 +1421,14 @@ async fn run_sampling_request(
     let mut initial_input = Some(input);
     let mut original_input = None;
     let mut executed_tool_calls_by_output = HashMap::new();
+    let native_kimi = matches!(
+        &step_context.settings.model_info.inference,
+        Some(codex_protocol::model_inference::ModelInferenceConfig::Kimi(
+            _
+        ))
+    );
+    let mut boundary_compacted = false;
+    let mut overflow_compacted = false;
     loop {
         let prompt_input = if let Some(input) = initial_input.take() {
             input
@@ -1427,6 +1449,34 @@ async fn run_sampling_request(
             step_context.as_ref(),
             base_instructions.clone(),
         );
+        if native_kimi
+            && !boundary_compacted
+            && crate::client::kimi_dispatch::should_compact(
+                &step_context.settings.model_info,
+                crate::client::kimi_dispatch::estimated_input_tokens(
+                    &prompt,
+                    &step_context.settings.model_info,
+                )?,
+            )
+        {
+            run_auto_compact(
+                &sess,
+                Arc::clone(&step_context),
+                /*fallback_step_context*/ None,
+                client_session,
+                InitialContextInjection::BeforeLastUserMessage {
+                    world_state: Arc::clone(&world_state),
+                    step_context: Arc::clone(&step_context),
+                },
+                CompactionReason::ContextLimit,
+                CompactionPhase::PreTurn,
+            )
+            .await?;
+            boundary_compacted = true;
+            retry_state = ResponsesStreamRetryState::default();
+            initial_input = None;
+            continue;
+        }
         let err = match try_run_sampling_request(
             tool_runtime.clone(),
             Arc::clone(&sess),
@@ -1445,6 +1495,26 @@ async fn run_sampling_request(
             }
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
+                    if native_kimi && !overflow_compacted {
+                        run_auto_compact(
+                            &sess,
+                            Arc::clone(&step_context),
+                            /*fallback_step_context*/ None,
+                            client_session,
+                            InitialContextInjection::BeforeLastUserMessage {
+                                world_state: Arc::clone(&world_state),
+                                step_context: Arc::clone(&step_context),
+                            },
+                            CompactionReason::ContextLimit,
+                            CompactionPhase::MidTurn,
+                        )
+                        .await?;
+                        overflow_compacted = true;
+                        boundary_compacted = true;
+                        retry_state = ResponsesStreamRetryState::default();
+                        initial_input = None;
+                        continue;
+                    }
                     sess.set_total_tokens_full(&turn_context).await;
                     return Err(err);
                 }
