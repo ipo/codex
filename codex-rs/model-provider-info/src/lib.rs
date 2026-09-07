@@ -769,7 +769,7 @@ pub fn built_in_model_providers(
                     dialect: InferenceDialect::ClaudeCode,
                     base_url: CLAUDEFLARE_CLAUDE_BASE_URL.to_string(),
                     request_path: "v1/messages".to_string(),
-                    query_params: Some(HashMap::from([("beta".to_string(), "true".to_string())])),
+                    query_params: Some(HashMap::from([("beta".to_string(), "true".into())])),
                     request_max_retries: None,
                     stream_max_retries: Some(10),
                     stream_idle_timeout_ms: None,

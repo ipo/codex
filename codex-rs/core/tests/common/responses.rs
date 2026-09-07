@@ -1084,6 +1084,14 @@ fn base_mock() -> (MockBuilder, ResponseMock) {
     (mock, response_mock)
 }
 
+fn messages_mock() -> (MockBuilder, ResponseMock) {
+    let response_mock = ResponseMock::new();
+    let mock = Mock::given(method("POST"))
+        .and(path_regex(".*/v1/messages$"))
+        .and(response_mock.clone());
+    (mock, response_mock)
+}
+
 fn compact_mock() -> (MockBuilder, ResponseMock) {
     let response_mock = ResponseMock::new();
     let mock = Mock::given(method("POST"))
@@ -1115,6 +1123,15 @@ where
 
 pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {
     let (mock, response_mock) = base_mock();
+    mock.respond_with(sse_response(body))
+        .up_to_n_times(1)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+pub async fn mount_messages_sse_once(server: &MockServer, body: String) -> ResponseMock {
+    let (mock, response_mock) = messages_mock();
     mock.respond_with(sse_response(body))
         .up_to_n_times(1)
         .mount(server)
@@ -1583,6 +1600,46 @@ pub async fn mount_sse_sequence(server: &MockServer, bodies: Vec<String>) -> Res
     response_mock
 }
 
+/// Mounts a sequence of SSE bodies for each POST to `/v1/messages`.
+pub async fn mount_messages_sse_sequence(server: &MockServer, bodies: Vec<String>) -> ResponseMock {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    struct SeqResponder {
+        num_calls: AtomicUsize,
+        responses: Vec<String>,
+    }
+
+    impl Respond for SeqResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            let missing_response_message = format!("no response for {call_num}");
+            let body = self
+                .responses
+                .get(call_num)
+                .expect(&missing_response_message);
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(body.clone())
+        }
+    }
+
+    let num_calls = bodies.len();
+    let responder = SeqResponder {
+        num_calls: AtomicUsize::new(0),
+        responses: bodies,
+    };
+
+    let (mock, response_mock) = messages_mock();
+    mock.respond_with(responder)
+        .up_to_n_times(num_calls as u64)
+        .expect(num_calls as u64)
+        .mount(server)
+        .await;
+
+    response_mock
+}
+
 /// Mounts a sequence of responses for each POST to `/v1/responses`.
 /// Panics if more requests are received than responses provided.
 pub async fn mount_response_sequence(
@@ -1614,6 +1671,44 @@ pub async fn mount_response_sequence(
     };
 
     let (mock, response_mock) = base_mock();
+    mock.respond_with(responder)
+        .up_to_n_times(num_calls as u64)
+        .expect(num_calls as u64)
+        .mount(server)
+        .await;
+    response_mock
+}
+
+/// Mounts a sequence of HTTP responses for each POST to `/v1/messages`.
+pub async fn mount_messages_response_sequence(
+    server: &MockServer,
+    responses: Vec<ResponseTemplate>,
+) -> ResponseMock {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    struct SeqResponder {
+        num_calls: AtomicUsize,
+        responses: Vec<ResponseTemplate>,
+    }
+
+    impl Respond for SeqResponder {
+        fn respond(&self, _: &wiremock::Request) -> ResponseTemplate {
+            let call_num = self.num_calls.fetch_add(1, Ordering::SeqCst);
+            self.responses
+                .get(call_num)
+                .expect("missing response for call")
+                .clone()
+        }
+    }
+
+    let num_calls = responses.len();
+    let responder = SeqResponder {
+        num_calls: AtomicUsize::new(0),
+        responses,
+    };
+
+    let (mock, response_mock) = messages_mock();
     mock.respond_with(responder)
         .up_to_n_times(num_calls as u64)
         .expect(num_calls as u64)

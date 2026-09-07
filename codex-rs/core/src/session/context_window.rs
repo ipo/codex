@@ -2,6 +2,7 @@ use super::session::Session;
 use super::turn_context::TurnContext;
 use crate::config::Config;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::openai_models::ModelInfo;
 
 #[derive(Debug)]
@@ -80,9 +81,7 @@ async fn context_window_token_status_with_config(
         };
 
     // The model's full context window is a hard cap, independent of the auto-compaction scope.
-    let full_context_window_limit = model_info.resolved_context_window().map(|context_window| {
-        context_window.saturating_mul(model_info.effective_context_window_percent) / 100
-    });
+    let full_context_window_limit = full_context_window_limit(model_info);
 
     // Report remaining tokens against the base (unbuffered) window, capped by the full context.
     let base_window_tokens_remaining = [
@@ -119,3 +118,27 @@ async fn context_window_token_status_with_config(
         token_limit_reached,
     }
 }
+
+pub(crate) fn full_context_window_limit(model_info: &ModelInfo) -> Option<i64> {
+    model_info.resolved_context_window().map(|context_window| {
+        let usable =
+            context_window.saturating_mul(model_info.effective_context_window_percent) / 100;
+        let reserved_output_tokens = match model_info.inference.as_ref() {
+            Some(ModelInferenceConfig::Anthropic {
+                max_output_tokens, ..
+            }) => i64::from(*max_output_tokens),
+            Some(
+                ModelInferenceConfig::OpenAi { .. }
+                | ModelInferenceConfig::Kimi(_)
+                | ModelInferenceConfig::Grok(_)
+                | ModelInferenceConfig::LlamaCpp(_),
+            )
+            | None => 0,
+        };
+        usable.saturating_sub(reserved_output_tokens)
+    })
+}
+
+#[cfg(test)]
+#[path = "context_window_tests.rs"]
+mod tests;

@@ -1318,16 +1318,6 @@ impl ModelClientSession {
         Arc::clone(&self.turn_state)
     }
 
-    pub(crate) fn stream_max_retries(&self, model_info: &ModelInfo) -> Result<u64> {
-        self.client
-            .state
-            .provider
-            .info()
-            .resolve_inference_plan(model_info)
-            .map(|plan| plan.route().stream_max_retries)
-            .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
-    }
-
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.endpoint = None;

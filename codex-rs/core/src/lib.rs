@@ -15,6 +15,7 @@ mod realtime_history;
 mod realtime_prompt;
 mod responses_metadata;
 mod responses_retry;
+mod sampling_retry;
 pub(crate) mod session;
 pub use codex_protocol::turn_input::NotSubmittedReason;
 pub use codex_protocol::turn_input::RecoverTurnRequest;

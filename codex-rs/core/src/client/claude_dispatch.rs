@@ -3,23 +3,22 @@ use codex_claude_code::ClaudeCodeEnvironment;
 use codex_claude_code::ClaudeCodeIdentity;
 use codex_claude_code::ClaudeCodeRequestKind;
 use codex_claude_code::ClaudeHttpAdapter;
-use codex_claude_code::DecodeError;
 use codex_claude_code::EncodeRequest;
-use codex_claude_code::NativeStreamError;
 use codex_claude_code::OpusCompatibilityContext;
 use codex_claude_code::OpusRequestKind;
 use codex_claude_code::SonnetCompatibilityContext;
 use codex_claude_code::SystemBlock;
-use codex_claude_code::TerminalOutcome;
 use codex_claude_code::encode_request;
 use codex_model_provider_info::ResolvedWireRoute;
 use codex_protocol::model_inference::AnthropicThinkingPolicy;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::ModelInferenceConfig;
+use codex_protocol::models::ContentItem;
 use codex_utils_path_uri::LegacyAppPathString;
 use futures::TryStreamExt;
 
 use super::*;
+use crate::sampling_retry::classify_native_error;
 
 const CLAUDE_MESSAGES_ENDPOINT: &str = "/v1/messages";
 const CHATGPT_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
@@ -272,7 +271,7 @@ fn validate_route(route: &ResolvedWireRoute) -> Result<()> {
         query.len() == 1
             && query
                 .get("beta")
-                .is_some_and(|value| value.as_ref() == "true")
+                .is_some_and(|value| value.as_str() == "true")
     });
     if route.wire_api != WireApi::AnthropicMessages
         || route.dialect != InferenceDialect::ClaudeCode
@@ -295,117 +294,4 @@ fn provider_for_route(mut provider: ApiProvider, route: &ResolvedWireRoute) -> R
     provider.retry.max_attempts = 0;
     provider.stream_idle_timeout = route.stream_idle_timeout;
     Ok(provider)
-}
-
-fn classify_native_error(error: NativeStreamError) -> ApiError {
-    match error {
-        NativeStreamError::Request(ApiError::Transport(transport)) => {
-            classify_transport_error(transport)
-        }
-        NativeStreamError::Request(ApiError::ServerOverloaded) => retryable("server overloaded"),
-        NativeStreamError::Request(ApiError::RateLimit(message)) => retryable(message),
-        NativeStreamError::Request(error) => error,
-        NativeStreamError::IdleTimeout => retryable("native Claude stream idle timeout"),
-        NativeStreamError::Transport(message) => retryable(message),
-        NativeStreamError::Decode(DecodeError::EmptyStream) => {
-            retryable("native Claude stream was empty")
-        }
-        NativeStreamError::Decode(DecodeError::PrematureEof { expected }) => {
-            retryable(format!("native Claude stream ended before {expected}"))
-        }
-        NativeStreamError::Decode(DecodeError::ProviderError {
-            error_type,
-            message,
-        }) => classify_provider_error(&error_type, message),
-        NativeStreamError::UnsuccessfulTerminal(TerminalOutcome::OutputExhausted) => {
-            retryable("native Claude exhausted its output before completing")
-        }
-        NativeStreamError::UnsuccessfulTerminal(TerminalOutcome::Refusal) => {
-            ApiError::InvalidRequest {
-                message: "native Claude refused the request".to_string(),
-            }
-        }
-        NativeStreamError::UnsuccessfulTerminal(
-            TerminalOutcome::Completed | TerminalOutcome::ToolsReady | TerminalOutcome::Continue,
-        ) => unreachable!("successful terminal outcomes are emitted as completed events"),
-        NativeStreamError::Decode(error) => ApiError::InvalidRequest {
-            message: error.to_string(),
-        },
-        NativeStreamError::Cancelled => ApiError::InvalidRequest {
-            message: "native Claude stream was cancelled".to_string(),
-        },
-        NativeStreamError::InvalidRequest(message) => ApiError::InvalidRequest { message },
-    }
-}
-
-fn classify_transport_error(error: TransportError) -> ApiError {
-    match error {
-        TransportError::Http {
-            status,
-            url,
-            headers,
-            body,
-        } => {
-            let body_text = body.as_deref().unwrap_or_default();
-            if contains_any(
-                body_text,
-                "context window|context limit|maximum context length|prompt is too long|too many input tokens",
-            ) {
-                ApiError::ContextWindowExceeded
-            } else if contains_any(
-                body_text,
-                "quota_exceeded|insufficient_quota|billing_error|credit balance is too low|exceeded your current quota|usage_limit",
-            ) {
-                ApiError::QuotaExceeded
-            } else if matches!(status.as_u16(), 408 | 409 | 429 | 529) || status.is_server_error() {
-                retryable(format!("native Claude request failed with HTTP {status}"))
-            } else {
-                ApiError::Transport(TransportError::Http {
-                    status,
-                    url,
-                    headers,
-                    body,
-                })
-            }
-        }
-        TransportError::Timeout | TransportError::Network(_) => retryable(error.to_string()),
-        TransportError::RetryLimit | TransportError::Build(_) => ApiError::Transport(error),
-    }
-}
-
-fn classify_provider_error(error_type: &str, message: String) -> ApiError {
-    if contains_any(
-        &message,
-        "context window|context limit|maximum context length|prompt is too long|too many input tokens",
-    ) {
-        ApiError::ContextWindowExceeded
-    } else if matches!(error_type, "billing_error" | "quota_exceeded")
-        || contains_any(
-            &message,
-            "quota_exceeded|insufficient_quota|billing_error|credit balance is too low|exceeded your current quota|usage_limit",
-        )
-    {
-        ApiError::QuotaExceeded
-    } else if matches!(
-        error_type,
-        "overloaded_error" | "rate_limit_error" | "api_error" | "timeout_error"
-    ) {
-        retryable(format!("native Claude {error_type}: {message}"))
-    } else {
-        ApiError::InvalidRequest {
-            message: format!("native Claude {error_type}: {message}"),
-        }
-    }
-}
-
-fn retryable(message: impl Into<String>) -> ApiError {
-    ApiError::Retryable {
-        message: message.into(),
-        delay: None,
-    }
-}
-
-fn contains_any(message: &str, needles: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    needles.split('|').any(|needle| message.contains(needle))
 }

@@ -34,6 +34,8 @@ use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_retry::ResponsesStreamRequest;
 use crate::responses_retry::ResponsesStreamRetryState;
 use crate::responses_retry::handle_retryable_response_stream_error;
+use crate::sampling_retry::RetryScheduler;
+use crate::sampling_retry::handle_native_sampling_retry;
 use crate::session::PreviousTurnSettings;
 use crate::session::TurnInput;
 use crate::session::session::Session;
@@ -1427,6 +1429,13 @@ async fn run_sampling_request(
             _
         ))
     );
+    let native_claude = matches!(
+        &step_context.settings.model_info.inference,
+        Some(codex_protocol::model_inference::ModelInferenceConfig::Anthropic { .. })
+    );
+    let native_overflow_recovery = native_kimi || native_claude;
+    let native_retry_scheduler = native_claude.then(RetryScheduler::production);
+    let mut native_retries = 0;
     let mut boundary_compacted = false;
     let mut overflow_compacted = false;
     loop {
@@ -1495,7 +1504,7 @@ async fn run_sampling_request(
             }
             Err(err) => match err.details() {
                 CodexErrorDetails::ContextWindowExceeded => {
-                    if native_kimi && !overflow_compacted {
+                    if native_overflow_recovery && !overflow_compacted {
                         run_auto_compact(
                             &sess,
                             Arc::clone(&step_context),
@@ -1512,6 +1521,7 @@ async fn run_sampling_request(
                         overflow_compacted = true;
                         boundary_compacted = true;
                         retry_state = ResponsesStreamRetryState::default();
+                        native_retries = 0;
                         initial_input = None;
                         continue;
                     }
@@ -1537,16 +1547,28 @@ async fn run_sampling_request(
             return Err(err);
         }
 
-        handle_retryable_response_stream_error(
-            &mut retry_state,
-            max_retries,
-            err,
-            client_session,
-            &sess,
-            &turn_context,
-            ResponsesStreamRequest::Sampling,
-        )
-        .await?;
+        if let Some(scheduler) = native_retry_scheduler.as_ref() {
+            handle_native_sampling_retry(
+                max_retries,
+                &mut native_retries,
+                err,
+                &sess,
+                &turn_context,
+                scheduler,
+            )
+            .await?;
+        } else {
+            handle_retryable_response_stream_error(
+                &mut retry_state,
+                max_retries,
+                err,
+                client_session,
+                &sess,
+                &turn_context,
+                ResponsesStreamRequest::Sampling,
+            )
+            .await?;
+        }
         turn_context.turn_timing_state.record_sampling_retry();
     }
 }

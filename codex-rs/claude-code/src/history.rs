@@ -1,6 +1,6 @@
 use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::render_plaintext_agent_message;
+use codex_protocol::models::plaintext_agent_message_content;
 
 use crate::ContentBlock;
 use crate::EncodeError;
@@ -45,12 +45,13 @@ pub(crate) fn encode_history(
                 ..
             } => {
                 resolve_orphans(&mut messages, &mut pending);
-                let text = render_plaintext_agent_message(author, recipient, content).ok_or(
+                let content = plaintext_agent_message_content(content).ok_or(
                     EncodeError::UnsupportedHistoryItem {
                         index,
                         kind: "non-plaintext structured agent message",
                     },
                 )?;
+                let text = format!("Agent message from {author} to {recipient}:\n{content}");
                 push_blocks(
                     &mut messages,
                     Group::User,
