@@ -3,11 +3,13 @@
 mod compaction;
 mod traversal;
 mod types;
+mod validation;
 
 pub use types::AdditionalProperties;
 pub use types::JsonSchema;
 pub use types::JsonSchemaPrimitiveType;
 pub use types::JsonSchemaType;
+pub use validation::validate_tool_input;
 
 use compaction::compact_large_tool_schema;
 use traversal::DefinitionTraversal;

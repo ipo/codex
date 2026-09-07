@@ -49,6 +49,7 @@ pub const CLAUDEFLARE_PROVIDER_ID: &str = "claudeflare";
 pub const CLAUDEFLARE_RESPONSES_BASE_URL: &str = "http://127.0.0.1:8080/v1/ccflare/openai";
 pub const CLAUDEFLARE_KIMI_BASE_URL: &str = "http://127.0.0.1:8080/v1/kimi";
 pub const CLAUDEFLARE_GROK_BASE_URL: &str = "http://127.0.0.1:8080/v1/grok";
+pub const LLAMA_CPP_ROUTE_NAME: &str = "llama_cpp";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
 const AMAZON_BEDROCK_RUNTIME_PROVIDER_NAME: &str = "Amazon Bedrock Runtime";
@@ -256,6 +257,23 @@ fn default_aws_auth_refresh_timeout_ms() -> NonZeroU64 {
 }
 
 impl ModelProviderInfo {
+    /// Installs the managed direct llama.cpp route used by discovered local models.
+    pub fn install_llama_cpp_route(&mut self) {
+        self.wire_routes.insert(
+            LLAMA_CPP_ROUTE_NAME.to_string(),
+            ModelProviderWireRoute {
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::LlamaCpp,
+                base_url: format!("{}/v1", codex_api::LLAMA_CPP_LOCAL_ENDPOINT),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: Some(0),
+                stream_max_retries: Some(5),
+                stream_idle_timeout_ms: Some(300_000),
+            },
+        );
+    }
+
     pub fn validate(&self) -> std::result::Result<(), String> {
         for (name, route) in &self.wire_routes {
             if name.trim().is_empty() {
@@ -797,7 +815,10 @@ pub fn built_in_model_providers(
         ),
     ]
     .into_iter()
-    .map(|(k, v)| (k.to_string(), v))
+    .map(|(key, mut provider)| {
+        provider.install_llama_cpp_route();
+        (key.to_string(), provider)
+    })
     .collect()
 }
 
@@ -843,6 +864,10 @@ other non-default provider fields are not supported"
         } else {
             model_providers.entry(key).or_insert(provider);
         }
+    }
+
+    for provider in model_providers.values_mut() {
+        provider.install_llama_cpp_route();
     }
 
     Ok(model_providers)

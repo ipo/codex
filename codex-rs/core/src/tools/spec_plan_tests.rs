@@ -390,19 +390,26 @@ fn use_grok(turn: &mut TurnContext) {
     });
 }
 
-fn use_local_llama(turn: &mut TurnContext) {
+fn use_llama_cpp(turn: &mut TurnContext) {
     update_turn_settings_for_test(turn, |settings| {
-        Arc::make_mut(&mut settings.model_info).inference =
-            Some(ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
-                wire_api: WireApi::Responses,
-                dialect: InferenceDialect::LlamaCpp,
-                route: "llama_cpp".to_string(),
-                expected_model_basename: "local.gguf".to_string(),
-                context_window: 128_000,
-                max_input_tokens: 96_000,
-                max_output_tokens: 28_000,
-                safety_margin_tokens: 4_000,
-            }));
+        let model = Arc::make_mut(&mut settings.model_info);
+        model.inference = Some(ModelInferenceConfig::LlamaCpp(LlamaCppInferenceConfig {
+            wire_api: WireApi::Responses,
+            dialect: InferenceDialect::LlamaCpp,
+            route: "llama_cpp".to_string(),
+            expected_model_basename: "qwen-test.gguf".to_string(),
+            context_window: 32_768,
+            max_input_tokens: 23_552,
+            max_output_tokens: 8_192,
+            safety_margin_tokens: 1_024,
+        }));
+        model.apply_patch_tool_type = None;
+        model.disabled_tools = vec![
+            ModelToolCapability::ToolSearch,
+            ModelToolCapability::WebSearch,
+            ModelToolCapability::ImageGeneration,
+            ModelToolCapability::CodexApps,
+        ];
     });
 }
 
@@ -1400,6 +1407,20 @@ async fn environment_count_controls_environment_backed_tools() {
 }
 
 #[tokio::test]
+async fn llama_cpp_exposes_apply_patch_and_only_plain_function_specs() {
+    let plan = probe(use_llama_cpp).await;
+
+    plan.assert_visible_contains(&["apply_patch"]);
+    assert!(
+        plan.visible_specs
+            .iter()
+            .all(|spec| matches!(spec, ToolSpec::Function(_))),
+        "llama.cpp received non-function specs: {:?}",
+        plan.visible_specs
+    );
+}
+
+#[tokio::test]
 async fn environment_tools_follow_the_step_context() {
     let (_session, mut turn) = make_session_and_context().await;
     update_turn_settings_for_test(&mut turn, |settings| {
@@ -1676,39 +1697,33 @@ async fn native_models_use_flat_functions_for_plain_patch_and_deferred_tools() {
 }
 
 #[tokio::test]
-async fn grok_tool_wire_extension_does_not_change_other_responses_families() {
-    for configure_responses in [
-        (|_turn: &mut TurnContext| {}) as fn(&mut TurnContext),
-        use_local_llama as fn(&mut TurnContext),
-    ] {
-        let plan = probe_with(
-            |turn| {
-                configure_responses(turn);
-                update_turn_settings_for_test(turn, |settings| {
-                    Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
-                });
-            },
-            ToolPlanInputs {
-                tool_runtimes: vec![mcp_runtime(
-                    "searchable",
-                    "mcp__searchable",
-                    "lookup",
-                    ToolExposure::Deferred,
-                )],
-                ..ToolPlanInputs::default()
-            },
-        )
-        .await;
+async fn grok_tool_wire_extension_does_not_change_standard_responses_shapes() {
+    let plan = probe_with(
+        |turn| {
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).supports_search_tool = true;
+            });
+        },
+        ToolPlanInputs {
+            tool_runtimes: vec![mcp_runtime(
+                "searchable",
+                "mcp__searchable",
+                "lookup",
+                ToolExposure::Deferred,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
 
-        assert!(matches!(
-            plan.visible_spec("apply_patch"),
-            ToolSpec::Freeform(_)
-        ));
-        assert!(matches!(
-            plan.visible_spec("tool_search"),
-            ToolSpec::ToolSearch { .. }
-        ));
-    }
+    assert!(matches!(
+        plan.visible_spec("apply_patch"),
+        ToolSpec::Freeform(_)
+    ));
+    assert!(matches!(
+        plan.visible_spec("tool_search"),
+        ToolSpec::ToolSearch { .. }
+    ));
 }
 
 #[tokio::test]

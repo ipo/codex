@@ -1241,7 +1241,18 @@ async fn run_auto_compact(
         return Ok(());
     }
 
-    match turn_context.provider.capabilities().remote_compaction {
+    let remote_compaction = if matches!(
+        turn_context
+            .provider
+            .info()
+            .resolve_inference_plan(turn_context.model_info()),
+        Ok(codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { .. })
+    ) {
+        RemoteCompactionSupport::Unsupported
+    } else {
+        turn_context.provider.capabilities().remote_compaction
+    };
+    match remote_compaction {
         RemoteCompactionSupport::V2
             if turn_context
                 .config

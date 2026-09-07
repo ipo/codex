@@ -608,7 +608,7 @@ fn test_built_in_model_providers_include_amazon_bedrock_runtime() {
 #[test]
 fn test_built_in_model_providers_include_native_kimi_route() {
     let providers = built_in_model_providers(/*openai_base_url*/ None);
-    let expected = ModelProviderInfo {
+    let mut expected = ModelProviderInfo {
         name: "Claudeflare".to_string(),
         base_url: Some(CLAUDEFLARE_RESPONSES_BASE_URL.to_string()),
         wire_api: WireApi::Responses,
@@ -644,6 +644,7 @@ fn test_built_in_model_providers_include_native_kimi_route() {
         supports_websockets: false,
         ..ModelProviderInfo::default()
     };
+    expected.install_llama_cpp_route();
 
     assert_eq!(providers.get(CLAUDEFLARE_PROVIDER_ID), Some(&expected));
 }

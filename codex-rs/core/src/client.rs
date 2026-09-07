@@ -177,6 +177,7 @@ const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const COMPACT_REQUEST_TIMEOUT_IDLE_MULTIPLIER: u32 = 4;
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 mod grok_dispatch;
+mod llama_cpp_dispatch;
 #[cfg(test)]
 pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
     Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
@@ -2084,8 +2085,23 @@ impl ModelClientSession {
                     )
                     .await;
             }
-            codex_model_provider_info::ResolvedInferencePlan::Anthropic { .. }
-            | codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { .. } => {
+            codex_model_provider_info::ResolvedInferencePlan::LlamaCpp { config, route } => {
+                return self
+                    .stream_llama_cpp(
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                        effort,
+                        summary,
+                        service_tier,
+                        responses_metadata,
+                        inference_trace,
+                        config,
+                        route,
+                    )
+                    .await;
+            }
+            codex_model_provider_info::ResolvedInferencePlan::Anthropic { .. } => {
                 return Err(CodexErr::InvalidRequest(format!(
                     "model `{}` declares explicit native inference routing, which is not active in this build",
                     model_info.slug

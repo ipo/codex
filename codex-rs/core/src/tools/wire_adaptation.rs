@@ -196,6 +196,10 @@ pub(crate) fn wire_supports_encrypted_tool_content(
     model_info: &ModelInfo,
 ) -> bool {
     !native_wire(turn_context, model_info)
+        && !matches!(
+            model_info.inference.as_ref(),
+            Some(ModelInferenceConfig::LlamaCpp(_))
+        )
 }
 
 pub(crate) fn response_input_contains_encrypted_tool_content(response: &ResponseInputItem) -> bool {

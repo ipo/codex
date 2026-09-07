@@ -326,9 +326,10 @@ fn provider_uses_first_party_auth_path(provider: &ModelProviderInfo) -> bool {
 
 /// Creates the default runtime model provider for configured provider metadata.
 pub fn create_model_provider(
-    provider_info: ModelProviderInfo,
+    mut provider_info: ModelProviderInfo,
     auth_manager: Option<Arc<AuthManager>>,
 ) -> SharedModelProvider {
+    provider_info.install_llama_cpp_route();
     if provider_info.is_amazon_bedrock() {
         Arc::new(AmazonBedrockModelProvider::new(provider_info, auth_manager))
     } else {
@@ -466,11 +467,13 @@ impl ModelProvider for ConfiguredModelProvider {
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_with_overlay(
-                    codex_home,
-                    endpoint,
-                    self.auth_manager.clone(),
-                    model_catalog_overlay,
+                crate::llama_cpp::with_llama_cpp_models(Arc::new(
+                    OpenAiModelsManager::new_with_overlay(
+                        codex_home,
+                        endpoint,
+                        self.auth_manager.clone(),
+                        model_catalog_overlay,
+                    ),
                 ))
             }
         }
@@ -492,10 +495,12 @@ impl ModelProvider for ConfiguredModelProvider {
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_without_cache_with_overlay(
-                    endpoint,
-                    self.auth_manager.clone(),
-                    model_catalog_overlay,
+                crate::llama_cpp::with_llama_cpp_models(Arc::new(
+                    OpenAiModelsManager::new_without_cache_with_overlay(
+                        endpoint,
+                        self.auth_manager.clone(),
+                        model_catalog_overlay,
+                    ),
                 ))
             }
         }
@@ -518,11 +523,13 @@ impl ModelProvider for ConfiguredModelProvider {
                     self.info.clone(),
                     self.auth_manager.clone(),
                 ));
-                Arc::new(OpenAiModelsManager::new_with_cache_and_overlay(
-                    cache,
-                    endpoint,
-                    self.auth_manager.clone(),
-                    model_catalog_overlay,
+                crate::llama_cpp::with_llama_cpp_models(Arc::new(
+                    OpenAiModelsManager::new_with_cache_and_overlay(
+                        cache,
+                        endpoint,
+                        self.auth_manager.clone(),
+                        model_catalog_overlay,
+                    ),
                 ))
             }
         }
