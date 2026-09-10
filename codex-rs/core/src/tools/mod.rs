@@ -28,6 +28,7 @@ use crate::session::turn_context::TurnContext;
 pub(crate) use approvals::ApprovalContext;
 use codex_features::Feature;
 use codex_protocol::exec_output::ExecToolCallOutput;
+use codex_protocol::model_inference::ModelInferenceConfig;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ToolMode;
 use codex_tools::ToolName;
@@ -69,6 +70,16 @@ pub(crate) fn tool_user_shell_type(
 }
 
 pub(crate) fn requested_tool_mode(turn_context: &TurnContext, model_info: &ModelInfo) -> ToolMode {
+    // llama.cpp Responses supports only plain function tools. Force Direct
+    // before consulting inherited `tool_mode` or CodeMode feature flags so a
+    // catalog overlay cannot plan the code-mode freeform `exec` spec.
+    if matches!(
+        model_info.inference,
+        Some(ModelInferenceConfig::LlamaCpp(_))
+    ) {
+        return ToolMode::Direct;
+    }
+
     model_info.tool_mode.unwrap_or_else(|| {
         if turn_context.config.features.enabled(Feature::CodeModeOnly) {
             ToolMode::CodeModeOnly

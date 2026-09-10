@@ -305,7 +305,7 @@ fn rejects_non_function_tool_specs() {
         validate_tools(&invalid)
             .expect_err("tool search should be rejected")
             .to_string(),
-        "direct llama.cpp Responses supports only plain function tools"
+        "direct llama.cpp Responses supports only plain function tools; got tool_search (ToolSearch)"
     );
 }
 

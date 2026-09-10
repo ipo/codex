@@ -12,16 +12,27 @@ use crate::context::ContextualUserFragment;
 use super::*;
 
 pub(super) fn validate_tools(prompt: &Prompt) -> Result<()> {
-    if prompt
+    let unsupported: Vec<String> = prompt
         .tools
         .iter()
-        .any(|tool| !matches!(tool, ToolSpec::Function(_)))
-    {
-        return Err(CodexErr::InvalidRequest(
-            "direct llama.cpp Responses supports only plain function tools".to_string(),
-        ));
+        .filter_map(|tool| {
+            let kind = match tool {
+                ToolSpec::Function(_) => return None,
+                ToolSpec::Namespace(_) => "Namespace",
+                ToolSpec::ToolSearch { .. } => "ToolSearch",
+                ToolSpec::WebSearch { .. } => "WebSearch",
+                ToolSpec::Freeform(_) => "Freeform",
+            };
+            Some(format!("{} ({kind})", tool.name()))
+        })
+        .collect();
+    if unsupported.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    Err(CodexErr::InvalidRequest(format!(
+        "direct llama.cpp Responses supports only plain function tools; got {}",
+        unsupported.join(", ")
+    )))
 }
 
 pub(super) fn normalize_input(prompt: &Prompt) -> Result<Vec<ResponseItem>> {

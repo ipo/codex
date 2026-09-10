@@ -1421,6 +1421,46 @@ async fn llama_cpp_exposes_apply_patch_and_only_plain_function_specs() {
 }
 
 #[tokio::test]
+async fn llama_cpp_forces_direct_function_specs_even_when_tool_mode_is_code_mode_only() {
+    let plan = probe(|turn| {
+        use_llama_cpp(turn);
+        update_turn_settings_for_test(turn, |settings| {
+            Arc::make_mut(&mut settings.model_info).tool_mode = Some(ToolMode::CodeModeOnly);
+        });
+    })
+    .await;
+
+    let non_function_specs: Vec<(&str, &str)> = plan
+        .visible_specs
+        .iter()
+        .filter_map(|spec| {
+            let kind = match spec {
+                ToolSpec::Function(_) => return None,
+                ToolSpec::Namespace(_) => "Namespace",
+                ToolSpec::ToolSearch { .. } => "ToolSearch",
+                ToolSpec::WebSearch { .. } => "WebSearch",
+                ToolSpec::Freeform(_) => "Freeform",
+            };
+            Some((spec.name(), kind))
+        })
+        .collect();
+    assert_eq!(non_function_specs, Vec::<(&str, &str)>::new());
+
+    let freeform_exec: Vec<&str> = plan
+        .visible_specs
+        .iter()
+        .filter(|spec| {
+            matches!(
+                spec,
+                ToolSpec::Freeform(tool) if tool.name == codex_code_mode::PUBLIC_TOOL_NAME
+            )
+        })
+        .map(ToolSpec::name)
+        .collect();
+    assert_eq!(freeform_exec, Vec::<&str>::new());
+}
+
+#[tokio::test]
 async fn environment_tools_follow_the_step_context() {
     let (_session, mut turn) = make_session_and_context().await;
     update_turn_settings_for_test(&mut turn, |settings| {
