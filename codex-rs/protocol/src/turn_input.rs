@@ -173,6 +173,13 @@ pub struct TurnStartOptions {
     /// Explicit cyber treatment for this turn. Omission preserves the backend's
     /// automatic behavior.
     pub cyber_access_program: Option<CyberAccessProgram>,
+    /// When set, Core constructs this new turn from the immediately preceding
+    /// turn's resolved model without persisting a thread-settings update.
+    /// Missing previous model keeps ordinary startup behavior. An unresolvable
+    /// previous model fails the start before task/history replay.
+    /// Use `CodexThread::start_continuation_turn_if_idle` rather than setting
+    /// this flag directly.
+    pub inherit_previous_model: bool,
 }
 
 /// What Core did with input submitted through `start_or_steer_turn`.

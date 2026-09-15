@@ -2823,6 +2823,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-system",
  "codex-git-utils",
+ "codex-goal-extension",
  "codex-guardian-context",
  "codex-history",
  "codex-home",

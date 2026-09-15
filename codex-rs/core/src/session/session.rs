@@ -554,6 +554,8 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,
     pub(crate) service_tier_for_turn: Option<String>,
+    /// Start-only model used to construct a new turn without persisting thread settings.
+    pub(crate) model_for_turn: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
 }

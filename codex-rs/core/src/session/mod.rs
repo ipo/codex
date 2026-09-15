@@ -44,6 +44,7 @@ use crate::realtime_history::RealtimeEventOrder;
 use crate::session::step_context::StepContext;
 use crate::session::step_settings::ResolvedStepSettings;
 use crate::session::step_settings::StepSettings;
+use crate::session::step_settings::StepSettingsUpdate;
 use crate::session::turn_context::TurnEnvironment;
 use crate::session_prefix::format_inter_agent_completion_message;
 use crate::skills_load_input_from_config;
@@ -1715,14 +1716,18 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<SessionSettingsCommit> {
-        let Some(commit) = self.update_settings_if(updates, |_, _| true).await? else {
+        let Some(commit) = self
+            .update_settings_if(updates, /*step_settings_for_turn*/ None, |_, _| true)
+            .await?
+        else {
             unreachable!("unconditional settings updates must commit");
         };
         Ok(commit)
     }
 
     /// Evaluates the caller's synchronous predicate against the current configuration
-    /// and validated candidate under the same state lock used for publication.
+    /// and validated turn candidate under the same state lock used for publication.
+    /// `step_settings_for_turn` affect that candidate without becoming thread settings.
     /// This prevents a stale admission decision. Rejection has no settings or runtime
     /// effects.
     ///
@@ -1731,6 +1736,7 @@ impl Session {
     async fn update_settings_if(
         &self,
         updates: SessionSettingsUpdate,
+        step_settings_for_turn: Option<StepSettingsUpdate>,
         should_commit: impl FnOnce(&SessionConfiguration, &SessionConfiguration) -> bool + Send,
     ) -> ConstraintResult<Option<SessionSettingsCommit>> {
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
@@ -1744,8 +1750,19 @@ impl Session {
                     return Err(err);
                 }
             };
+            let configuration_for_turn = if let Some(step_settings) = step_settings_for_turn {
+                self.apply_session_settings(
+                    &updated,
+                    &SessionSettingsUpdate {
+                        step_settings,
+                        ..Default::default()
+                    },
+                )?
+            } else {
+                updated.clone()
+            };
 
-            if !should_commit(&state.session_configuration, &updated) {
+            if !should_commit(&state.session_configuration, &configuration_for_turn) {
                 return Ok(None);
             }
 
@@ -1788,7 +1805,7 @@ impl Session {
             let new_config = notify_config_contributors
                 .then(|| self.build_effective_session_config(&state.session_configuration));
             let commit = SessionSettingsCommit {
-                configuration: state.session_configuration.clone(),
+                configuration: configuration_for_turn,
                 snapshot: state
                     .session_configuration
                     .thread_settings_snapshot(&self.services.turn_environments.selections()),

@@ -451,7 +451,7 @@ impl GoalRuntimeHandle {
         );
 
         match thread
-            .start_turn_if_idle(
+            .start_continuation_turn_if_idle(
                 TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
                     turn_trigger: Some("goal".to_string()),
                     ..start_options
@@ -467,10 +467,7 @@ impl GoalRuntimeHandle {
                 );
             }
             Err(error) => {
-                tracing::debug!(
-                    %error,
-                    "skipping goal continuation because turn input submission failed"
-                );
+                return Err(error.to_string());
             }
         }
 

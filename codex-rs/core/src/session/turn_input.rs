@@ -18,6 +18,7 @@ use super::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
+use codex_features::Feature;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -131,7 +132,28 @@ impl PreparedTurnInputSettings {
             parent_turn_id,
             root_turn_id,
             cyber_access_program,
+            inherit_previous_model,
         } = self.start_options;
+        let model_for_turn = if inherit_previous_model {
+            match continuation_model_for_turn(session).await {
+                Ok(model) => model,
+                Err(error) => {
+                    session
+                        .send_event_raw(Event {
+                            id: submission_id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                misalignment: None,
+                                message: error.to_string(),
+                                codex_error_info: Some(CodexErrorInfo::BadRequest),
+                            }),
+                        })
+                        .await;
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         let emit_thread_settings_applied = self.thread_settings_update.is_some();
         let _settings_guard = if emit_thread_settings_applied {
             Some(thread_settings::acquire_persistence_lock(session).await)
@@ -140,6 +162,7 @@ impl PreparedTurnInputSettings {
         };
         let mut updates = self.thread_settings_update.unwrap_or_default();
         updates.service_tier_for_turn = service_tier;
+        updates.model_for_turn = model_for_turn;
 
         let options = NewTurnContextOptions {
             final_output_json_schema,
@@ -196,6 +219,33 @@ impl PreparedTurnInputSettings {
             .await
             .map_err(|error| CodexErr::InvalidRequest(error.to_string()))
     }
+}
+
+async fn continuation_model_for_turn(session: &Session) -> CodexResult<Option<String>> {
+    let Some(previous) = session.previous_turn_settings().await else {
+        return Ok(None);
+    };
+    let (overrides, personality, personality_enabled) = {
+        let state = session.state.lock().await;
+        (
+            state.session_configuration.model_info_overrides.clone(),
+            state.session_configuration.step_settings.personality,
+            session.features.enabled(Feature::Personality),
+        )
+    };
+    let config = overrides.models_manager_config(personality, personality_enabled);
+    let model_info = session
+        .services
+        .models_manager
+        .get_model_info(&previous.model, &config)
+        .await;
+    if model_info.used_fallback_model_metadata {
+        return Err(CodexErr::InvalidRequest(format!(
+            "automatic continuation cannot resolve previous model `{}` from model history",
+            previous.model
+        )));
+    }
+    Ok(Some(model_info.slug))
 }
 
 pub(super) async fn handle(

@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::Constrained;
+use crate::session::PreviousTurnSettings;
 use crate::session::step_settings::StepSettingsUpdate;
 use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
@@ -18,6 +19,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::protocol::TurnAbortReason;
@@ -995,5 +997,147 @@ async fn rejects_non_regular_turns() {
         );
 
         session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+    }
+}
+
+fn inherit_previous_model_start_options() -> TurnStartOptions {
+    TurnStartOptions {
+        inherit_previous_model: true,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn continuation_without_previous_model_keeps_startup_model() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let expected_model = turn_context.model_info().slug.clone();
+    let persisted = session.collaboration_mode().await;
+    assert_eq!(session.previous_turn_settings().await, None);
+
+    let prepared = PreparedTurnInputSettings::prepare(
+        &session,
+        ThreadSettingsOverrides::default(),
+        inherit_previous_model_start_options(),
+    )
+    .await
+    .expect("missing previous model should prepare");
+    let continuation = prepared
+        .apply_started(
+            &session,
+            "missing-previous-model".to_string(),
+            TurnStartKind::Automatic,
+        )
+        .await
+        .expect("missing previous model should start")
+        .expect("automatic start is permitted");
+
+    assert_eq!(continuation.model_info().slug, expected_model);
+    assert_eq!(session.collaboration_mode().await, persisted);
+    while let Ok(event) = rx.try_recv() {
+        assert!(!matches!(event.msg, EventMsg::ThreadSettingsApplied(_)));
+    }
+}
+
+#[tokio::test]
+async fn continuation_rejects_unresolvable_previous_model_before_start() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let persisted = session.collaboration_mode().await;
+    let expected_model = turn_context.model_info().slug.clone();
+    session
+        .set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: "unresolvable-continuation-model".to_string(),
+            comp_hash: None,
+            realtime_active: None,
+        }))
+        .await;
+
+    let prepared = PreparedTurnInputSettings::prepare(
+        &session,
+        ThreadSettingsOverrides::default(),
+        inherit_previous_model_start_options(),
+    )
+    .await
+    .expect("unresolvable previous model should still prepare");
+    let result = prepared
+        .apply_started(
+            &session,
+            "unresolvable-previous-model".to_string(),
+            TurnStartKind::Automatic,
+        )
+        .await;
+    let Err(error) = result else {
+        panic!("unresolvable previous model must fail before constructing a turn");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("automatic continuation cannot resolve previous model `unresolvable-continuation-model` from model history"),
+        "{error}"
+    );
+    assert_eq!(session.collaboration_mode().await, persisted);
+    assert_eq!(turn_context.model_info().slug, expected_model);
+    assert!(session.active_turn.lock().await.is_none());
+
+    let mut saw_error = false;
+    while let Ok(event) = rx.try_recv() {
+        match event.msg {
+            EventMsg::Error(error) => {
+                assert!(error.message.contains(
+                    "automatic continuation cannot resolve previous model `unresolvable-continuation-model` from model history"
+                ));
+                saw_error = true;
+            }
+            EventMsg::ThreadSettingsApplied(_) => {
+                panic!("unresolvable continuation must not apply thread settings")
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        saw_error,
+        "unresolvable continuation must report a model-history error"
+    );
+}
+
+#[tokio::test]
+async fn continuation_uses_previous_model_without_persisting_thread_settings() {
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    let persisted = session.collaboration_mode().await;
+    let previous_model = if persisted.model() == "gpt-5.6-terra" {
+        "gpt-5.5"
+    } else {
+        "gpt-5.6-terra"
+    };
+    assert_ne!(persisted.model(), previous_model);
+    session
+        .set_previous_turn_settings(Some(PreviousTurnSettings {
+            model: previous_model.to_string(),
+            comp_hash: None,
+            realtime_active: None,
+        }))
+        .await;
+
+    let prepared = PreparedTurnInputSettings::prepare(
+        &session,
+        ThreadSettingsOverrides::default(),
+        inherit_previous_model_start_options(),
+    )
+    .await
+    .expect("resolvable previous model should prepare");
+    let continuation = prepared
+        .apply_started(
+            &session,
+            "inherit-previous-model".to_string(),
+            TurnStartKind::Automatic,
+        )
+        .await
+        .expect("resolvable previous model should start")
+        .expect("automatic start is permitted");
+
+    assert_eq!(continuation.model_info().slug, previous_model);
+    assert_eq!(session.collaboration_mode().await, persisted);
+    assert_eq!(turn_context.model_info().slug, persisted.model());
+    while let Ok(event) = rx.try_recv() {
+        assert!(!matches!(event.msg, EventMsg::ThreadSettingsApplied(_)));
     }
 }

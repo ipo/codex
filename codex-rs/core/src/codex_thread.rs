@@ -350,6 +350,20 @@ impl CodexThread {
         }
     }
 
+    /// Starts a regular turn only when the thread is idle, using the immediately
+    /// preceding turn's resolved model for this turn only.
+    ///
+    /// Persistent thread settings are unchanged and Core does not emit
+    /// `ThreadSettingsApplied`. Missing previous model keeps ordinary startup
+    /// behavior. An unresolvable previous model fails before task/history replay.
+    pub async fn start_continuation_turn_if_idle(
+        &self,
+        mut request: TurnInputRequest,
+    ) -> CodexResult<StartIfIdleSubmission> {
+        request.start.inherit_previous_model = true;
+        self.start_turn_if_idle(request).await
+    }
+
     /// Resumes an interrupted regular turn only when the thread is idle.
     ///
     /// Recovery starts no new user input and preserves the turn ID that was

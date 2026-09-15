@@ -1,4 +1,5 @@
 use super::step_settings::ResolvedStepSettings;
+use super::step_settings::StepSettingsUpdate;
 use super::token_budget::has_explicit_settings;
 use super::token_budget::resolve_token_budget;
 use super::*;
@@ -858,7 +859,18 @@ impl Session {
         should_start: impl FnOnce(&SessionConfiguration, &SessionConfiguration) -> bool + Send,
     ) -> CodexResult<Option<(Arc<TurnContext>, ThreadSettingsSnapshot)>> {
         let service_tier_for_turn = updates.service_tier_for_turn.clone();
-        let commit = match self.update_settings_if(updates, should_start).await {
+        let step_settings_for_turn =
+            updates
+                .model_for_turn
+                .clone()
+                .map(|model| StepSettingsUpdate {
+                    model: Some(model),
+                    ..Default::default()
+                });
+        let commit = match self
+            .update_settings_if(updates, step_settings_for_turn, should_start)
+            .await
+        {
             Ok(Some(commit)) => commit,
             Ok(None) => return Ok(None),
             Err(error) => {
