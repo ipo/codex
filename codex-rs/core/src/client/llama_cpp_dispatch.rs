@@ -70,7 +70,11 @@ impl ModelClientSession {
             .prepare(&model_info.slug, input)
             .await
             .map_err(|error| self.client.state.provider.map_api_error(error))?;
-        if prepared.model.display_name != config.expected_model_basename {
+        if !discovered_model_matches_expected(
+            &prepared.model,
+            &config.expected_model_basename,
+            &model_info.slug,
+        ) {
             return Err(CodexErr::InvalidRequest(format!(
                 "llama.cpp model metadata expected `{}` but discovery selected `{}`",
                 config.expected_model_basename, prepared.model.display_name
@@ -118,4 +122,18 @@ fn validate_route(route: &ResolvedWireRoute) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn discovered_model_matches_expected(
+    discovered: &codex_api::LlamaCppCatalogEntry,
+    expected_model_basename: &str,
+    requested_slug: &str,
+) -> bool {
+    discovered.display_name == expected_model_basename
+        || discovered.canonical_id == expected_model_basename
+        || discovered.canonical_id == requested_slug
+        || discovered
+            .aliases
+            .iter()
+            .any(|alias| alias == expected_model_basename || alias == requested_slug)
 }

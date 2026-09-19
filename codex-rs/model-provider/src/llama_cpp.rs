@@ -1,15 +1,17 @@
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_api::LLAMA_CPP_LOCAL_ENDPOINT;
 use codex_api::LlamaCppCatalog;
 use codex_api::LlamaCppCatalogEntry;
 use codex_api::LlamaCppRuntime;
-use codex_http_client::ClientRouteClass;
+use codex_http_client::HttpClientBuilder;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
-use codex_login::default_client::create_client_for_route_async;
 use codex_model_provider_info::LLAMA_CPP_ROUTE_NAME;
+use codex_models_manager::ModelsManagerConfig;
 use codex_models_manager::manager::ModelsManager;
 use codex_models_manager::manager::ModelsManagerFuture;
 use codex_models_manager::manager::RefreshStrategy;
@@ -38,52 +40,43 @@ const BASELINE_MODEL: &str = "gpt-5.6-sol";
 #[derive(Debug)]
 pub(crate) struct LlamaCppModelsManager {
     inner: SharedModelsManager,
-    local_models: RwLock<Vec<ModelInfo>>,
+    local_models: Arc<RwLock<Vec<ModelInfo>>>,
+    discovery: Arc<DiscoveryGate>,
+    endpoint: String,
+}
+
+#[derive(Debug)]
+struct DiscoveryGate {
+    in_flight: AtomicBool,
 }
 
 impl LlamaCppModelsManager {
     fn new(inner: SharedModelsManager) -> Self {
+        Self::new_with_endpoint(inner, LLAMA_CPP_LOCAL_ENDPOINT.to_string())
+    }
+
+    fn new_with_endpoint(inner: SharedModelsManager, endpoint: String) -> Self {
         Self {
             inner,
-            local_models: RwLock::new(Vec::new()),
+            local_models: Arc::new(RwLock::new(Vec::new())),
+            discovery: Arc::new(DiscoveryGate {
+                in_flight: AtomicBool::new(false),
+            }),
+            endpoint,
         }
     }
 
-    async fn refresh_local_models(
-        &self,
-        base_models: &[ModelInfo],
-        http_client_factory: HttpClientFactory,
-    ) {
-        let discovery = tokio::time::timeout(DISCOVERY_TIMEOUT, async move {
-            let http_client = create_client_for_route_async(
-                http_client_factory,
-                LLAMA_CPP_LOCAL_ENDPOINT.to_string(),
-                ClientRouteClass::Api,
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            LlamaCppRuntime::new(http_client)
-                .catalog()
-                .await
-                .map_err(|error| error.to_string())
-        })
-        .await;
-        let catalog = match discovery {
-            Ok(Ok(catalog)) => catalog,
-            Ok(Err(error)) => {
-                warn!(error, "llama.cpp model discovery failed");
-                return;
-            }
-            Err(_) => {
-                warn!("llama.cpp model discovery timed out");
-                return;
-            }
-        };
-        let Some(models) = local_model_infos(base_models, &catalog) else {
-            warn!("llama.cpp model discovery could not find baseline model metadata");
+    fn spawn_refresh_local_models(&self, base_models: Vec<ModelInfo>) {
+        if !self.discovery.try_begin() {
             return;
-        };
-        *self.local_models.write().await = models;
+        }
+        let local_models = Arc::clone(&self.local_models);
+        let discovery = Arc::clone(&self.discovery);
+        let endpoint = self.endpoint.clone();
+        tokio::spawn(async move {
+            let _in_flight = DiscoveryInFlight(discovery);
+            refresh_local_models(local_models, base_models, endpoint).await;
+        });
     }
 
     async fn append_local_models(&self, models: &mut Vec<ModelInfo>) {
@@ -102,11 +95,10 @@ impl ModelsManager for LlamaCppModelsManager {
         Box::pin(async move {
             let mut catalog = self
                 .inner
-                .raw_model_catalog(refresh_strategy, http_client_factory.clone())
+                .raw_model_catalog(refresh_strategy, http_client_factory)
                 .await;
             if refresh_strategy != RefreshStrategy::Offline {
-                self.refresh_local_models(&catalog.models, http_client_factory)
-                    .await;
+                self.spawn_refresh_local_models(catalog.models.clone());
             }
             self.append_local_models(&mut catalog.models).await;
             catalog
@@ -137,6 +129,28 @@ impl ModelsManager for LlamaCppModelsManager {
         self.inner.list_collaboration_modes()
     }
 
+    fn get_model_info<'a>(
+        &'a self,
+        model: &'a str,
+        config: &'a ModelsManagerConfig,
+    ) -> ModelsManagerFuture<'a, ModelInfo> {
+        Box::pin(async move {
+            let remote_models = self.get_remote_models().await;
+            if let Some(local) = remote_models
+                .iter()
+                .find(|candidate| llama_cpp_model_covers(candidate, model))
+            {
+                return local.clone();
+            }
+            if looks_like_llama_cpp_model(model)
+                && let Some(synthetic) = synthetic_local_model_info(&remote_models, model)
+            {
+                return synthetic;
+            }
+            self.inner.get_model_info(model, config).await
+        })
+    }
+
     fn refresh_if_new_etag(
         &self,
         etag: String,
@@ -144,17 +158,71 @@ impl ModelsManager for LlamaCppModelsManager {
     ) -> ModelsManagerFuture<'_, ()> {
         Box::pin(async move {
             self.inner
-                .refresh_if_new_etag(etag, http_client_factory.clone())
+                .refresh_if_new_etag(etag, http_client_factory)
                 .await;
             let base_models = self.inner.get_remote_models().await;
-            self.refresh_local_models(&base_models, http_client_factory)
-                .await;
+            self.spawn_refresh_local_models(base_models);
         })
     }
 }
 
 pub(crate) fn with_llama_cpp_models(inner: SharedModelsManager) -> SharedModelsManager {
     Arc::new(LlamaCppModelsManager::new(inner))
+}
+
+impl DiscoveryGate {
+    fn try_begin(&self) -> bool {
+        self.in_flight
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    fn finish(&self) {
+        self.in_flight.store(false, Ordering::SeqCst);
+    }
+}
+
+struct DiscoveryInFlight(Arc<DiscoveryGate>);
+
+impl Drop for DiscoveryInFlight {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
+}
+
+async fn refresh_local_models(
+    local_models: Arc<RwLock<Vec<ModelInfo>>>,
+    base_models: Vec<ModelInfo>,
+    endpoint: String,
+) {
+    let discovery = tokio::time::timeout(DISCOVERY_TIMEOUT, async move {
+        let http_client = HttpClientBuilder::new()
+            .build_direct()
+            .map_err(|error| error.to_string())?;
+        let runtime = if endpoint == LLAMA_CPP_LOCAL_ENDPOINT {
+            LlamaCppRuntime::new(http_client)
+        } else {
+            LlamaCppRuntime::new_with_endpoint(http_client, &endpoint)
+        };
+        runtime.catalog().await.map_err(|error| error.to_string())
+    })
+    .await;
+    let catalog = match discovery {
+        Ok(Ok(catalog)) => catalog,
+        Ok(Err(error)) => {
+            warn!(error, "llama.cpp model discovery failed");
+            return;
+        }
+        Err(_) => {
+            warn!("llama.cpp model discovery timed out");
+            return;
+        }
+    };
+    let Some(models) = local_model_infos(&base_models, &catalog) else {
+        warn!("llama.cpp model discovery could not find baseline model metadata");
+        return;
+    };
+    *local_models.write().await = models;
 }
 
 fn local_model_infos(
@@ -273,6 +341,53 @@ fn replace_or_append(models: &mut Vec<ModelInfo>, model: ModelInfo) {
         models[index] = model;
     } else {
         models.push(model);
+    }
+}
+
+fn llama_cpp_model_covers(model: &ModelInfo, requested: &str) -> bool {
+    matches!(model.inference, Some(ModelInferenceConfig::LlamaCpp(_)))
+        && (model.slug == requested || model.aliases.iter().any(|alias| alias == requested))
+}
+
+fn looks_like_llama_cpp_model(model: &str) -> bool {
+    let trimmed = model.trim();
+    trimmed == "llama-cpp-local"
+        || trimmed.starts_with("local/")
+        || trimmed.to_ascii_lowercase().ends_with(".gguf")
+}
+
+fn synthetic_local_model_info(base_models: &[ModelInfo], requested: &str) -> Option<ModelInfo> {
+    local_model_infos(
+        base_models,
+        &LlamaCppCatalog {
+            models: vec![synthetic_llama_cpp_entry(requested)],
+        },
+    )?
+    .into_iter()
+    .next()
+}
+
+fn synthetic_llama_cpp_entry(requested: &str) -> LlamaCppCatalogEntry {
+    let wire_model = requested.strip_prefix("local/").unwrap_or(requested);
+    let display_name = wire_model
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(wire_model)
+        .to_string();
+    let canonical_id = if requested.starts_with("local/") || requested == "llama-cpp-local" {
+        requested.to_string()
+    } else {
+        format!("local/{requested}")
+    };
+    LlamaCppCatalogEntry {
+        canonical_id,
+        wire_model: wire_model.to_string(),
+        display_name,
+        aliases: vec![requested.to_string()],
+        context_window: 32_768,
+        max_input_tokens: 23_552,
+        max_output_tokens: 8_192,
+        safety_margin_tokens: 1_024,
     }
 }
 

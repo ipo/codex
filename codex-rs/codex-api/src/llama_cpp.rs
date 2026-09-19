@@ -64,6 +64,18 @@ impl LlamaCppRuntime {
         )
     }
 
+    /// Isolated runtime for a specific llama.cpp endpoint. Used by tests and
+    /// non-default discovery targets so catalog state is not process-wide.
+    pub fn new_with_endpoint(http_client: HttpClient, endpoint: &str) -> Self {
+        Self::from_parts(
+            http_client,
+            endpoint,
+            Arc::new(Mutex::new(None)),
+            Arc::new(Semaphore::new(1)),
+        )
+    }
+
+    #[cfg(test)]
     fn for_endpoint(
         http_client: HttpClient,
         endpoint: &str,

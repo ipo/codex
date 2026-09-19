@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_api::LlamaCppCatalogEntry;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::LlamaCppInferenceConfig;
 use codex_protocol::model_inference::ModelInferenceConfig;
@@ -307,6 +308,40 @@ fn rejects_non_function_tool_specs() {
             .to_string(),
         "direct llama.cpp Responses supports only plain function tools; got tool_search (ToolSearch)"
     );
+}
+
+#[test]
+fn expected_basename_accepts_display_name_canonical_id_and_aliases() {
+    let discovered = LlamaCppCatalogEntry {
+        canonical_id: r"local/F:\models\Qwen3.8-IQ2_M.gguf".to_string(),
+        wire_model: r"F:\models\Qwen3.8-IQ2_M.gguf".to_string(),
+        display_name: "Qwen3.8-IQ2_M.gguf".to_string(),
+        aliases: vec!["Qwen3.8-IQ2_M".to_string(), "llama-cpp-local".to_string()],
+        context_window: 131_072,
+        max_input_tokens: 121_856,
+        max_output_tokens: 8_192,
+        safety_margin_tokens: 1_024,
+    };
+    assert!(super::discovered_model_matches_expected(
+        &discovered,
+        "Qwen3.8-IQ2_M.gguf",
+        r"local/F:\models\Qwen3.8-IQ2_M.gguf",
+    ));
+    assert!(super::discovered_model_matches_expected(
+        &discovered,
+        "llama-cpp-local",
+        "llama-cpp-local",
+    ));
+    assert!(super::discovered_model_matches_expected(
+        &discovered,
+        "Qwen3.8-IQ2_M",
+        "llama-cpp-local",
+    ));
+    assert!(!super::discovered_model_matches_expected(
+        &discovered,
+        "other.gguf",
+        "other.gguf",
+    ));
 }
 
 fn response_items(value: serde_json::Value) -> Vec<ResponseItem> {
