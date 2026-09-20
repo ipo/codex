@@ -1,5 +1,6 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 
 #[tokio::test]
 async fn replayed_command_completion_preserves_tracking_without_duplicate_starts() {
@@ -7,8 +8,16 @@ async fn replayed_command_completion_preserves_tracking_without_duplicate_starts
     chat.on_task_started();
     let mut item =
         begin_unified_exec_startup(&mut chat, "call-replay", "process-replay", "cat replay");
-    if let AppServerThreadItem::CommandExecution { status, .. } = &mut item {
+    if let AppServerThreadItem::CommandExecution {
+        status,
+        exit_code,
+        duration_ms,
+        ..
+    } = &mut item
+    {
         *status = AppServerCommandExecutionStatus::Completed;
+        *exit_code = Some(0);
+        *duration_ms = Some(600_000);
     }
 
     chat.handle_server_notification(
@@ -23,6 +32,7 @@ async fn replayed_command_completion_preserves_tracking_without_duplicate_starts
 
     assert!(chat.running_commands.is_empty());
     assert!(chat.unified_exec_processes.is_empty());
+    assert_eq!(chat.pending_notification, None);
     let history = drain_insert_history(&mut rx)
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -31,6 +41,85 @@ async fn replayed_command_completion_preserves_tracking_without_duplicate_starts
         history,
         vec!["• Ran cat replay\n  └ (no output)\n".to_string()]
     );
+}
+
+#[tokio::test]
+async fn long_background_terminal_completion_notifies_at_inclusive_threshold() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let exec = begin_unified_exec_startup(
+        &mut chat,
+        "call-long-background",
+        "process-long-background",
+        "cargo test -p codex-tui",
+    );
+
+    end_exec_with_duration(
+        &mut chat, exec, "", "", /*exit_code*/ 0, /*duration_ms*/ 600_000,
+    );
+
+    assert_eq!(
+        chat.pending_notification,
+        Some(Notification::BackgroundTerminalComplete {
+            command: "cargo test -p codex-tui".to_string(),
+            duration: Duration::from_millis(600_000),
+            exit_code: 0,
+        })
+    );
+    assert!(chat.unified_exec_processes.is_empty());
+}
+
+#[tokio::test]
+async fn short_background_terminal_completion_does_not_notify() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let exec = begin_unified_exec_startup(
+        &mut chat,
+        "call-short-background",
+        "process-short-background",
+        "cargo test -p codex-tui",
+    );
+
+    end_exec_with_duration(
+        &mut chat, exec, "", "", /*exit_code*/ 0, /*duration_ms*/ 599_999,
+    );
+
+    assert_eq!(chat.pending_notification, None);
+    assert!(chat.unified_exec_processes.is_empty());
+}
+
+#[tokio::test]
+async fn failed_long_background_terminal_completion_notifies() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let exec = begin_unified_exec_startup(
+        &mut chat,
+        "call-failed-background",
+        "process-failed-background",
+        "cargo test -p codex-tui",
+    );
+
+    end_exec_with_duration(
+        &mut chat, exec, "", "failed\n", /*exit_code*/ 42, /*duration_ms*/ 600_001,
+    );
+
+    assert_eq!(
+        chat.pending_notification,
+        Some(Notification::BackgroundTerminalComplete {
+            command: "cargo test -p codex-tui".to_string(),
+            duration: Duration::from_millis(600_001),
+            exit_code: 42,
+        })
+    );
+}
+
+#[tokio::test]
+async fn long_untracked_command_completion_does_not_notify() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let exec = begin_exec(&mut chat, "call-untracked", "cargo test -p codex-tui");
+
+    end_exec_with_duration(
+        &mut chat, exec, "", "", /*exit_code*/ 0, /*duration_ms*/ 600_000,
+    );
+
+    assert_eq!(chat.pending_notification, None);
 }
 
 #[tokio::test]

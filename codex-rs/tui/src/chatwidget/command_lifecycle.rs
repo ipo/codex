@@ -131,11 +131,14 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn on_command_execution_completed(&mut self, item: ThreadItem) {
+    pub(super) fn on_command_execution_completed(&mut self, item: ThreadItem, from_replay: bool) {
         let ThreadItem::CommandExecution {
             id,
             process_id,
             source,
+            status,
+            exit_code,
+            duration_ms,
             ..
         } = &item
         else {
@@ -150,7 +153,20 @@ impl ChatWidget {
             {
                 self.flush_unified_exec_wait_streak();
             }
-            self.track_unified_exec_process_end(id, process_id.as_deref());
+            let tracked_process = self.track_unified_exec_process_end(id, process_id.as_deref());
+            if !from_replay
+                && *source == ExecCommandSource::UnifiedExecStartup
+                && let Some(process) = tracked_process
+                && let Some(duration_ms) = duration_ms
+                && *duration_ms >= LONG_BACKGROUND_TERMINAL_DURATION_MS
+                && let Some(exit_code) = completed_command_exit_code(status.clone(), *exit_code)
+            {
+                self.notify(Notification::BackgroundTerminalComplete {
+                    command: process.command_display,
+                    duration: Duration::from_millis(*duration_ms as u64),
+                    exit_code,
+                });
+            }
             if !self.bottom_pane.is_task_running() {
                 return;
             }
@@ -194,14 +210,17 @@ impl ChatWidget {
         &mut self,
         call_id: &str,
         process_id: Option<&str>,
-    ) {
+    ) -> Option<UnifiedExecProcessSummary> {
         let key = process_id.unwrap_or(call_id);
-        let before = self.unified_exec_processes.len();
-        self.unified_exec_processes
-            .retain(|process| process.key != key);
-        if self.unified_exec_processes.len() != before {
+        let process_index = self
+            .unified_exec_processes
+            .iter()
+            .position(|process| process.key == key);
+        let process = process_index.map(|index| self.unified_exec_processes.remove(index));
+        if process.is_some() {
             self.sync_unified_exec_footer();
         }
+        process
     }
 
     pub(super) fn sync_unified_exec_footer(&mut self) {
@@ -453,5 +472,23 @@ impl ChatWidget {
         if is_user_shell {
             self.maybe_send_next_queued_input();
         }
+    }
+}
+
+const LONG_BACKGROUND_TERMINAL_DURATION_MS: i64 = 600_000;
+
+fn completed_command_exit_code(
+    status: codex_app_server_protocol::CommandExecutionStatus,
+    exit_code: Option<i32>,
+) -> Option<i32> {
+    match status {
+        codex_app_server_protocol::CommandExecutionStatus::Completed => {
+            Some(exit_code.unwrap_or_default())
+        }
+        codex_app_server_protocol::CommandExecutionStatus::Failed => {
+            Some(exit_code.filter(|code| *code != 0).unwrap_or(1))
+        }
+        codex_app_server_protocol::CommandExecutionStatus::InProgress
+        | codex_app_server_protocol::CommandExecutionStatus::Declined => None,
     }
 }

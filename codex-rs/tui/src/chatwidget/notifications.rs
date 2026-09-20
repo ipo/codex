@@ -1,6 +1,8 @@
 //! Desktop notification coalescing for `ChatWidget`.
 
 use super::*;
+use codex_utils_elapsed::format_duration;
+use std::time::Duration;
 
 impl ChatWidget {
     pub(super) fn notify(&mut self, notification: Notification) {
@@ -25,11 +27,27 @@ impl ChatWidget {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum Notification {
-    AgentTurnComplete { response: String },
-    ExecApprovalRequested { command: String },
-    EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
-    ElicitationRequested { server_name: String },
-    PlanModePrompt { title: String },
+    AgentTurnComplete {
+        response: String,
+    },
+    BackgroundTerminalComplete {
+        command: String,
+        duration: Duration,
+        exit_code: i32,
+    },
+    ExecApprovalRequested {
+        command: String,
+    },
+    EditApprovalRequested {
+        cwd: PathBuf,
+        changes: Vec<PathBuf>,
+    },
+    ElicitationRequested {
+        server_name: String,
+    },
+    PlanModePrompt {
+        title: String,
+    },
     SafetyAlert,
 }
 
@@ -39,6 +57,17 @@ impl Notification {
             Notification::AgentTurnComplete { response } => {
                 Notification::agent_turn_preview(response)
                     .unwrap_or_else(|| "Agent turn complete".to_string())
+            }
+            Notification::BackgroundTerminalComplete {
+                command,
+                duration,
+                exit_code,
+            } => {
+                let command = background_terminal_command_preview(command);
+                format!(
+                    "Background terminal completed: {command} • {} • exit {exit_code}",
+                    format_duration(*duration)
+                )
             }
             Notification::ExecApprovalRequested { command } => {
                 format!(
@@ -70,6 +99,7 @@ impl Notification {
     fn type_name(&self) -> &str {
         match self {
             Notification::AgentTurnComplete { .. } => "agent-turn-complete",
+            Notification::BackgroundTerminalComplete { .. } => "background-terminal-complete",
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. } => "approval-requested",
@@ -80,7 +110,8 @@ impl Notification {
 
     fn priority(&self) -> u8 {
         match self {
-            Notification::AgentTurnComplete { .. } => 0,
+            Notification::AgentTurnComplete { .. }
+            | Notification::BackgroundTerminalComplete { .. } => 0,
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. }
@@ -130,6 +161,21 @@ impl Notification {
 }
 
 const AGENT_NOTIFICATION_PREVIEW_GRAPHEMES: usize = 200;
+const BACKGROUND_TERMINAL_COMMAND_PREVIEW_GRAPHEMES: usize = 80;
+
+fn background_terminal_command_preview(command: &str) -> String {
+    let mut normalized = String::new();
+    for part in command.split_whitespace() {
+        if !normalized.is_empty() {
+            normalized.push(' ');
+        }
+        normalized.extend(part.chars().filter(|character| !character.is_control()));
+    }
+    truncate_text(
+        normalized.trim(),
+        BACKGROUND_TERMINAL_COMMAND_PREVIEW_GRAPHEMES,
+    )
+}
 
 #[cfg(test)]
 #[path = "notifications_tests.rs"]

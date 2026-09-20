@@ -1,5 +1,43 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
+
+#[test]
+fn background_terminal_completion_contract() {
+    let notification = Notification::BackgroundTerminalComplete {
+        command: format!("printf done\u{7} {}", "x".repeat(100)),
+        duration: Duration::from_millis(600_001),
+        exit_code: 42,
+    };
+
+    assert_eq!(
+        (
+            notification.display(),
+            notification.type_name(),
+            notification.priority(),
+            notification.allowed_for(&Notifications::Enabled(true)),
+            notification.allowed_for(&Notifications::Enabled(false)),
+            notification.allowed_for(&Notifications::Custom(vec![
+                "background-terminal-complete".to_string(),
+            ])),
+            notification.allowed_for(&Notifications::Custom(vec![
+                "agent-turn-complete".to_string(),
+            ])),
+        ),
+        (
+            format!(
+                "Background terminal completed: printf done {}... • 10m 00s • exit 42",
+                "x".repeat(65)
+            ),
+            "background-terminal-complete",
+            0,
+            true,
+            false,
+            true,
+            false,
+        )
+    );
+}
 
 #[test]
 fn safety_alert_contract() {

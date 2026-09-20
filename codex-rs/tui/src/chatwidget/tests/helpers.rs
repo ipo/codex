@@ -1063,6 +1063,19 @@ pub(super) fn end_exec(
     stderr: &str,
     exit_code: i32,
 ) {
+    end_exec_with_duration(
+        chat, begin_item, stdout, stderr, exit_code, /*duration_ms*/ 5,
+    );
+}
+
+pub(super) fn end_exec_with_duration(
+    chat: &mut ChatWidget,
+    begin_item: AppServerThreadItem,
+    stdout: &str,
+    stderr: &str,
+    exit_code: i32,
+    duration_ms: i64,
+) {
     let aggregated = if stderr.is_empty() {
         stdout.to_string()
     } else {
@@ -1100,7 +1113,7 @@ pub(super) fn end_exec(
             command_actions,
             aggregated_output: (!aggregated.is_empty()).then_some(aggregated),
             exit_code: Some(exit_code),
-            duration_ms: Some(5),
+            duration_ms: Some(duration_ms),
         },
     );
 }

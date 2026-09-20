@@ -456,7 +456,9 @@ impl ChatWidget {
             return;
         }
         match notification.item {
-            item @ ThreadItem::CommandExecution { .. } => self.on_command_execution_completed(item),
+            item @ ThreadItem::CommandExecution { .. } => {
+                self.on_command_execution_completed(item, replay_kind.is_some())
+            }
             item => self.handle_thread_item(
                 item,
                 notification.turn_id,
