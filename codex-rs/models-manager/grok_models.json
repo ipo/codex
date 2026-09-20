@@ -23,7 +23,7 @@
       "supports_search_tool": false,
       "experimental_supported_tools": [],
       "use_responses_lite": false,
-      "tool_mode": "direct",
+      "tool_mode": "code_mode_only",
       "aliases": ["grok-4.6"],
       "history_compatibility_group": "grok",
       "supports_parallel_tool_calls": true,

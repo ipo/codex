@@ -1421,7 +1421,7 @@ async fn llama_cpp_exposes_apply_patch_and_only_plain_function_specs() {
 }
 
 #[tokio::test]
-async fn llama_cpp_forces_direct_function_specs_even_when_tool_mode_is_code_mode_only() {
+async fn llama_cpp_uses_code_mode_function_specs_when_configured() {
     let plan = probe(|turn| {
         use_llama_cpp(turn);
         update_turn_settings_for_test(turn, |settings| {
@@ -1446,18 +1446,43 @@ async fn llama_cpp_forces_direct_function_specs_even_when_tool_mode_is_code_mode
         .collect();
     assert_eq!(non_function_specs, Vec::<(&str, &str)>::new());
 
-    let freeform_exec: Vec<&str> = plan
-        .visible_specs
-        .iter()
-        .filter(|spec| {
-            matches!(
-                spec,
-                ToolSpec::Freeform(tool) if tool.name == codex_code_mode::PUBLIC_TOOL_NAME
-            )
+    plan.assert_visible_contains(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+    ]);
+    assert_eq!(plan.tool_mode, ToolMode::CodeModeOnly);
+    assert!(has_parameter(
+        plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME),
+        "code"
+    ));
+}
+
+#[tokio::test]
+async fn native_code_mode_uses_function_exec_and_wait() {
+    for configure in [use_native_kimi as fn(&mut TurnContext), use_grok] {
+        let plan = probe(|turn| {
+            configure(turn);
+            update_turn_settings_for_test(turn, |settings| {
+                Arc::make_mut(&mut settings.model_info).tool_mode = Some(ToolMode::CodeModeOnly);
+            });
         })
-        .map(ToolSpec::name)
-        .collect();
-    assert_eq!(freeform_exec, Vec::<&str>::new());
+        .await;
+        for name in [
+            codex_code_mode::PUBLIC_TOOL_NAME,
+            codex_code_mode::WAIT_TOOL_NAME,
+        ] {
+            assert!(matches!(plan.visible_spec(name), ToolSpec::Function(_)));
+        }
+        assert!(
+            plan.visible_specs
+                .iter()
+                .all(|spec| !matches!(spec, ToolSpec::Freeform(_)))
+        );
+        assert!(has_parameter(
+            plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME),
+            "code"
+        ));
+    }
 }
 
 #[tokio::test]

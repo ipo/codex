@@ -260,6 +260,94 @@ fn adapted_native_function_tools_project_without_provider_special_cases() {
 }
 
 #[test]
+fn code_mode_exec_and_wait_replay_as_matched_kimi_functions() {
+    let source = "notify('ready'); text('done');";
+    let projected = project_messages(
+        &prompt(vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "exec".to_string(),
+                namespace: None,
+                arguments: json!({"code": source}).to_string(),
+                encrypted_function_args: None,
+                call_id: "exec-1".to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: Some("exec-1".to_string()),
+                name: Some("exec".to_string()),
+                namespace: None,
+                output: FunctionCallOutputPayload::from_text(
+                    "Script running with cell ID 1".to_string(),
+                ),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "wait".to_string(),
+                namespace: None,
+                arguments: json!({"cell_id":"1"}).to_string(),
+                encrypted_function_args: None,
+                call_id: "wait-1".to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: Some("wait-1".to_string()),
+                name: Some("wait".to_string()),
+                namespace: None,
+                output: FunctionCallOutputPayload::from_text("ready\ndone".to_string()),
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ]),
+        "k3",
+    )
+    .expect("code-mode history projects to Kimi");
+    let projected = serde_json::to_value(projected).expect("projected JSON");
+    assert_eq!(projected[1]["tool_calls"][0]["function"]["name"], "exec");
+    assert_eq!(projected[2]["tool_call_id"], "exec-1");
+    assert_eq!(projected[3]["tool_calls"][0]["function"]["name"], "wait");
+    assert_eq!(projected[4]["tool_call_id"], "wait-1");
+    assert_eq!(projected[4]["content"], "ready\ndone");
+}
+
+#[test]
+fn code_mode_exec_and_wait_serialize_as_kimi_function_specs() {
+    use crate::tools::code_mode::execute_spec::ExecRepresentation;
+    use crate::tools::code_mode::execute_spec::create_code_mode_tool;
+    use crate::tools::code_mode::wait_spec::create_wait_tool;
+    use codex_code_mode::ImageDetailVisibility;
+
+    let specs = [
+        create_code_mode_tool(
+            &[],
+            &[],
+            &Default::default(),
+            /*default_exec_yield_time_ms*/ 10_000,
+            /*code_mode_only*/ true,
+            ImageDetailVisibility::Visible,
+            ExecRepresentation::Function,
+        ),
+        create_wait_tool(),
+    ];
+    let projected = project_tools(&specs).expect("Kimi accepts code mode function tools");
+    assert_eq!(
+        projected
+            .iter()
+            .map(|tool| tool.function.name.as_str())
+            .collect::<Vec<_>>(),
+        ["exec", "wait"]
+    );
+    let value = serde_json::to_value(&projected).expect("Kimi tool JSON");
+    assert_eq!(value[0]["type"], "function");
+    assert_eq!(
+        value[0]["function"]["parameters"]["required"],
+        json!(["code"])
+    );
+}
+
+#[test]
 fn collaboration_mode_transitions_remain_chronological() {
     let default = "<collaboration_mode>default</collaboration_mode>";
     let plan = "<collaboration_mode>plan</collaboration_mode>";

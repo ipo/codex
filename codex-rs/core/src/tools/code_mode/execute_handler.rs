@@ -17,6 +17,22 @@ use super::telemetry::CodeModeToolCallGuard;
 
 type CodeModeNestedTool = (Arc<ToolSpec>, Option<Arc<dyn CoreToolRuntime>>);
 
+fn parse_function_code(arguments: &str) -> Result<String, FunctionCallError> {
+    let parsed: serde_json::Value = serde_json::from_str(arguments).map_err(|error| {
+        FunctionCallError::RespondToModel(format!("invalid exec JSON arguments: {error}"))
+    })?;
+    let code = parsed.get("code").ok_or_else(|| {
+        FunctionCallError::RespondToModel("exec requires a code field".to_string())
+    })?;
+    code.as_str()
+        .map(str::to_string)
+        .ok_or_else(|| FunctionCallError::RespondToModel("exec code must be a string".to_string()))
+}
+
+#[cfg(test)]
+#[path = "execute_handler_tests.rs"]
+mod tests;
+
 pub struct CodeModeExecuteHandler {
     spec: ToolSpec,
     nested_tool_specs: Vec<CodeModeNestedTool>,
@@ -137,9 +153,15 @@ impl CodeModeExecuteHandler {
         let wall_time = response
             .code_mode_host_duration()
             .unwrap_or_else(|| started_at.elapsed());
-        handle_runtime_response(&exec, response, args.max_output_tokens, wall_time)
-            .await
-            .map_err(FunctionCallError::RespondToModel)
+        let mut output =
+            handle_runtime_response(&exec, response, args.max_output_tokens, wall_time)
+                .await
+                .map_err(FunctionCallError::RespondToModel)?;
+        exec.session
+            .services
+            .code_mode_service
+            .append_notifications(&cell_id, &mut output, args.max_output_tokens);
+        Ok(output)
     }
 }
 
@@ -195,8 +217,21 @@ impl CodeModeExecuteHandler {
                 )
                 .await
                 .map(boxed_tool_output),
+            ToolPayload::Function { arguments } if is_exec_tool_name(&tool_name) => {
+                let code = parse_function_code(&arguments)?;
+                self.execute(
+                    session,
+                    turn,
+                    call_id,
+                    originating_item_id,
+                    code,
+                    &mut telemetry,
+                )
+                .await
+                .map(boxed_tool_output)
+            }
             _ => Err(FunctionCallError::RespondToModel(format!(
-                "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
+                "{PUBLIC_TOOL_NAME} expects raw JavaScript source text or JSON arguments with a code string"
             ))),
         };
         telemetry.finish(
@@ -210,6 +245,9 @@ impl CodeModeExecuteHandler {
 
 impl CoreToolRuntime for CodeModeExecuteHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Custom { .. })
+        matches!(
+            payload,
+            ToolPayload::Custom { .. } | ToolPayload::Function { .. }
+        )
     }
 }

@@ -71,6 +71,137 @@ fn grok_builder(server: &wiremock::MockServer) -> core_test_support::test_codex:
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_code_mode_exec_replays_matched_function_result() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let first = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-grok-exec"),
+            responses::ev_function_call("grok-exec", "exec", r#"{"code":"text('grok done');"}"#),
+            responses::ev_completed("resp-grok-exec"),
+        ]),
+    )
+    .await;
+    let next = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-grok-done", "done"),
+            responses::ev_completed("resp-grok-done"),
+        ]),
+    )
+    .await;
+    let test = grok_builder(&server).build_with_auto_env(&server).await?;
+    test.submit_turn("execute JavaScript").await?;
+
+    let initial = first.single_request().body_json();
+    let tools = initial["tools"].as_array().expect("tools array");
+    for name in ["exec", "wait"] {
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["type"] == "function" && tool["name"] == name)
+        );
+    }
+    let request = next.single_request();
+    let output = &request.function_call_output("grok-exec")["output"];
+    assert!(
+        output.to_string().contains("grok done"),
+        "native Grok exec output: {output}; history: {:?}",
+        request.input()
+    );
+    assert!(request.inputs_of_type("custom_tool_call_output").is_empty());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_code_mode_notify_after_yield_is_paired_with_wait() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-exec"),
+            responses::ev_function_call(
+                "exec-1",
+                "exec",
+                r#"{"code":"yield_control(); notify('native notification'); text('finished');"}"#,
+            ),
+            responses::ev_completed("resp-exec"),
+        ]),
+    )
+    .await;
+    let first_completion = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-yielded", "waiting"),
+            responses::ev_completed("resp-yielded"),
+        ]),
+    )
+    .await;
+    let test = grok_builder(&server).build_with_auto_env(&server).await?;
+    test.submit_turn("run long code").await?;
+
+    let output = first_completion
+        .single_request()
+        .function_call_output("exec-1")["output"]
+        .to_string();
+    let cell_id = output
+        .split("cell ID ")
+        .nth(1)
+        .expect("running cell ID")
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    assert!(!cell_id.is_empty());
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-wait"),
+            responses::ev_function_call("wait-1", "wait", &json!({"cell_id": cell_id}).to_string()),
+            responses::ev_completed("resp-wait"),
+        ]),
+    )
+    .await;
+    let wait_completion = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-finished", "done"),
+            responses::ev_completed("resp-finished"),
+        ]),
+    )
+    .await;
+    test.submit_turn("wait for code").await?;
+
+    let request = wait_completion.single_request();
+    let history = request.input();
+    assert!(
+        request.function_call_output("wait-1")["output"]
+            .to_string()
+            .contains("native notification"),
+        "native Grok wait history: {history:?}"
+    );
+    assert!(request.inputs_of_type("custom_tool_call_output").is_empty());
+    assert_eq!(
+        history
+            .iter()
+            .filter(|item| item["type"] == "function_call_output" && item["call_id"] == "exec-1")
+            .count(),
+        1
+    );
+    assert_eq!(
+        history
+            .iter()
+            .filter(|item| item["type"] == "function_call_output" && item["call_id"] == "wait-1")
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn grok_standalone_error_uses_route_retry_budget() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

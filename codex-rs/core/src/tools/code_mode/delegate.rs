@@ -8,6 +8,7 @@ use codex_code_mode::CodeModeSessionDelegate;
 use codex_code_mode::NotificationFuture;
 use codex_code_mode::ToolInvocationFuture;
 use codex_protocol::ResponseItemId;
+use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use serde_json::Value as JsonValue;
@@ -21,15 +22,22 @@ use super::PUBLIC_TOOL_NAME;
 use super::submit_nested_tool;
 use crate::session::step_context::StepContext;
 use crate::tools::ExecutedToolCallRecorder;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::spec_plan::requires_function_tool_specs;
 
 pub(super) struct CodeModeDispatchBroker {
     dispatch_tx: async_channel::Sender<DispatchMessage>,
     dispatch_rx: async_channel::Receiver<DispatchMessage>,
     dispatch_gates: Arc<Mutex<HashMap<CellId, CellDispatchGate>>>,
     executed_tool_calls: Option<Arc<ExecutedToolCallRecorder>>,
+    notifications: Arc<Mutex<HashMap<CellId, Vec<String>>>>,
 }
+
+#[cfg(test)]
+#[path = "delegate_tests.rs"]
+mod tests;
 
 struct CellDispatchGate {
     ready: watch::Sender<bool>,
@@ -45,6 +53,7 @@ impl CodeModeDispatchBroker {
             dispatch_rx,
             dispatch_gates: Arc::new(Mutex::new(HashMap::new())),
             executed_tool_calls,
+            notifications: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -89,6 +98,30 @@ impl CodeModeDispatchBroker {
         }
     }
 
+    pub(super) fn append_notifications(
+        &self,
+        cell_id: &CellId,
+        output: &mut FunctionToolOutput,
+        max_output_tokens: Option<usize>,
+    ) {
+        if let Some(texts) = self
+            .notifications
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(cell_id)
+        {
+            output.body.extend(
+                texts
+                    .into_iter()
+                    .map(|text| FunctionCallOutputContentItem::InputText { text }),
+            );
+            output.body = super::truncate_code_mode_result(
+                std::mem::take(&mut output.body),
+                max_output_tokens,
+            );
+        }
+    }
+
     pub(super) fn active_cell_ids(&self) -> Vec<CellId> {
         self.dispatch_gates
             .lock()
@@ -110,7 +143,11 @@ impl CodeModeDispatchBroker {
             .features
             .enabled(codex_features::Feature::ExecutedToolCallMetadata);
         let tool_runtime = ToolCallRuntime::new(Arc::clone(&exec.session), step_context, tracker);
-        let host = Arc::new(CoreTurnHost { exec, tool_runtime });
+        let host = Arc::new(CoreTurnHost {
+            exec,
+            tool_runtime,
+            notifications: Arc::clone(&self.notifications),
+        });
         let dispatch_rx = self.dispatch_rx.clone();
         let dispatch_gates = Arc::clone(&self.dispatch_gates);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
@@ -363,6 +400,7 @@ impl Drop for CodeModeDispatchWorker {
 struct CoreTurnHost {
     exec: ExecContext,
     tool_runtime: ToolCallRuntime,
+    notifications: Arc<Mutex<HashMap<CellId, Vec<String>>>>,
 }
 
 impl CoreTurnHost {
@@ -383,6 +421,17 @@ impl CoreTurnHost {
 
     async fn notify(&self, call_id: String, cell_id: CellId, text: String) -> Result<(), String> {
         if text.trim().is_empty() {
+            return Ok(());
+        }
+        if requires_function_tool_specs(&self.exec.turn, self.exec.turn.model_info()) {
+            let mut notifications = self
+                .notifications
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let pending = notifications.entry(cell_id).or_default();
+            if pending.iter().map(String::len).sum::<usize>() < 40_000 {
+                pending.push(text.chars().take(40_000).collect());
+            }
             return Ok(());
         }
         self.exec

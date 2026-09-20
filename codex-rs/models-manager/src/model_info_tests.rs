@@ -359,6 +359,22 @@ fn external_inference_uses_neutral_identity_without_rewriting_openai_instruction
 #[test]
 fn bundled_kimi_profiles_resolve_inherited_runtime_metadata() {
     let catalog = crate::bundled_models_response().expect("bundled catalog should parse");
+    for slug in [
+        "kimi/k3",
+        "kimi/k3-256k",
+        "kimi/kimi-for-coding",
+        "kimi/kimi-for-coding-highspeed",
+    ] {
+        let model = catalog
+            .models
+            .iter()
+            .find(|model| model.slug == slug)
+            .unwrap();
+        assert_eq!(
+            model.tool_mode,
+            Some(codex_protocol::openai_models::ToolMode::CodeModeOnly)
+        );
+    }
     let profiles = [
         "kimi/k3",
         "kimi/k3-256k",

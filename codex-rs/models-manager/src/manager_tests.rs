@@ -1734,7 +1734,7 @@ fn bundled_grok_profiles_resolve_exact_request_contracts() {
                     {"effort":"medium","description":"Balanced thinking effort"},
                     {"effort":"low","description":"Lower thinking effort"}],
                 "default_reasoning_summary":"concise","supports_search_tool":false,
-                "support_verbosity":false,"tool_mode":"direct","multi_agent_version":"v2",
+                "support_verbosity":false,"tool_mode":"code_mode_only","multi_agent_version":"v2",
                 "inference":{"family":"grok","wire_api":"responses","dialect":"grok","route":"grok","wire_model":"grok-4.6"}}),
             json!({"slug":"xai/grok-4.5","aliases":["grok-4.5"],"context_window":500000,
                 "max_context_window":500000,"auto_compact_token_limit":400000,
@@ -1744,7 +1744,7 @@ fn bundled_grok_profiles_resolve_exact_request_contracts() {
                     {"effort":"medium","description":"Balanced thinking effort"},
                     {"effort":"low","description":"Lower thinking effort"}],
                 "default_reasoning_summary":"concise","supports_search_tool":false,
-                "support_verbosity":false,"tool_mode":"direct","multi_agent_version":"v2",
+                "support_verbosity":false,"tool_mode":"code_mode_only","multi_agent_version":"v2",
                 "inference":{"family":"grok","wire_api":"responses","dialect":"grok","route":"grok","wire_model":"grok-4.5"}}),
         ]
     );

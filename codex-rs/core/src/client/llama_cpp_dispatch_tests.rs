@@ -311,6 +311,40 @@ fn rejects_non_function_tool_specs() {
 }
 
 #[test]
+fn accepts_code_mode_function_specs_and_paired_history() {
+    use crate::tools::code_mode::execute_spec::ExecRepresentation;
+    use crate::tools::code_mode::execute_spec::create_code_mode_tool;
+    use crate::tools::code_mode::wait_spec::create_wait_tool;
+    use codex_code_mode::ImageDetailVisibility;
+
+    let prompt = Prompt {
+        tools: Arc::from([
+            create_code_mode_tool(
+                &[],
+                &[],
+                &Default::default(),
+                /*default_exec_yield_time_ms*/ 10_000,
+                /*code_mode_only*/ true,
+                ImageDetailVisibility::Visible,
+                ExecRepresentation::Function,
+            ),
+            create_wait_tool(),
+        ]),
+        input: response_items(json!([
+            {"type":"function_call","name":"exec","arguments":"{\"code\":\"text('ok')\"}","call_id":"exec-1"},
+            {"type":"function_call_output","call_id":"exec-1","output":"Script running with cell ID 1"},
+            {"type":"function_call","name":"wait","arguments":"{\"cell_id\":\"1\"}","call_id":"wait-1"},
+            {"type":"function_call_output","call_id":"wait-1","output":"ok"}
+        ])),
+        ..Default::default()
+    };
+
+    validate_tools(&prompt).expect("code-mode tools are plain functions");
+    let history = normalize_input(&prompt).expect("code-mode function history is valid");
+    assert_eq!(history, prompt.input);
+}
+
+#[test]
 fn expected_basename_accepts_display_name_canonical_id_and_aliases() {
     let discovered = LlamaCppCatalogEntry {
         canonical_id: r"local/F:\models\Qwen3.8-IQ2_M.gguf".to_string(),

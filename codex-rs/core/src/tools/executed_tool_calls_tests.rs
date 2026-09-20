@@ -14,6 +14,31 @@ fn output(call_id: &str) -> ResponseItem {
 }
 
 #[test]
+fn code_mode_exec_is_not_recorded_as_nested_tool_in_either_representation() {
+    let recorder = ExecutedToolCallRecorder::default();
+    for payload in [
+        ToolPayload::Custom {
+            input: "text('ok')".to_string(),
+        },
+        ToolPayload::Function {
+            arguments: json!({"code":"text('ok')"}).to_string(),
+        },
+    ] {
+        recorder.record_tool_call(
+            &ToolCall {
+                tool_name: codex_tools::ToolName::plain(crate::tools::code_mode::PUBLIC_TOOL_NAME),
+                call_id: "exec-1".to_string(),
+                payload,
+                encrypted_function_args: None,
+            },
+            &ToolCallSource::Direct,
+            ToolMode::CodeModeOnly,
+        );
+    }
+    assert!(recorder.state.lock().unwrap().direct_calls.is_empty());
+}
+
+#[test]
 fn executed_tool_call_recorder_bounds_pending_calls_and_preserves_overflow() {
     let recorder = ExecutedToolCallRecorder::default();
 

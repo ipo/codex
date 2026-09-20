@@ -197,6 +197,16 @@ impl CodeModeService {
         self.dispatch_broker.close_cell(cell_id);
     }
 
+    pub(crate) fn append_notifications(
+        &self,
+        cell_id: &CellId,
+        output: &mut FunctionToolOutput,
+        max_output_tokens: Option<usize>,
+    ) {
+        self.dispatch_broker
+            .append_notifications(cell_id, output, max_output_tokens);
+    }
+
     pub(crate) fn start_turn_worker(
         &self,
         session: &Arc<Session>,

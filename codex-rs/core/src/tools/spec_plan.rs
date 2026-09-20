@@ -4,6 +4,7 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::image_preparation::unified_image_budget_enabled;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::code_mode::execute_spec::ExecRepresentation;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::collaboration_wire::adapt_multi_agent_v2_handler;
 use crate::tools::collaboration_wire::is_multi_agent_v2_message_tool;
@@ -678,7 +679,10 @@ pub(crate) fn search_tool_enabled(turn_context: &TurnContext, model_info: &Model
         && (model_info.supports_search_tool || native_wire(turn_context, model_info))
 }
 
-fn requires_function_tool_specs(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
+pub(crate) fn requires_function_tool_specs(
+    turn_context: &TurnContext,
+    model_info: &ModelInfo,
+) -> bool {
     native_wire(turn_context, model_info)
         || matches!(
             model_info.inference.as_ref(),
@@ -936,6 +940,11 @@ fn register_code_mode_executors(
                 codex_code_mode::ImageDetailVisibility::Hidden
             } else {
                 codex_code_mode::ImageDetailVisibility::Visible
+            },
+            if requires_function_tool_specs(turn_context, model_info) {
+                ExecRepresentation::Function
+            } else {
+                ExecRepresentation::Freeform
             },
         ),
         code_mode_nested_tool_specs,

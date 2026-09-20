@@ -26,7 +26,7 @@
       "comp_hash": null,
       "experimental_supported_tools": [],
       "use_responses_lite": false,
-      "tool_mode": "direct",
+      "tool_mode": "code_mode_only",
       "aliases": ["k3"],
       "inference": {
         "family": "kimi",
