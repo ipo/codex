@@ -1,4 +1,5 @@
 use super::*;
+use codex_api::ResponsesApiTools;
 use codex_model_provider_info::ResolvedWireRoute;
 use codex_protocol::model_inference::GrokInferenceConfig;
 use codex_protocol::model_inference::InferenceDialect;
@@ -158,6 +159,15 @@ pub(super) fn adapt_request(
     request.service_tier = None;
     request.client_metadata = None;
     request.access_programs = None;
+
+    if request
+        .tools
+        .as_ref()
+        .is_some_and(ResponsesApiTools::is_empty)
+    {
+        request.tools = None;
+        request.tool_choice.clear();
+    }
 
     if let Some(reasoning) = &mut request.reasoning {
         reasoning.context = None;
