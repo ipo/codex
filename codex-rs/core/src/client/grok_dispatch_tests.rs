@@ -1,6 +1,7 @@
 use super::*;
 use codex_api::OpenAiVerbosity;
 use codex_api::ReasoningContext;
+use codex_api::ResponsesApiTools;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -8,6 +9,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 fn route() -> ResolvedWireRoute {
@@ -39,7 +41,9 @@ fn openai_shaped_request() -> ResponsesApiRequest {
             }))
             .expect("reasoning fixture"),
         ],
-        tools: None,
+        tools: Some(ResponsesApiTools::from(Arc::from(
+            serde_json::value::to_raw_value(&json!([])).expect("serialize empty tools fixture"),
+        ))),
         tool_choice: "auto".to_string(),
         parallel_tool_calls: true,
         reasoning: Some(Reasoning {
@@ -81,7 +85,6 @@ fn request_profile_omits_openai_fields_and_preserves_encrypted_reasoning() {
                 "summary": [{"type": "summary_text", "text": "Checked"}],
                 "encrypted_content": "encrypted-reasoning"
             }],
-            "tool_choice": "auto",
             "parallel_tool_calls": true,
             "reasoning": {"effort": "high", "summary": "concise"},
             "store": false,
@@ -90,6 +93,31 @@ fn request_profile_omits_openai_fields_and_preserves_encrypted_reasoning() {
             "prompt_cache_key": "stable-cache-key"
         })
     );
+}
+
+#[test]
+fn request_profile_preserves_tools_and_auto_choice() {
+    let mut request = openai_shaped_request();
+    request.tools = Some(ResponsesApiTools::from(Arc::from(
+        serde_json::value::to_raw_value(&json!([{
+            "type": "function",
+            "name": "test_tool",
+            "parameters": {"type": "object"}
+        }]))
+        .expect("serialize tool fixture"),
+    )));
+
+    let body =
+        serde_json::to_value(adapt_request(request, "grok-4.6")).expect("serialize Grok request");
+    assert_eq!(
+        body["tools"],
+        json!([{
+            "type": "function",
+            "name": "test_tool",
+            "parameters": {"type": "object"}
+        }])
+    );
+    assert_eq!(body["tool_choice"], "auto");
 }
 
 #[test]

@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::Result;
 use codex_core::ForkSnapshot;
 use codex_core::TurnInputRequest;
+use codex_core::compact::SUMMARIZATION_PROMPT;
 use codex_core::resolve_installation_id;
 use codex_features::Feature;
 use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
@@ -431,5 +432,51 @@ async fn grok_responses_conformance_and_tool_continuation() -> Result<()> {
     );
     assert_eq!(replay[reasoning_index + 2]["type"], "function_call_output");
     assert_eq!(replay[reasoning_index + 2]["call_id"], "call-plan");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grok_pre_turn_auto_compaction_omits_empty_tool_fields() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-before", "before compaction"),
+                responses::ev_completed_with_tokens("resp-before", /*total_tokens*/ 500),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-compact", "compacted summary"),
+                responses::ev_completed("resp-compact"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-after", "after compaction"),
+                responses::ev_completed("resp-after"),
+            ]),
+        ],
+    )
+    .await;
+    let test = grok_builder(&server)
+        .with_config(|config| {
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("before automatic compaction").await?;
+    test.submit_turn("after automatic compaction").await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    let compaction_request = &requests[1];
+    assert!(compaction_request.body_contains_text(SUMMARIZATION_PROMPT));
+    assert_eq!(compaction_request.body_json().get("tools"), None);
+    assert_eq!(compaction_request.body_json().get("tool_choice"), None);
+
+    let follow_up_request = &requests[2];
+    assert!(follow_up_request.body_json()["tools"].is_array());
+    assert_eq!(follow_up_request.body_json()["tool_choice"], "auto");
     Ok(())
 }
