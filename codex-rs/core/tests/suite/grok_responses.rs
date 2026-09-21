@@ -116,7 +116,7 @@ async fn grok_code_mode_exec_replays_matched_function_result() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grok_code_mode_notify_after_yield_is_paired_with_wait() -> Result<()> {
+async fn grok_code_mode_integral_float_wait_is_paired_with_function_result() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
@@ -160,7 +160,16 @@ async fn grok_code_mode_notify_after_yield_is_paired_with_wait() -> Result<()> {
         &server,
         responses::sse(vec![
             responses::ev_response_created("resp-wait"),
-            responses::ev_function_call("wait-1", "wait", &json!({"cell_id": cell_id}).to_string()),
+            responses::ev_function_call(
+                "wait-1",
+                "wait",
+                &json!({
+                    "cell_id": cell_id,
+                    "yield_time_ms": 3_300_000.0,
+                    "max_tokens": 5_000.0,
+                })
+                .to_string(),
+            ),
             responses::ev_completed("resp-wait"),
         ]),
     )

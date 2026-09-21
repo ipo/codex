@@ -1,4 +1,9 @@
+use std::fmt;
+use std::marker::PhantomData;
+
 use serde::Deserialize;
+use serde::Deserializer;
+use serde::de::Visitor;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::ToolInvocation;
@@ -21,19 +26,78 @@ use super::wait_spec::create_wait_tool;
 
 pub struct CodeModeWaitHandler;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Eq, PartialEq)]
 struct ExecWaitArgs {
     cell_id: String,
     #[serde(default = "default_wait_yield_time_ms")]
-    yield_time_ms: u64,
+    yield_time_ms: IntegralValue<u64>,
     #[serde(default)]
-    max_tokens: Option<usize>,
+    max_tokens: Option<IntegralValue<usize>>,
     #[serde(default)]
     terminate: bool,
 }
 
-fn default_wait_yield_time_ms() -> u64 {
-    DEFAULT_WAIT_YIELD_TIME_MS
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IntegralValue<T>(T);
+
+impl<'de, T> Deserialize<'de> for IntegralValue<T>
+where
+    T: TryFrom<u64>,
+    T::Error: fmt::Display,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(IntegralValueVisitor(PhantomData))
+    }
+}
+
+struct IntegralValueVisitor<T>(PhantomData<T>);
+
+impl<T> Visitor<'_> for IntegralValueVisitor<T>
+where
+    T: TryFrom<u64>,
+    T::Error: fmt::Display,
+{
+    type Value = IntegralValue<T>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a non-negative whole number within range")
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        u64::try_from(value)
+            .map_err(E::custom)
+            .and_then(|value| self.visit_u64(value))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        T::try_from(value).map(IntegralValue).map_err(E::custom)
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value < u64::MAX as f64 {
+            return self.visit_u64(value as u64);
+        }
+
+        Err(E::custom(
+            "expected a non-negative whole number within range",
+        ))
+    }
+}
+
+fn default_wait_yield_time_ms() -> IntegralValue<u64> {
+    IntegralValue(DEFAULT_WAIT_YIELD_TIME_MS)
 }
 
 fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
@@ -108,7 +172,7 @@ impl CodeModeWaitHandler {
                         .code_mode_service
                         .wait(codex_code_mode::WaitRequest {
                             cell_id,
-                            yield_time_ms: args.yield_time_ms,
+                            yield_time_ms: args.yield_time_ms.0,
                         })
                         .await
                 }
@@ -161,14 +225,15 @@ impl CodeModeWaitHandler {
                     .code_mode_host_duration()
                     .unwrap_or_else(|| started_at.elapsed());
                 let cell_id = codex_code_mode::CellId::new(args.cell_id);
-                handle_runtime_response(&exec, wait_response.into(), args.max_tokens, wall_time)
+                let max_tokens = args.max_tokens.map(|max_tokens| max_tokens.0);
+                handle_runtime_response(&exec, wait_response.into(), max_tokens, wall_time)
                     .await
                     .map_err(FunctionCallError::RespondToModel)
                     .map(|mut output| {
                         exec.session
                             .services
                             .code_mode_service
-                            .append_notifications(&cell_id, &mut output, args.max_tokens);
+                            .append_notifications(&cell_id, &mut output, max_tokens);
                         output
                     })
                     .map(boxed_tool_output)
@@ -205,3 +270,7 @@ impl CoreToolRuntime for CodeModeWaitHandler {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "wait_handler_tests.rs"]
+mod tests;
