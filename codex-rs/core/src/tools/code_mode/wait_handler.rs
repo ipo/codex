@@ -31,7 +31,7 @@ struct ExecWaitArgs {
     cell_id: String,
     #[serde(default = "default_wait_yield_time_ms")]
     yield_time_ms: IntegralValue<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_integral_value")]
     max_tokens: Option<IntegralValue<usize>>,
     #[serde(default)]
     terminate: bool,
@@ -98,6 +98,15 @@ where
 
 fn default_wait_yield_time_ms() -> IntegralValue<u64> {
     IntegralValue(DEFAULT_WAIT_YIELD_TIME_MS)
+}
+
+fn deserialize_optional_integral_value<'de, D>(
+    deserializer: D,
+) -> Result<Option<IntegralValue<usize>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    IntegralValue::deserialize(deserializer).map(Some)
 }
 
 fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>

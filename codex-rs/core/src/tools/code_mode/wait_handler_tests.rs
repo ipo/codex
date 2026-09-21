@@ -66,6 +66,7 @@ fn rejects_invalid_wait_argument_numbers() {
         format!(r#"{{"cell_id":"cell","max_tokens":{max_tokens_overflow}}}"#),
         r#"{"cell_id":"cell","yield_time_ms":"3300000"}"#.to_string(),
         r#"{"cell_id":"cell","max_tokens":"5000"}"#.to_string(),
+        r#"{"cell_id":"cell","max_tokens":null}"#.to_string(),
         r#"{"cell_id":1}"#.to_string(),
         r#"[]"#.to_string(),
         r#"{"cell_id":"cell"#.to_string(),
