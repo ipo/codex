@@ -20,7 +20,6 @@ use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::markdown::append_markdown;
 use crate::pager_overlay::Overlay;
 use crate::session_resume::resolve_session_thread_id;
-use crate::status::format_directory_display;
 use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_bg;
 use crate::text_formatting::truncate_text;
@@ -66,6 +65,7 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Widget;
+use textwrap::wrap;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_stream::StreamExt;
@@ -418,7 +418,7 @@ async fn run_resume_picker_with_launch_context(
         app_server.remote_cwd_override(),
     );
     let local_filter_cwd = local_picker_cwd_filter(&cwd_filter, uses_remote_workspace);
-    let provider_filter = picker_provider_filter(config, uses_remote_workspace);
+    let provider_filter = ProviderFilter::Any;
     let runtime_keymap = picker_runtime_keymap(config)?;
     let options = SessionPickerRunOptions {
         show_all,
@@ -916,6 +916,9 @@ struct Row {
     updated_at: Option<DateTime<Utc>>,
     cwd: Option<PathBuf>,
     git_branch: Option<String>,
+    model_provider: String,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1972,6 +1975,9 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             .map(|dt| dt.with_timezone(&Utc)),
         cwd: Some(thread.cwd.to_path_buf()),
         git_branch: thread.git_info.and_then(|git_info| git_info.branch),
+        model_provider: thread.model_provider,
+        model: thread.model,
+        reasoning_effort: thread.reasoning_effort.map(|effort| effort.to_string()),
     })
 }
 
@@ -2688,12 +2694,16 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
 
     let start = state.scroll_top.min(rows.len().saturating_sub(1));
     let mut y = content_area.y;
+    let mut selected_row_y = None;
     for (idx, row) in rows[start..].iter().enumerate() {
         if y >= content_area.y.saturating_add(content_area.height) {
             break;
         }
         let row_idx = start + idx;
         let is_selected = row_idx == state.selected;
+        if is_selected {
+            selected_row_y = Some(y);
+        }
         let is_expanded =
             is_selected && row.thread_id.is_some() && state.expanded_thread_id == row.thread_id;
         let is_zebra = row_idx.is_multiple_of(2);
@@ -2711,6 +2721,12 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
         {
             y = y.saturating_add(1);
         }
+    }
+
+    if state.density == SessionListDensity::Dense
+        && let (Some(selected_row_y), Some(row)) = (selected_row_y, rows.get(state.selected))
+    {
+        render_dense_title_overlay(frame, content_area, row, selected_row_y, area.width);
     }
 
     if state.pagination.is_loading() && y < content_area.y.saturating_add(content_area.height) {
@@ -2733,6 +2749,49 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
                 1,
             ),
         );
+    }
+}
+
+fn render_dense_title_overlay(
+    frame: &mut crate::custom_terminal::Frame,
+    content_area: Rect,
+    row: &Row,
+    selected_row_y: u16,
+    width: u16,
+) {
+    let marker_width = selection_marker(/*is_selected*/ true, /*is_expanded*/ false).width();
+    let columns = dense_columns((width as usize).saturating_sub(marker_width));
+    if columns.title_width == 0
+        || UnicodeWidthStr::width(row.display_preview()) <= columns.title_width
+    {
+        return;
+    }
+    let wrapped = wrap(row.display_preview(), columns.title_width);
+    if wrapped.len() < 2 {
+        return;
+    }
+    let title_x = content_area.x.saturating_add(
+        (marker_width
+            + columns.date_width
+            + columns.cwd_width
+            + columns.model_width
+            + columns.duration_width)
+            .min(u16::MAX as usize) as u16,
+    );
+    let title_width = columns.title_width.min(u16::MAX as usize) as u16;
+    for (offset, line) in wrapped.iter().skip(1).take(2).enumerate() {
+        let y = selected_row_y.saturating_add(offset as u16 + 1);
+        if y >= content_area.y.saturating_add(content_area.height) {
+            break;
+        }
+        let text = if offset == 1 && wrapped.len() > 3 {
+            truncate_text(&format!("{line}…"), columns.title_width)
+        } else {
+            truncate_text(line, columns.title_width)
+        };
+        let line: Line =
+            selected_session_title_span(dense_column_text(&text, columns.title_width)).into();
+        frame.render_widget_ref(&line, Rect::new(title_x, y, title_width, 1));
     }
 }
 
@@ -2766,15 +2825,14 @@ fn render_comfortable_session_lines(
     is_zebra: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let marker = selection_marker(is_selected, is_expanded);
-    let title = truncate_text(row.display_preview(), width.saturating_sub(2) as usize);
-    let title = if is_selected {
-        selected_session_title_span(title)
-    } else {
-        title.into()
-    };
-    let title_line = Line::from(vec![marker, title]);
-    let mut lines = vec![title_line];
+    let mut lines = vec![session_summary_line(
+        row,
+        state,
+        is_selected,
+        is_expanded,
+        is_zebra,
+        width,
+    )];
     let row_style = if is_selected {
         Some(dense_selected_style())
     } else if is_zebra {
@@ -2782,48 +2840,27 @@ fn render_comfortable_session_lines(
     } else {
         None
     };
-    if let Some(style) = row_style {
-        lines = apply_session_row_background(lines, style, width);
-    }
     if is_expanded {
         lines.extend(render_transcript_preview_lines(row, state, width));
         return lines;
     }
 
-    let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
-    let created = format_relative_time(reference, row.created_at);
-    let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
-    let branch = row.git_branch.as_deref();
-    let cwd = row
-        .cwd
-        .as_ref()
-        .map(|path| format_directory_display(path, /*max_width*/ None));
-    let footer_lines = render_footer_lines(
-        state.sort_key,
-        &created,
-        &updated,
-        branch,
-        cwd.as_deref(),
-        state.filter_mode == SessionFilterMode::All,
-        width,
-    );
-    if let Some(style) = row_style {
-        lines.extend(apply_session_row_background(footer_lines, style, width));
-    } else {
-        lines.extend(footer_lines);
+    if let Some(branch) = row.git_branch.as_deref() {
+        let branch = truncate_text(branch, width.saturating_sub(6) as usize);
+        let line: Line = vec![
+            "  ".into(),
+            SESSION_META_BRANCH_ICON.dim(),
+            " ".dim(),
+            branch.dim(),
+        ]
+        .into();
+        lines.push(if let Some(style) = row_style {
+            apply_line_background(line, style, width)
+        } else {
+            line
+        });
     }
     lines
-}
-
-fn apply_session_row_background(
-    lines: Vec<Line<'static>>,
-    style: Style,
-    width: u16,
-) -> Vec<Line<'static>> {
-    lines
-        .into_iter()
-        .map(|line| apply_line_background(line, style, width))
-        .collect()
 }
 
 fn apply_line_background(mut line: Line<'static>, style: Style, width: u16) -> Line<'static> {
@@ -2846,7 +2883,40 @@ fn render_dense_session_lines(
     is_zebra: bool,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let marker = selection_marker(is_selected, is_expanded);
+    let mut lines = vec![session_summary_line(
+        row,
+        state,
+        is_selected,
+        is_expanded,
+        is_zebra,
+        width,
+    )];
+    if is_expanded {
+        lines.extend(render_transcript_preview_lines(row, state, width));
+    }
+    lines
+}
+
+struct SessionSummaryInput<'a> {
+    marker: Span<'static>,
+    date: &'a str,
+    cwd: &'a str,
+    model: &'a str,
+    duration: &'a str,
+    title: &'a str,
+    is_selected: bool,
+    is_zebra: bool,
+    width: u16,
+}
+
+fn session_summary_line(
+    row: &Row,
+    state: &PickerState,
+    is_selected: bool,
+    is_expanded: bool,
+    is_zebra: bool,
+    width: u16,
+) -> Line<'static> {
     let reference = state.relative_time_reference.unwrap_or_else(Utc::now);
     let created = format_relative_time(reference, row.created_at);
     let updated = format_relative_time(reference, row.updated_at.or(row.created_at));
@@ -2856,30 +2926,23 @@ fn render_dense_session_lines(
             updated
         }
     };
-    let mut lines = vec![dense_summary_line(DenseSummaryInput {
-        marker,
+    let cwd = cwd_leaf(row.cwd.as_deref());
+    let model = session_model_display(row);
+    let duration = format_session_duration(row.created_at, row.updated_at);
+    dense_summary_line(SessionSummaryInput {
+        marker: selection_marker(is_selected, is_expanded),
         date: &date,
+        cwd: &cwd,
+        model: &model,
+        duration: &duration,
         title: row.display_preview(),
         is_selected,
         is_zebra,
         width,
-    })];
-    if is_expanded {
-        lines.extend(render_transcript_preview_lines(row, state, width));
-    }
-    lines
+    })
 }
 
-struct DenseSummaryInput<'a> {
-    marker: Span<'static>,
-    date: &'a str,
-    title: &'a str,
-    is_selected: bool,
-    is_zebra: bool,
-    width: u16,
-}
-
-fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
+fn dense_summary_line(input: SessionSummaryInput<'_>) -> Line<'static> {
     let marker_width = input.marker.width();
     let available = (input.width as usize).saturating_sub(marker_width);
     let columns = dense_columns(available);
@@ -2892,6 +2955,9 @@ fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
     let spans = vec![
         input.marker,
         dense_column_text(input.date, columns.date_width).dim(),
+        dense_column_text(input.cwd, columns.cwd_width).dim(),
+        dense_column_text(input.model, columns.model_width).dim(),
+        dense_column_text(input.duration, columns.duration_width).dim(),
         title,
     ];
     let mut line = Line::from(spans);
@@ -2915,15 +2981,91 @@ fn dense_summary_line(input: DenseSummaryInput<'_>) -> Line<'static> {
 
 struct DenseColumns {
     date_width: usize,
+    cwd_width: usize,
+    model_width: usize,
+    duration_width: usize,
     title_width: usize,
 }
 
 fn dense_columns(width: usize) -> DenseColumns {
-    let date_width = SESSION_META_DATE_WIDTH;
+    let metadata_width = 12 + 16 + 36 + 8;
+    if width > metadata_width {
+        return DenseColumns {
+            date_width: 12,
+            cwd_width: 16,
+            model_width: 36,
+            duration_width: 8,
+            title_width: width - metadata_width,
+        };
+    }
+
+    let title_width = width.min(8);
+    let metadata_width = width.saturating_sub(title_width);
+    let date_width = metadata_width.div_ceil(4).min(12);
+    let duration_width = metadata_width.div_ceil(7).min(8);
+    let remaining = metadata_width.saturating_sub(date_width + duration_width);
+    let cwd_width = remaining.div_ceil(4);
+    let model_width = remaining.saturating_sub(cwd_width);
     DenseColumns {
         date_width,
-        title_width: width.saturating_sub(date_width),
+        cwd_width,
+        model_width,
+        duration_width,
+        title_width,
     }
+}
+
+fn cwd_leaf(cwd: Option<&Path>) -> String {
+    let Some(cwd) = cwd else {
+        return "unknown cwd".to_string();
+    };
+    let path = cwd.to_string_lossy();
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return if path.starts_with('\\') { "\\" } else { "/" }.to_string();
+    }
+    if trimmed.ends_with(':') && path.len() > trimmed.len() {
+        return format!("{trimmed}\\");
+    }
+    trimmed
+        .rsplit(['/', '\\'])
+        .find(|component| !component.is_empty())
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
+fn session_model_display(row: &Row) -> String {
+    let model = row.model.as_deref().unwrap_or("unknown model");
+    let effort = row.reasoning_effort.as_deref().unwrap_or("default effort");
+    format!("{} / {model} · {effort}", row.model_provider)
+}
+
+fn format_session_duration(
+    created_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
+) -> String {
+    let Some(created_at) = created_at else {
+        return "—".to_string();
+    };
+    let Some(updated_at) = updated_at else {
+        return "—".to_string();
+    };
+    let duration = updated_at.signed_duration_since(created_at);
+    if duration < chrono::Duration::zero() {
+        return "—".to_string();
+    }
+    let minutes = duration.num_minutes();
+    if minutes == 0 {
+        return "<1m".to_string();
+    }
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h {}m", minutes % 60);
+    }
+    format!("{}d {}h", hours / 24, hours % 24)
 }
 
 fn dense_zebra_style() -> Style {
@@ -3193,11 +3335,9 @@ fn render_expanded_session_details(
         (None, Some(thread_id)) => thread_id.to_string(),
         (None, None) => "-".to_string(),
     };
-    let directory = row
-        .cwd
-        .as_ref()
-        .map(|path| format_directory_display(path, /*max_width*/ None))
-        .unwrap_or_else(|| "-".to_string());
+    let directory = cwd_leaf(row.cwd.as_deref());
+    let model = session_model_display(row);
+    let duration = format_session_duration(row.created_at, row.updated_at);
     let branch = row
         .git_branch
         .as_ref()
@@ -3214,6 +3354,8 @@ fn render_expanded_session_details(
             width,
         ),
         expanded_detail_line("Directory:", &directory, width),
+        expanded_detail_line("Model:", &model, width),
+        expanded_detail_line("Duration:", &duration, width),
         expanded_detail_line("Branch:", &branch, width),
         vec!["  │".dim()].into(),
         vec!["  │ ".dim(), "Conversation:".dim()].into(),
@@ -3512,6 +3654,9 @@ mod tests {
             updated_at: Some(timestamp),
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: Some(String::from("gpt-5")),
+            reasoning_effort: Some(String::from("medium")),
         }
     }
 
@@ -3576,6 +3721,9 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         };
 
         assert_eq!(row.display_preview(), "My session");
@@ -3771,6 +3919,9 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/tmp/codex-session-picker")),
             git_branch: Some(String::from("fcoury/session-picker")),
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         };
 
         assert!(row.matches_query("session-picker"));
@@ -3789,6 +3940,40 @@ mod tests {
             format_relative_time(reference, Some(reference - Duration::seconds(1))),
             "1s ago"
         );
+    }
+
+    #[test]
+    fn session_duration_formats_wall_clock_span() {
+        let created = parse_timestamp_str("2026-05-02T12:00:00Z").expect("timestamp");
+        assert_eq!(
+            format_session_duration(Some(created), Some(created + Duration::seconds(59))),
+            "<1m"
+        );
+        assert_eq!(
+            format_session_duration(Some(created), Some(created + Duration::minutes(42))),
+            "42m"
+        );
+        assert_eq!(
+            format_session_duration(Some(created), Some(created + Duration::minutes(125))),
+            "2h 5m"
+        );
+        assert_eq!(
+            format_session_duration(Some(created), Some(created + Duration::hours(51))),
+            "2d 3h"
+        );
+        assert_eq!(format_session_duration(None, Some(created)), "—");
+        assert_eq!(
+            format_session_duration(Some(created), Some(created - Duration::seconds(1))),
+            "—"
+        );
+    }
+
+    #[test]
+    fn cwd_leaf_handles_roots_and_foreign_separators() {
+        assert_eq!(cwd_leaf(Some(Path::new("/work/codex"))), "codex");
+        assert_eq!(cwd_leaf(Some(Path::new("/"))), "/");
+        assert_eq!(cwd_leaf(Some(Path::new(r"C:\work\codex"))), "codex");
+        assert_eq!(cwd_leaf(Some(Path::new(r"C:\"))), r"C:\");
     }
 
     #[test]
@@ -3831,6 +4016,9 @@ mod tests {
             updated_at: parse_timestamp_str("2026-05-02T14:48:19Z"),
             cwd: Some(PathBuf::from("/Users/felipe.coury/code/codex")),
             git_branch: Some(String::from("codex/raw-scrollback-mode")),
+            model_provider: String::from("openai"),
+            model: Some(String::from("gpt-5")),
+            reasoning_effort: Some(String::from("high")),
         };
 
         let rendered = render_expanded_session_details(&row, &state, /*width*/ 120)
@@ -3838,15 +4026,14 @@ mod tests {
             .map(|line| line.to_string())
             .collect::<Vec<_>>()
             .join("\n");
-        let expected_directory =
-            format_directory_display(row.cwd.as_deref().expect("cwd"), /*max_width*/ None);
-
         assert!(rendered.contains(
             "Session:    feat(tui): add raw scrollback mode (019dabc1-0ef5-7431-b81c-03037f51f62c)"
         ));
         assert!(rendered.contains("Created:    17 minutes ago · 2026-05-02 14:31:08"));
         assert!(rendered.contains("Updated:    now · 2026-05-02 14:48:19"));
-        assert!(rendered.contains(&format!("Directory:  {expected_directory}")));
+        assert!(rendered.contains("Directory:  codex"));
+        assert!(rendered.contains("Model:      openai / gpt-5 · high"));
+        assert!(rendered.contains("Duration:   17m"));
         assert!(rendered.contains("Branch:      codex/raw-scrollback-mode"));
         assert!(rendered.contains("Conversation:"));
     }
@@ -4046,6 +4233,9 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/real-project")),
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         };
 
         assert!(state.row_matches_filter(&row));
@@ -4071,6 +4261,9 @@ mod tests {
             updated_at: None,
             cwd: Some(PathBuf::from("/srv/remote-project")),
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         };
 
         assert!(state.row_matches_filter(&row));
@@ -4102,6 +4295,9 @@ mod tests {
                 updated_at: Some(now - Duration::seconds(42)),
                 cwd: None,
                 git_branch: None,
+                model_provider: String::from("openai"),
+                model: None,
+                reasoning_effort: None,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
@@ -4112,6 +4308,9 @@ mod tests {
                 updated_at: Some(now - Duration::minutes(35)),
                 cwd: None,
                 git_branch: None,
+                model_provider: String::from("openai"),
+                model: None,
+                reasoning_effort: None,
             },
             Row {
                 path: Some(PathBuf::from("/tmp/c.jsonl")),
@@ -4122,6 +4321,9 @@ mod tests {
                 updated_at: Some(now - Duration::hours(2)),
                 cwd: None,
                 git_branch: None,
+                model_provider: String::from("openai"),
+                model: None,
+                reasoning_effort: None,
             },
         ];
         state.all_rows = rows.clone();
@@ -4563,6 +4765,9 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         }];
 
         state
@@ -4601,6 +4806,9 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                model_provider: String::from("openai"),
+                model: None,
+                reasoning_effort: None,
             },
             Row {
                 path: None,
@@ -4611,6 +4819,9 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                model_provider: String::from("openai"),
+                model: None,
+                reasoning_effort: None,
             },
         ];
         state.pending_transcript_open = Some(thread_id);
@@ -4735,6 +4946,9 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                model_provider: String::from("openai"),
+                model: None,
+                reasoning_effort: None,
             },
             Row {
                 path: None,
@@ -4745,6 +4959,9 @@ mod tests {
                 updated_at: None,
                 cwd: None,
                 git_branch: None,
+                model_provider: String::from("openai"),
+                model: None,
+                reasoning_effort: None,
             },
         ];
         state.update_viewport(/*rows*/ 7, /*width*/ 80);
@@ -4800,6 +5017,9 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         }];
 
         state
@@ -4830,6 +5050,9 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         }];
 
         state
@@ -4906,6 +5129,9 @@ mod tests {
             updated_at: None,
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         }];
         state.transcript_cells.insert(
             thread_id,
@@ -5070,6 +5296,9 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         }];
 
         state
@@ -5109,6 +5338,9 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         }];
 
         state
@@ -5188,6 +5420,9 @@ session_picker_view = "dense"
                 "/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs",
             )),
             git_branch: Some(String::from("fcoury/session-picker")),
+            model_provider: String::from("openai"),
+            model: Some(String::from("gpt-5")),
+            reasoning_effort: Some(String::from("medium")),
         }
     }
 
@@ -5227,6 +5462,79 @@ session_picker_view = "dense"
         terminal.flush().expect("flush");
 
         terminal.backend().to_string()
+    }
+
+    #[test]
+    fn dense_metadata_wide_snapshot() {
+        assert_snapshot!(
+            "resume_picker_metadata_wide",
+            render_dense_row_snapshot(
+                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 120
+            )
+        );
+    }
+
+    #[test]
+    fn dense_metadata_normal_snapshot() {
+        assert_snapshot!(
+            "resume_picker_metadata_normal",
+            render_dense_row_snapshot(
+                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 80
+            )
+        );
+    }
+
+    #[test]
+    fn dense_metadata_narrow_snapshot() {
+        assert_snapshot!(
+            "resume_picker_metadata_narrow",
+            render_dense_row_snapshot(
+                /*show_all*/ true, /*filter_cwd*/ None, /*width*/ 48
+            )
+        );
+    }
+
+    #[test]
+    fn dense_selected_title_overlay_snapshot() {
+        use crate::custom_terminal::Terminal;
+        use crate::test_backend::VT100Backend;
+
+        let loader = page_only_loader(|_| {});
+        let mut selected = dense_snapshot_row();
+        selected.preview = String::from(
+            "Selected title wraps across the title column without overwriting the metadata or more indicator",
+        );
+        let mut later = dense_snapshot_row();
+        later.preview = String::from("Later entry metadata remains visible");
+        later.cwd = Some(PathBuf::from("/tmp/later"));
+        let mut state = PickerState::new(
+            FrameRequester::test_dummy(),
+            loader,
+            ProviderFilter::Any,
+            /*show_all*/ true,
+            /*filter_cwd*/ None,
+            SessionPickerAction::Resume,
+        );
+        state.density = SessionListDensity::Dense;
+        state.all_rows = vec![selected.clone(), later.clone(), later];
+        state.filtered_rows = state.all_rows.clone();
+        state.relative_time_reference =
+            Some(parse_timestamp_str("2026-04-28T18:00:00Z").expect("timestamp"));
+
+        let backend = VT100Backend::new(/*width*/ 80, /*height*/ 4);
+        let mut terminal = Terminal::with_options(backend).expect("terminal");
+        terminal.set_viewport_area(Rect::new(0, 0, 80, 4));
+        {
+            let mut frame = terminal.get_frame();
+            let area = frame.area();
+            render_list(&mut frame, area, &state);
+        }
+        terminal.flush().expect("flush");
+
+        assert_snapshot!(
+            "resume_picker_dense_selected_title_overlay",
+            terminal.backend().to_string()
+        );
     }
 
     #[test]
@@ -5316,9 +5624,12 @@ session_picker_view = "dense"
 
     #[test]
     fn dense_selected_summary_line_uses_full_width_selection_style() {
-        let line = dense_summary_line(DenseSummaryInput {
+        let line = dense_summary_line(SessionSummaryInput {
             marker: selection_marker(/*is_selected*/ true, /*is_expanded*/ false),
             date: "15m ago",
+            cwd: "codex",
+            model: "openai / gpt-5 · medium",
+            duration: "15m",
             title: "Selected dense row",
             is_selected: true,
             is_zebra: false,
@@ -5332,9 +5643,12 @@ session_picker_view = "dense"
 
     #[test]
     fn dense_zebra_summary_line_uses_full_width_background() {
-        let line = dense_summary_line(DenseSummaryInput {
+        let line = dense_summary_line(SessionSummaryInput {
             marker: selection_marker(/*is_selected*/ false, /*is_expanded*/ false),
             date: "15m ago",
+            cwd: "codex",
+            model: "openai / gpt-5 · medium",
+            duration: "15m",
             title: "Zebra dense row",
             is_selected: false,
             is_zebra: true,
@@ -5369,7 +5683,7 @@ session_picker_view = "dense"
             /*is_zebra*/ true, /*width*/ 100,
         );
 
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 1);
         assert!(lines.iter().all(|line| line.width() == 100));
         assert!(
             lines
@@ -5440,6 +5754,9 @@ session_picker_view = "dense"
             updated_at: parse_timestamp_str("2026-04-28T17:45:00Z"),
             cwd: Some(PathBuf::from("/tmp/codex")),
             git_branch: Some(String::from("fcoury/session-picker")),
+            model_provider: String::from("openai"),
+            model: Some(String::from("gpt-5")),
+            reasoning_effort: Some(String::from("medium")),
         };
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -5509,6 +5826,9 @@ session_picker_view = "dense"
             updated_at: parse_timestamp_str("2026-04-28T17:45:00Z"),
             cwd: Some(PathBuf::from("/tmp/codex")),
             git_branch: Some(String::from("fcoury/session-picker")),
+            model_provider: String::from("openai"),
+            model: Some(String::from("gpt-5")),
+            reasoning_effort: Some(String::from("medium")),
         };
         let mut state = PickerState::new(
             FrameRequester::test_dummy(),
@@ -5567,6 +5887,9 @@ session_picker_view = "dense"
                 updated_at: Some(now - Duration::minutes(idx * 5)),
                 cwd: None,
                 git_branch: None,
+                model_provider: String::from("openai"),
+                model: None,
+                reasoning_effort: None,
             })
             .collect();
         state.filtered_rows = state.all_rows.clone();
@@ -5619,6 +5942,9 @@ session_picker_view = "dense"
                 updated_at: Some(now - Duration::minutes(idx * 5)),
                 cwd: None,
                 git_branch: None,
+                model_provider: String::from("openai"),
+                model: None,
+                reasoning_effort: None,
             })
             .collect();
         state.filtered_rows = state.all_rows.clone();
@@ -6186,6 +6512,9 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -6225,6 +6554,9 @@ session_picker_view = "dense"
             updated_at: None,
             cwd: None,
             git_branch: None,
+            model_provider: String::from("openai"),
+            model: None,
+            reasoning_effort: None,
         };
         state.all_rows = vec![row.clone()];
         state.filtered_rows = vec![row];
@@ -6284,6 +6616,9 @@ session_picker_view = "dense"
         assert_eq!(row.path, None);
         assert_eq!(row.thread_id, Some(thread_id));
         assert_eq!(row.thread_name, Some(String::from("Named thread")));
+        assert_eq!(row.model_provider, "openai");
+        assert_eq!(row.model, None);
+        assert_eq!(row.reasoning_effort, None);
     }
 
     #[test]
