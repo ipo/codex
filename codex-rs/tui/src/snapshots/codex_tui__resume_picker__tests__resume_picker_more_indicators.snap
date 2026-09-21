@@ -3,8 +3,8 @@ source: tui/src/resume_picker.rs
 expression: terminal.backend().to_string()
 ---
 ↑ more
-❯ item-2
-  10m ago       ⌁ no cwd                          no branch
+  5m ago      unknown cwd     openai / unknown model · default... 55m     it...
 
-  item-3
+❯ 10m ago     unknown cwd     openai / unknown model · default... 1h 50m  it...
+
 ↓ more

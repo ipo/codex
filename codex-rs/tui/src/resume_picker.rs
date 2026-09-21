@@ -5516,7 +5516,7 @@ session_picker_view = "dense"
             SessionPickerAction::Resume,
         );
         state.density = SessionListDensity::Dense;
-        state.all_rows = vec![selected.clone(), later.clone(), later];
+        state.all_rows = vec![selected, later.clone(), later];
         state.filtered_rows = state.all_rows.clone();
         state.relative_time_reference =
             Some(parse_timestamp_str("2026-04-28T18:00:00Z").expect("timestamp"));
@@ -6870,7 +6870,7 @@ session_picker_view = "dense"
             items, /*next_cursor*/ None, /*num_scanned_files*/ 3,
             /*reached_scan_cap*/ false,
         ));
-        state.update_viewport(/*rows*/ 5, /*width*/ 80);
+        state.update_viewport(/*rows*/ 2, /*width*/ 80);
 
         state
             .handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
@@ -6918,14 +6918,14 @@ session_picker_view = "dense"
         state.ensure_selected_visible();
 
         let initial_top = state.scroll_top;
-        assert_eq!(initial_top, state.filtered_rows.len().saturating_sub(1));
+        assert_eq!(initial_top, state.filtered_rows.len().saturating_sub(2));
 
         state
             .handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE))
             .await
             .unwrap();
 
-        assert_eq!(state.scroll_top, initial_top.saturating_sub(1));
+        assert_eq!(state.scroll_top, initial_top);
         assert_eq!(state.selected, state.filtered_rows.len().saturating_sub(2));
     }
 

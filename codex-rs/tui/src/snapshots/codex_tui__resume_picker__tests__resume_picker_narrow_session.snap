@@ -2,6 +2,5 @@
 source: tui/src/resume_picker.rs
 expression: terminal.backend().to_string()
 ---
-❯ Investigate picker expansion
-  15m ago       ⌁ /tmp/codex
+❯ 15m ago     codex   openai / gpt-5 · ... 1h 15m Inve...
    fcoury/session-picker

@@ -5,11 +5,8 @@ expression: "format!(\"---- loading fallback ----\\n{loading_snapshot}\\n---- re
 ---- loading fallback ----
 Loading sessions…
 ---- repaired results ----
-❯ first store result
-  1d ago        ⌁ no cwd                          no branch
+❯ 1d ago      unknown cwd     openai / gpt-5 · medium             <1m     fi...
 
-  repaired store result
-  1d ago        ⌁ no cwd                          no branch
+  1d ago      unknown cwd     openai / gpt-5 · medium             <1m     re...
 
-  third store result
-  1d ago        ⌁ no cwd                          no branch
+  1d ago      unknown cwd     openai / gpt-5 · medium             <1m     th...
