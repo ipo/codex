@@ -57,6 +57,9 @@ fn set_selected_session(state: &mut PickerState, thread_id: ThreadId) {
         updated_at: None,
         cwd: None,
         git_branch: None,
+        model_provider: String::new(),
+        model: None,
+        reasoning_effort: None,
     }];
     state.apply_filter();
 }

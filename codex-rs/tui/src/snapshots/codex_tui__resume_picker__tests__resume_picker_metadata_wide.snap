@@ -1,6 +1,6 @@
 ---
 source: tui/src/resume_picker.rs
-expression: "render_dense_row_snapshot(true, None, 120,)"
+expression: "render_dense_row_snapshot(true, None, 120)"
 ---
 ❯ 15m ago     codex-rs        openai / gpt-5 · medium             1h 15m  Propose session picker redesign with enoug...
                                                                           title text to exercise truncation

@@ -5,7 +5,6 @@
 //! loop.
 
 use super::*;
-use codex_config::ConfigLayerSource;
 #[cfg(target_os = "windows")]
 use codex_utils_approval_presets::ApprovalPreset;
 
@@ -26,30 +25,9 @@ async fn build_config_on_runtime_worker(
     }
 }
 
-pub(super) fn resume_model_settings_for_overrides(
-    config: &Config,
-    harness_overrides: &ConfigOverrides,
-) -> crate::app_server_session::ResumeModelSettings {
-    let has_layer_override = config.config_layer_stack.layers_high_to_low().any(|layer| {
-        matches!(
-            &layer.name,
-            ConfigLayerSource::SessionFlags
-                | ConfigLayerSource::User {
-                    profile: Some(_),
-                    ..
-                }
-        ) && ["model", "model_provider", "model_reasoning_effort"]
-            .iter()
-            .any(|key| layer.config.get(*key).is_some())
-    });
-    if harness_overrides.model.is_some()
-        || harness_overrides.model_provider.is_some()
-        || has_layer_override
-    {
-        crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig
-    } else {
-        crate::app_server_session::ResumeModelSettings::RestoreFromThread
-    }
+pub(super) fn resume_model_settings_for_overrides() -> crate::app_server_session::ResumeModelSettings
+{
+    crate::app_server_session::ResumeModelSettings::RestoreFromThread
 }
 
 impl App {
@@ -868,7 +846,7 @@ impl App {
     }
 
     pub(super) fn resume_model_settings(&self) -> crate::app_server_session::ResumeModelSettings {
-        resume_model_settings_for_overrides(&self.config, &self.harness_overrides)
+        resume_model_settings_for_overrides()
     }
 
     pub(super) fn on_update_personality(&mut self, personality: Personality) {
@@ -1198,6 +1176,7 @@ mod tests {
     use crate::legacy_core::config::edit::ConfigEdit;
     use crate::test_support::PathBufExt;
     use codex_config::ConfigLayerEntry;
+    use codex_config::ConfigLayerSource;
     use codex_config::ConfigLayerStack;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ReasoningEffortPreset;
@@ -1396,7 +1375,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_model_settings_preserves_only_explicit_model_overrides() {
+    async fn resume_model_settings_restores_selected_thread_despite_current_overrides() {
         let mut app = make_test_app().await;
 
         assert_eq!(
@@ -1407,23 +1386,11 @@ mod tests {
         let profile = "work"
             .parse::<codex_config::ProfileV2Name>()
             .expect("valid profile name");
-        for (key, expected) in [
-            (
-                "model",
-                crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
-            ),
-            (
-                "model_provider",
-                crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
-            ),
-            (
-                "model_reasoning_effort",
-                crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig,
-            ),
-            (
-                "sandbox_mode",
-                crate::app_server_session::ResumeModelSettings::RestoreFromThread,
-            ),
+        for key in [
+            "model",
+            "model_provider",
+            "model_reasoning_effort",
+            "sandbox_mode",
         ] {
             let config = TomlValue::Table(toml::map::Map::from_iter([(
                 key.to_string(),
@@ -1438,12 +1405,18 @@ mod tests {
                 Default::default(),
             )
             .expect("session flags layer stack");
-            assert_eq!(app.resume_model_settings(), expected);
+            assert_eq!(
+                app.resume_model_settings(),
+                crate::app_server_session::ResumeModelSettings::RestoreFromThread
+            );
 
             app.config.config_layer_stack = ConfigLayerStack::default()
                 .with_user_config_profile(&profile_path, Some(&profile), config)
                 .expect("user config profile layer stack");
-            assert_eq!(app.resume_model_settings(), expected);
+            assert_eq!(
+                app.resume_model_settings(),
+                crate::app_server_session::ResumeModelSettings::RestoreFromThread
+            );
         }
 
         app.config.config_layer_stack = ConfigLayerStack::default()
@@ -1463,7 +1436,7 @@ mod tests {
         app.harness_overrides.model_provider = Some("custom-provider".to_string());
         assert_eq!(
             app.resume_model_settings(),
-            crate::app_server_session::ResumeModelSettings::OverrideFromCurrentConfig
+            crate::app_server_session::ResumeModelSettings::RestoreFromThread
         );
     }
 
