@@ -2955,9 +2955,9 @@ fn dense_summary_line(input: SessionSummaryInput<'_>) -> Line<'static> {
     let spans = vec![
         input.marker,
         dense_column_text(input.date, columns.date_width).dim(),
+        dense_column_text(input.duration, columns.duration_width).dim(),
         dense_column_text(input.cwd, columns.cwd_width).dim(),
         dense_column_text(input.model, columns.model_width).dim(),
-        dense_column_text(input.duration, columns.duration_width).dim(),
         title,
     ];
     let mut line = Line::from(spans);
@@ -2981,9 +2981,9 @@ fn dense_summary_line(input: SessionSummaryInput<'_>) -> Line<'static> {
 
 struct DenseColumns {
     date_width: usize,
+    duration_width: usize,
     cwd_width: usize,
     model_width: usize,
-    duration_width: usize,
     title_width: usize,
 }
 
@@ -2992,9 +2992,9 @@ fn dense_columns(width: usize) -> DenseColumns {
     if width > metadata_width {
         return DenseColumns {
             date_width: 12,
+            duration_width: 8,
             cwd_width: 16,
             model_width: 36,
-            duration_width: 8,
             title_width: width - metadata_width,
         };
     }
@@ -3008,9 +3008,9 @@ fn dense_columns(width: usize) -> DenseColumns {
     let model_width = remaining.saturating_sub(cwd_width);
     DenseColumns {
         date_width,
+        duration_width,
         cwd_width,
         model_width,
-        duration_width,
         title_width,
     }
 }
@@ -3037,7 +3037,7 @@ fn cwd_leaf(cwd: Option<&Path>) -> String {
 fn session_model_display(row: &Row) -> String {
     let model = row.model.as_deref().unwrap_or("unknown model");
     let effort = row.reasoning_effort.as_deref().unwrap_or("default effort");
-    format!("{} / {model} · {effort}", row.model_provider)
+    format!("{model}:{effort}")
 }
 
 fn format_session_duration(
@@ -5420,9 +5420,9 @@ session_picker_view = "dense"
                 "/Users/felipe.coury/code/codex.fcoury-session-picker/codex-rs",
             )),
             git_branch: Some(String::from("fcoury/session-picker")),
-            model_provider: String::from("openai"),
-            model: Some(String::from("gpt-5")),
-            reasoning_effort: Some(String::from("medium")),
+            model_provider: String::from("xai"),
+            model: Some(String::from("grok-4.6")),
+            reasoning_effort: Some(String::from("high")),
         }
     }
 
@@ -5628,7 +5628,7 @@ session_picker_view = "dense"
             marker: selection_marker(/*is_selected*/ true, /*is_expanded*/ false),
             date: "15m ago",
             cwd: "codex",
-            model: "openai / gpt-5 · medium",
+            model: "gpt-5:medium",
             duration: "15m",
             title: "Selected dense row",
             is_selected: true,
@@ -5647,7 +5647,7 @@ session_picker_view = "dense"
             marker: selection_marker(/*is_selected*/ false, /*is_expanded*/ false),
             date: "15m ago",
             cwd: "codex",
-            model: "openai / gpt-5 · medium",
+            model: "gpt-5:medium",
             duration: "15m",
             title: "Zebra dense row",
             is_selected: false,

@@ -2,5 +2,5 @@
 source: tui/src/resume_picker.rs
 expression: "render_dense_row_snapshot(true, None, 120)"
 ---
-❯ 15m ago     codex-rs        openai / gpt-5 · medium             1h 15m  Propose session picker redesign with enoug...
+❯ 15m ago     1h 15m  codex-rs        grok-4.6:high                       Propose session picker redesign with enoug...
                                                                           title text to exercise truncation
