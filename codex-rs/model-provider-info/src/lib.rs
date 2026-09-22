@@ -49,6 +49,7 @@ pub const CLAUDEFLARE_PROVIDER_ID: &str = "claudeflare";
 pub const CLAUDEFLARE_RESPONSES_BASE_URL: &str = "http://127.0.0.1:8080/v1/ccflare/openai";
 pub const CLAUDEFLARE_KIMI_BASE_URL: &str = "http://127.0.0.1:8080/v1/kimi";
 pub const CLAUDEFLARE_GROK_BASE_URL: &str = "http://127.0.0.1:8080/v1/grok";
+pub const CLAUDEFLARE_MIMO_BASE_URL: &str = "http://127.0.0.1:8080/v1/xiaomi";
 pub const LLAMA_CPP_ROUTE_NAME: &str = "llama_cpp";
 const AMAZON_BEDROCK_PROVIDER_NAME: &str = "Amazon Bedrock";
 pub const AMAZON_BEDROCK_PROVIDER_ID: &str = "amazon-bedrock";
@@ -784,6 +785,19 @@ pub fn built_in_model_providers(
                     query_params: None,
                     request_max_retries: Some(0),
                     stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "mimo".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::OpenAi,
+                    base_url: CLAUDEFLARE_MIMO_BASE_URL.to_string(),
+                    request_path: "responses".to_string(),
+                    query_params: None,
+                    request_max_retries: None,
+                    stream_max_retries: None,
                     stream_idle_timeout_ms: None,
                 },
             ),

@@ -1,0 +1,93 @@
+{
+  "models": [
+    {
+      "slug": "xiaomi/mimo-v2.6-pro",
+      "inherits": "gpt-5.6-sol",
+      "display_name": "MiMo V2.6 Pro",
+      "description": "Xiaomi's flagship MiMo reasoning model.",
+      "default_reasoning_level": "high",
+      "supported_reasoning_levels": [
+        { "effort": "low", "description": "Lower thinking effort" },
+        { "effort": "medium", "description": "Balanced thinking effort" },
+        { "effort": "high", "description": "Higher thinking effort" },
+        { "effort": "xhigh", "description": "Highest thinking effort" }
+      ],
+      "priority": 36,
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "auto_compact_token_limit": 222000,
+      "input_modalities": ["text"],
+      "supports_image_detail_original": false,
+      "visibility": "list",
+      "support_verbosity": false,
+      "default_verbosity": null,
+      "apply_patch_tool_type": null,
+      "supports_search_tool": false,
+      "experimental_supported_tools": [],
+      "use_responses_lite": false,
+      "tool_mode": "direct",
+      "aliases": ["mimo-v2.6-pro"],
+      "history_compatibility_group": "mimo",
+      "supports_parallel_tool_calls": true,
+      "comp_hash": null,
+      "inference": {
+        "family": "open_ai",
+        "wire_api": "responses",
+        "dialect": "open_ai",
+        "route": "mimo",
+        "wire_model": "mimo-v2.6-pro"
+      }
+    },
+    {
+      "slug": "xiaomi/mimo-v2.6-flash",
+      "inherits": "xiaomi/mimo-v2.6-pro",
+      "display_name": "MiMo V2.6 Flash",
+      "description": "Xiaomi's fast MiMo reasoning model.",
+      "priority": 37,
+      "aliases": ["mimo-v2.6-flash"],
+      "history_compatibility_group": "mimo",
+      "inference": {
+        "family": "open_ai",
+        "wire_api": "responses",
+        "dialect": "open_ai",
+        "route": "mimo",
+        "wire_model": "mimo-v2.6-flash"
+      }
+    },
+    {
+      "slug": "xiaomi/mimo-v2.5-pro",
+      "inherits": "xiaomi/mimo-v2.6-pro",
+      "display_name": "MiMo V2.5 Pro",
+      "description": "Xiaomi's long-context MiMo reasoning model.",
+      "priority": 38,
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 850000,
+      "aliases": ["mimo-v2.5-pro"],
+      "history_compatibility_group": "mimo",
+      "inference": {
+        "family": "open_ai",
+        "wire_api": "responses",
+        "dialect": "open_ai",
+        "route": "mimo",
+        "wire_model": "mimo-v2.5-pro"
+      }
+    },
+    {
+      "slug": "xiaomi/mimo-v2.5",
+      "inherits": "xiaomi/mimo-v2.5-pro",
+      "display_name": "MiMo V2.5",
+      "description": "Xiaomi's long-context MiMo reasoning model.",
+      "priority": 39,
+      "aliases": ["mimo-v2.5"],
+      "history_compatibility_group": "mimo",
+      "inference": {
+        "family": "open_ai",
+        "wire_api": "responses",
+        "dialect": "open_ai",
+        "route": "mimo",
+        "wire_model": "mimo-v2.5"
+      }
+    }
+  ]
+}

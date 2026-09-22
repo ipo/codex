@@ -277,6 +277,58 @@ fn built_in_claudeflare_resolves_grok_route() {
 }
 
 #[test]
+fn built_in_claudeflare_resolves_mimo_route() {
+    let provider = built_in_model_providers(/*openai_base_url*/ None)
+        .remove(CLAUDEFLARE_PROVIDER_ID)
+        .expect("Claudeflare provider should be built in");
+    let model: ModelInfo = serde_json::from_value(serde_json::json!({
+        "slug": "xiaomi/mimo-v2.6-flash",
+        "inference": {
+            "family": "open_ai",
+            "wire_api": "responses",
+            "dialect": "open_ai",
+            "route": "mimo",
+            "wire_model": "mimo-v2.6-flash"
+        },
+        "display_name": "MiMo V2.6 Flash",
+        "description": null,
+        "supported_reasoning_levels": [],
+        "shell_type": "unified_exec",
+        "visibility": "none",
+        "supported_in_api": true,
+        "priority": 1,
+        "availability_nux": null,
+        "upgrade": null,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": {"mode": "tokens", "limit": 10000},
+        "experimental_supported_tools": []
+    }))
+    .expect("MiMo model fixture");
+
+    assert_eq!(
+        provider
+            .resolve_inference_plan(&model)
+            .expect("MiMo route should resolve"),
+        ResolvedInferencePlan::OpenAi {
+            wire_model: "mimo-v2.6-flash".to_string(),
+            route: ResolvedWireRoute {
+                name: Some("mimo".to_string()),
+                wire_api: WireApi::Responses,
+                dialect: InferenceDialect::OpenAi,
+                base_url: Some(CLAUDEFLARE_MIMO_BASE_URL.to_string()),
+                request_path: "responses".to_string(),
+                query_params: None,
+                request_max_retries: DEFAULT_REQUEST_MAX_RETRIES,
+                stream_max_retries: 10,
+                stream_idle_timeout: Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
+            },
+        }
+    );
+}
+
+#[test]
 fn legacy_metadata_and_invalid_native_routes_resolve_before_sampling() {
     let provider = ModelProviderInfo {
         base_url: Some("https://legacy.example/v1".to_string()),
@@ -636,6 +688,19 @@ fn test_built_in_model_providers_include_native_kimi_route() {
                     query_params: None,
                     request_max_retries: Some(0),
                     stream_max_retries: Some(10),
+                    stream_idle_timeout_ms: None,
+                },
+            ),
+            (
+                "mimo".to_string(),
+                ModelProviderWireRoute {
+                    wire_api: WireApi::Responses,
+                    dialect: InferenceDialect::OpenAi,
+                    base_url: CLAUDEFLARE_MIMO_BASE_URL.to_string(),
+                    request_path: "responses".to_string(),
+                    query_params: None,
+                    request_max_retries: None,
+                    stream_max_retries: None,
                     stream_idle_timeout_ms: None,
                 },
             ),

@@ -1751,6 +1751,72 @@ fn bundled_grok_profiles_resolve_exact_request_contracts() {
 }
 
 #[test]
+fn bundled_mimo_profiles_resolve_exact_request_contracts() {
+    let catalog = bundled_models_response().expect("bundled catalog should parse");
+    let actual = catalog
+        .models
+        .iter()
+        .filter(|model| model.slug.starts_with("xiaomi/mimo-"))
+        .map(|model| {
+            json!({
+                "slug": model.slug,
+                "aliases": model.aliases,
+                "context_window": model.context_window,
+                "max_context_window": model.max_context_window,
+                "auto_compact_token_limit": model.auto_compact_token_limit,
+                "history_compatibility_group": model.history_compatibility_group,
+                "default_reasoning_level": model.default_reasoning_level,
+                "supported_reasoning_levels": model.supported_reasoning_levels,
+                "input_modalities": model.input_modalities,
+                "supports_search_tool": model.supports_search_tool,
+                "support_verbosity": model.support_verbosity,
+                "tool_mode": model.tool_mode,
+                "inference": model.inference,
+            })
+        })
+        .collect::<Vec<_>>();
+    let reasoning_levels = json!([
+        {"effort":"low","description":"Lower thinking effort"},
+        {"effort":"medium","description":"Balanced thinking effort"},
+        {"effort":"high","description":"Higher thinking effort"},
+        {"effort":"xhigh","description":"Highest thinking effort"}
+    ]);
+    assert_eq!(
+        actual,
+        vec![
+            json!({"slug":"xiaomi/mimo-v2.6-pro","aliases":["mimo-v2.6-pro"],
+                "context_window":272000,"max_context_window":272000,
+                "auto_compact_token_limit":222000,"history_compatibility_group":"mimo",
+                "default_reasoning_level":"high","supported_reasoning_levels":reasoning_levels,
+                "input_modalities":["text"],"supports_search_tool":false,
+                "support_verbosity":false,"tool_mode":"direct",
+                "inference":{"family":"open_ai","wire_api":"responses","dialect":"open_ai","route":"mimo","wire_model":"mimo-v2.6-pro"}}),
+            json!({"slug":"xiaomi/mimo-v2.6-flash","aliases":["mimo-v2.6-flash"],
+                "context_window":272000,"max_context_window":272000,
+                "auto_compact_token_limit":222000,"history_compatibility_group":"mimo",
+                "default_reasoning_level":"high","supported_reasoning_levels":reasoning_levels,
+                "input_modalities":["text"],"supports_search_tool":false,
+                "support_verbosity":false,"tool_mode":"direct",
+                "inference":{"family":"open_ai","wire_api":"responses","dialect":"open_ai","route":"mimo","wire_model":"mimo-v2.6-flash"}}),
+            json!({"slug":"xiaomi/mimo-v2.5-pro","aliases":["mimo-v2.5-pro"],
+                "context_window":1000000,"max_context_window":1000000,
+                "auto_compact_token_limit":850000,"history_compatibility_group":"mimo",
+                "default_reasoning_level":"high","supported_reasoning_levels":reasoning_levels,
+                "input_modalities":["text"],"supports_search_tool":false,
+                "support_verbosity":false,"tool_mode":"direct",
+                "inference":{"family":"open_ai","wire_api":"responses","dialect":"open_ai","route":"mimo","wire_model":"mimo-v2.5-pro"}}),
+            json!({"slug":"xiaomi/mimo-v2.5","aliases":["mimo-v2.5"],
+                "context_window":1000000,"max_context_window":1000000,
+                "auto_compact_token_limit":850000,"history_compatibility_group":"mimo",
+                "default_reasoning_level":"high","supported_reasoning_levels":reasoning_levels,
+                "input_modalities":["text"],"supports_search_tool":false,
+                "support_verbosity":false,"tool_mode":"direct",
+                "inference":{"family":"open_ai","wire_api":"responses","dialect":"open_ai","route":"mimo","wire_model":"mimo-v2.5"}}),
+        ]
+    );
+}
+
+#[test]
 fn inference_metadata_is_not_inherited_by_model_name_prefixes() {
     let mut candidate = remote_model("native-model", "Native", /*priority*/ 0);
     candidate.inference = Some(ModelInferenceConfig::Grok(GrokInferenceConfig {

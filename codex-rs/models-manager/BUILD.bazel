@@ -5,6 +5,7 @@ codex_rust_crate(
     compile_data = [
         "grok_models.json",
         "kimi_models.json",
+        "mimo_models.json",
         "models.json",
         "prompt.md",
     ],
