@@ -448,15 +448,15 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
 
-    // Create rollouts under two providers.
+    // Create rollouts under the configured default and another provider.
     let _a = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T10-00-00",
         "2025-01-02T10:00:00Z",
         "X",
-        Some("mock_provider"),
+        Some("openai"),
         /*git_info*/ None,
-    )?; // mock_provider
+    )?; // configured default provider
     let _b = create_fake_rollout(
         codex_home.path(),
         "2025-01-02T11-00-00",
@@ -467,6 +467,40 @@ async fn thread_list_respects_provider_filter() -> Result<()> {
     )?;
 
     let mut mcp = init_mcp(codex_home.path()).await?;
+
+    // An omitted filter retains the configured-default provider behavior.
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        /*cursor*/ None,
+        Some(10),
+        /*providers*/ None,
+        /*source_kinds*/ None,
+        /*archived*/ None,
+    )
+    .await?;
+    assert_eq!(
+        data.iter()
+            .map(|thread| thread.model_provider.as_str())
+            .collect::<Vec<_>>(),
+        vec!["openai"]
+    );
+
+    // A present empty filter explicitly requests all providers.
+    let ThreadListResponse { data, .. } = list_threads(
+        &mut mcp,
+        /*cursor*/ None,
+        Some(10),
+        Some(Vec::new()),
+        /*source_kinds*/ None,
+        /*archived*/ None,
+    )
+    .await?;
+    assert_eq!(
+        data.iter()
+            .map(|thread| thread.model_provider.as_str())
+            .collect::<Vec<_>>(),
+        vec!["other_provider", "openai"]
+    );
 
     // Filter to only other_provider; expect 1 item, nextCursor None.
     let ThreadListResponse {

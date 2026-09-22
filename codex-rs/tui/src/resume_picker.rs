@@ -1996,7 +1996,7 @@ fn thread_list_params(
         sort_key: Some(sort_key),
         sort_direction: None,
         model_providers: match provider_filter {
-            ProviderFilter::Any => None,
+            ProviderFilter::Any => Some(Vec::new()),
             ProviderFilter::MatchDefault(default_provider) => Some(vec![default_provider]),
         },
         source_kinds: Some(crate::resume_source_kinds(include_non_interactive)),
@@ -3730,7 +3730,7 @@ mod tests {
     }
 
     #[test]
-    fn local_picker_thread_list_params_include_cwd_filter() {
+    fn local_resume_thread_list_params_include_all_providers_and_cwd_filter() {
         let cwd_filter = picker_cwd_filter(
             Path::new("/tmp/project"),
             /*show_all*/ false,
@@ -3741,7 +3741,7 @@ mod tests {
             Some(String::from("cursor-1")),
             cwd_filter.as_deref(),
             SessionStatus::Active,
-            ProviderFilter::MatchDefault(String::from("openai")),
+            ProviderFilter::Any,
             ThreadSortKey::UpdatedAt,
             /*include_non_interactive*/ false,
             /*use_state_db_only*/ true,
@@ -3751,6 +3751,7 @@ mod tests {
             params.cwd,
             Some(ThreadListCwdFilter::One(String::from("/tmp/project")))
         );
+        assert_eq!(params.model_providers, Some(Vec::new()));
         assert!(params.use_state_db_only);
     }
 
@@ -4155,7 +4156,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_thread_list_params_omit_provider_filter() {
+    fn remote_resume_thread_list_params_include_all_providers() {
         let params = thread_list_params(
             Some(String::from("cursor-1")),
             Some(Path::new("repo/on/server")),
@@ -4167,7 +4168,7 @@ mod tests {
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(Vec::new()));
         assert_eq!(
             params.source_kinds,
             Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode])
@@ -4191,9 +4192,24 @@ mod tests {
         );
 
         assert_eq!(params.cursor, Some(String::from("cursor-1")));
-        assert_eq!(params.model_providers, None);
+        assert_eq!(params.model_providers, Some(Vec::new()));
         let source_kinds = crate::resume_source_kinds(/*include_non_interactive*/ true);
         assert_eq!(params.source_kinds, Some(source_kinds));
+    }
+
+    #[test]
+    fn fork_thread_list_params_keep_default_provider_filter() {
+        let params = thread_list_params(
+            /*cursor*/ None,
+            /*cwd_filter*/ None,
+            SessionStatus::Active,
+            ProviderFilter::MatchDefault(String::from("openai")),
+            ThreadSortKey::UpdatedAt,
+            /*include_non_interactive*/ false,
+            /*use_state_db_only*/ true,
+        );
+
+        assert_eq!(params.model_providers, Some(vec![String::from("openai")]));
     }
 
     #[test]
