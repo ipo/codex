@@ -141,6 +141,7 @@ use codex_model_provider::create_model_provider;
 #[cfg(test)]
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ResolvedWireRoute;
 use codex_model_provider_info::WireApi;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
@@ -1146,6 +1147,25 @@ impl ModelClient {
         Ok(ReqwestTransport::from_http_client(client))
     }
 
+    fn api_provider_for_resolved_route(
+        &self,
+        mut api_provider: ApiProvider,
+        route: &ResolvedWireRoute,
+    ) -> ApiProvider {
+        if let Some(base_url) = &route.base_url {
+            api_provider.base_url = base_url.clone();
+        }
+        api_provider.query_params = route.query_params.clone().map(|params| {
+            params
+                .into_iter()
+                .map(|(name, value)| (name, value.into_inner()))
+                .collect()
+        });
+        api_provider.retry.max_attempts = route.request_max_retries;
+        api_provider.stream_idle_timeout = route.stream_idle_timeout;
+        api_provider
+    }
+
     pub(crate) async fn prewarm_auth(&self) -> Result<()> {
         self.current_client_setup().await.map(|_| ())
     }
@@ -1443,6 +1463,17 @@ impl ModelClientSession {
         if !self.client.responses_websocket_enabled(model_info) {
             return Ok(());
         }
+        if matches!(
+            self.client
+                .state
+                .provider
+                .info()
+                .resolve_inference_plan(model_info),
+            Ok(codex_model_provider_info::ResolvedInferencePlan::OpenAi { route, .. })
+                if route.name.is_some()
+        ) {
+            return Ok(());
+        }
         if self.websocket_session.connection.is_some() {
             return Ok(());
         }
@@ -1584,6 +1615,8 @@ impl ModelClientSession {
         &self,
         prompt: &Prompt,
         model_info: &ModelInfo,
+        wire_model: &str,
+        route: &ResolvedWireRoute,
         session_telemetry: &SessionTelemetry,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
@@ -1602,10 +1635,18 @@ impl ModelClientSession {
             let endpoint = self
                 .client
                 .responses_endpoint(client_setup.auth.as_ref(), &model_info.slug);
-            tracing::Span::current().record("api.path", endpoint.path());
+            let request_path = if endpoint == ResponsesEndpoint::Responses {
+                route.request_path.as_str()
+            } else {
+                endpoint.path()
+            };
+            tracing::Span::current().record("api.path", request_path);
+            let api_provider = self
+                .client
+                .api_provider_for_resolved_route(client_setup.api_provider, route);
             let transport = self
                 .client
-                .build_api_transport(&client_setup.api_provider, endpoint.path())?;
+                .build_api_transport(&api_provider, request_path)?;
             let request_auth_context = AuthRequestTelemetryContext::new(
                 client_setup.auth.as_ref().map(CodexAuth::auth_mode),
                 client_setup.api_auth.as_ref(),
@@ -1635,6 +1676,7 @@ impl ModelClientSession {
                 service_tier.clone(),
                 responses_metadata,
             )?;
+            request.model = wire_model.to_string();
             if endpoint == ResponsesEndpoint::Guardian {
                 request.service_tier = None;
             }
@@ -1660,13 +1702,10 @@ impl ModelClientSession {
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);
-            let client = ApiResponsesClient::new(
-                transport,
-                client_setup.api_provider,
-                client_setup.api_auth,
-            )
-            .with_endpoint(endpoint)
-            .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+            let client = ApiResponsesClient::new(transport, api_provider, client_setup.api_auth)
+                .with_endpoint(endpoint)
+                .with_request_path(request_path)
+                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
             let stream_result = client.stream_request(request, options).await;
 
             match stream_result {
@@ -2051,12 +2090,10 @@ impl ModelClientSession {
             .info()
             .resolve_inference_plan(model_info)
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-        let wire_api = match plan {
-            codex_model_provider_info::ResolvedInferencePlan::Legacy { route, .. } => {
-                route.wire_api
-            }
-            codex_model_provider_info::ResolvedInferencePlan::OpenAi { route, .. } => {
-                route.wire_api
+        let (wire_model, route) = match plan {
+            codex_model_provider_info::ResolvedInferencePlan::Legacy { wire_model, route }
+            | codex_model_provider_info::ResolvedInferencePlan::OpenAi { wire_model, route } => {
+                (wire_model, route)
             }
             codex_model_provider_info::ResolvedInferencePlan::Kimi { config, route } => {
                 return self
@@ -2108,9 +2145,9 @@ impl ModelClientSession {
                 )));
             }
         };
-        match wire_api {
+        match route.wire_api {
             WireApi::Responses => {
-                if self.client.responses_websocket_enabled(model_info) {
+                if route.name.is_none() && self.client.responses_websocket_enabled(model_info) {
                     let request_trace = current_span_w3c_trace_context();
                     match self
                         .stream_responses_websocket(
@@ -2137,6 +2174,8 @@ impl ModelClientSession {
                 self.stream_responses_api(
                     prompt,
                     model_info,
+                    &wire_model,
+                    &route,
                     session_telemetry,
                     effort,
                     summary,
@@ -2148,7 +2187,8 @@ impl ModelClientSession {
             }
             WireApi::AnthropicMessages | WireApi::ChatCompletions => {
                 Err(CodexErr::InvalidRequest(format!(
-                    "legacy provider wire API `{wire_api}` is not supported by the active inference client"
+                    "legacy provider wire API `{}` is not supported by the active inference client",
+                    route.wire_api
                 )))
             }
         }

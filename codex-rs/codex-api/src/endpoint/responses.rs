@@ -50,6 +50,7 @@ pub struct ResponsesClient<T: HttpTransport> {
     session: EndpointSession<T>,
     sse_telemetry: Option<Arc<dyn SseTelemetry>>,
     endpoint: ResponsesEndpoint,
+    request_path: String,
 }
 
 #[derive(Default)]
@@ -68,12 +69,20 @@ impl<T: HttpTransport> ResponsesClient<T> {
             session: EndpointSession::new(transport, provider, auth),
             sse_telemetry: None,
             endpoint: ResponsesEndpoint::Responses,
+            request_path: ResponsesEndpoint::Responses.path().to_string(),
         }
     }
 
     /// Selects a Responses-compatible backend route for subsequent requests.
     pub fn with_endpoint(mut self, endpoint: ResponsesEndpoint) -> Self {
         self.endpoint = endpoint;
+        self.request_path = endpoint.path().to_string();
+        self
+    }
+
+    /// Overrides the provider-relative request path for a Responses-compatible route.
+    pub fn with_request_path(mut self, request_path: impl Into<String>) -> Self {
+        self.request_path = request_path.into();
         self
     }
 
@@ -86,6 +95,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             session: self.session.with_request_telemetry(request),
             sse_telemetry: sse,
             endpoint: self.endpoint,
+            request_path: self.request_path,
         }
     }
 
@@ -169,7 +179,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
             .session
             .stream_encoded_json_with(
                 Method::POST,
-                self.endpoint.path(),
+                &self.request_path,
                 extra_headers,
                 Some(body),
                 |req| {

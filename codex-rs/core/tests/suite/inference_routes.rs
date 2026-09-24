@@ -1,13 +1,61 @@
 use anyhow::Result;
+use codex_model_provider_info::CLAUDEFLARE_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderWireRoute;
 use codex_model_provider_info::WireApi;
+use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::model_inference::AnthropicThinkingPolicy;
 use codex_protocol::model_inference::InferenceDialect;
 use codex_protocol::model_inference::ModelInferenceConfig;
 use core_test_support::responses;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use wiremock::matchers::path;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn named_openai_responses_route_uses_route_transport_and_wire_model() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response = mount_sse_once_match(
+        &server,
+        path("/v1/xiaomi/responses"),
+        sse(vec![
+            ev_assistant_message("msg-mimo", "routed"),
+            ev_completed("resp-mimo"),
+        ]),
+    )
+    .await;
+    let route_base_url = format!("{}/v1/xiaomi", server.uri());
+    let test = test_codex()
+        .with_config(move |config| {
+            let mut provider = built_in_model_providers(/*openai_base_url*/ None)
+                .remove(CLAUDEFLARE_PROVIDER_ID)
+                .expect("built-in Claudeflare provider");
+            provider.stream_max_retries = Some(0);
+            provider
+                .wire_routes
+                .get_mut("mimo")
+                .expect("MiMo route")
+                .base_url = route_base_url;
+            config.model_provider = provider;
+            config.model = Some("xiaomi/mimo-v2.6-pro".to_string());
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("route this request").await?;
+
+    assert_eq!(
+        response.single_request().body_json()["model"],
+        "mimo-v2.6-pro"
+    );
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn missing_native_route_fails_during_thread_start_without_sampling() -> Result<()> {
