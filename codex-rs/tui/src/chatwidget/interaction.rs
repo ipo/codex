@@ -3,7 +3,123 @@
 use super::*;
 use crate::bottom_pane::BottomPaneView;
 
+// A blocking clipboard read can finish after its async waiter is aborted. Keep
+// ownership of the resulting file until it is handed to the app event queue.
+struct TaskOwnedClipboardImage(Option<(PathBuf, crate::clipboard_paste::PastedImageInfo)>);
+
+impl TaskOwnedClipboardImage {
+    fn new(image: (PathBuf, crate::clipboard_paste::PastedImageInfo)) -> Self {
+        Self(Some(image))
+    }
+
+    fn into_parts(mut self) -> (PathBuf, crate::clipboard_paste::PastedImageInfo) {
+        self.0
+            .take()
+            .expect("clipboard image not previously consumed")
+    }
+}
+
+impl Drop for TaskOwnedClipboardImage {
+    fn drop(&mut self) {
+        if let Some((path, _)) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+fn spawn_native_clipboard_read(
+    read: impl FnOnce() -> Result<
+        (PathBuf, crate::clipboard_paste::PastedImageInfo),
+        crate::clipboard_paste::PasteImageError,
+    > + Send
+    + 'static,
+) -> tokio::task::JoinHandle<Result<TaskOwnedClipboardImage, crate::clipboard_paste::PasteImageError>>
+{
+    tokio::task::spawn_blocking(move || read().map(TaskOwnedClipboardImage::new))
+}
+
 impl ChatWidget {
+    fn start_clipboard_image_read(&mut self) {
+        if self.clipboard_image_task.is_some() {
+            return;
+        }
+        let request_id = uuid::Uuid::new_v4();
+        let thread_id = self.thread_id;
+        let tx = self.app_event_tx.app_event_tx.clone();
+        let task = tokio::spawn(async move {
+            let result =
+                spawn_native_clipboard_read(crate::clipboard_paste::paste_image_to_temp_png)
+                    .await
+                    .unwrap_or_else(|err| {
+                        Err(crate::clipboard_paste::PasteImageError::IoError(
+                            err.to_string(),
+                        ))
+                    });
+            #[cfg(target_os = "linux")]
+            let result = match result {
+                Err(ref err) if crate::clipboard_paste::x11_bmp::should_try(err) => {
+                    crate::clipboard_paste::x11_bmp::read_xclip_bmp()
+                        .await
+                        .map(TaskOwnedClipboardImage::new)
+                }
+                other => other,
+            };
+            let result = result.map(TaskOwnedClipboardImage::into_parts);
+            if let Err(err) = tx.send(AppEvent::ClipboardImageRead {
+                request_id,
+                thread_id,
+                result,
+            }) && let AppEvent::ClipboardImageRead {
+                result: Ok((path, _)),
+                ..
+            } = err.0
+            {
+                let _ = std::fs::remove_file(path);
+            }
+        });
+        self.clipboard_image_task = Some((request_id, task));
+    }
+
+    pub(crate) fn finish_clipboard_image_read(
+        &mut self,
+        request_id: uuid::Uuid,
+        thread_id: Option<ThreadId>,
+        result: Result<
+            (PathBuf, crate::clipboard_paste::PastedImageInfo),
+            crate::clipboard_paste::PasteImageError,
+        >,
+    ) {
+        let matching_request =
+            self.clipboard_image_task.as_ref().map(|(id, _)| *id) == Some(request_id);
+        if matching_request && self.thread_id != thread_id {
+            self.clipboard_image_task.take();
+        }
+        if !matching_request || self.thread_id != thread_id {
+            if let Ok((path, _)) = result {
+                let _ = std::fs::remove_file(path);
+            }
+            return;
+        }
+        self.clipboard_image_task.take();
+        match result {
+            Ok((path, info)) => {
+                tracing::debug!(
+                    "pasted image size={}x{} format={}",
+                    info.width,
+                    info.height,
+                    info.encoded_format.label()
+                );
+                self.attach_image(path);
+            }
+            Err(err) => {
+                tracing::warn!("failed to paste image: {err}");
+                self.add_to_history(history_cell::new_error_event(format!(
+                    "Failed to paste image: {err}"
+                )));
+            }
+        }
+    }
+
     pub(crate) fn set_agents_navigation_enabled(&mut self, enabled: bool) {
         self.bottom_pane.set_agents_navigation_enabled(enabled);
     }
@@ -87,23 +203,7 @@ impl ChatWidget {
             } if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
                 && c.eq_ignore_ascii_case(&'v') =>
             {
-                match paste_image_to_temp_png() {
-                    Ok((path, info)) => {
-                        tracing::debug!(
-                            "pasted image size={}x{} format={}",
-                            info.width,
-                            info.height,
-                            info.encoded_format.label()
-                        );
-                        self.attach_image(path);
-                    }
-                    Err(err) => {
-                        tracing::warn!("failed to paste image: {err}");
-                        self.add_to_history(history_cell::new_error_event(format!(
-                            "Failed to paste image: {err}",
-                        )));
-                    }
-                }
+                self.start_clipboard_image_read();
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -646,3 +746,7 @@ impl ChatWidget {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "interaction_tests.rs"]
+mod tests;

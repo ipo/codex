@@ -4608,6 +4608,7 @@ dependencies = [
  "windows-sys 0.52.0",
  "winsplit",
  "wiremock",
+ "x11rb",
 ]
 
 [[package]]

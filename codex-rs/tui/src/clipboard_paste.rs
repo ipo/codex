@@ -108,6 +108,10 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
     ))
 }
 
+#[cfg(target_os = "linux")]
+#[path = "clipboard_paste/x11_bmp.rs"]
+pub(crate) mod x11_bmp;
+
 /// Android/Termux does not support arboard; return a clear error.
 #[cfg(target_os = "android")]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {

@@ -33,7 +33,8 @@ impl App {
         if self.reconnect.offline
             && !matches!(
                 &event,
-                AppEvent::InsertHistoryCell(_)
+                AppEvent::ClipboardImageRead { .. }
+                    | AppEvent::InsertHistoryCell(_)
                     | AppEvent::AppendMessageHistoryEntry { .. }
                     | AppEvent::BeginInitialHistoryReplayBuffer
                     | AppEvent::BeginThreadSwitchHistoryReplayBuffer
@@ -62,6 +63,9 @@ impl App {
         }
 
         match event {
+            AppEvent::ClipboardImageRead { request_id, thread_id, result } => {
+                self.chat_widget.finish_clipboard_image_read(request_id, thread_id, result);
+            }
             AppEvent::SkillsListLoaded { ref cwd, .. }
             | AppEvent::PluginMentionsLoaded { ref cwd, .. }
                 if cwds_differ(cwd, self.config.cwd.as_path()) => {}

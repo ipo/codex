@@ -224,6 +224,15 @@ pub(crate) struct AgentsOverviewThreadRefresh {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, IntoStaticStr)]
 pub(crate) enum AppEvent {
+    /// Clipboard work completed for a particular composer instance and conversation.
+    ClipboardImageRead {
+        request_id: Uuid,
+        thread_id: Option<ThreadId>,
+        result: Result<
+            (PathBuf, crate::clipboard_paste::PastedImageInfo),
+            crate::clipboard_paste::PasteImageError,
+        >,
+    },
     /// Open the daemon-wide overview of recent and locally retained root sessions.
     OpenAgentsOverview,
     /// Update the daemon-wide overview after a background thread listing finishes.

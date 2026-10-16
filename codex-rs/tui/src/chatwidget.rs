@@ -300,7 +300,6 @@ use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::custom_prompt_view::CustomPromptView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
-use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::collaboration_modes;
 use crate::diff_render::display_path_for;
 use crate::exec_cell::CommandOutput;
@@ -589,6 +588,7 @@ struct RejectedTemporaryUserTurnInput {
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
 pub(crate) struct ChatWidget {
+    clipboard_image_task: Option<(uuid::Uuid, tokio::task::JoinHandle<()>)>,
     app_event_tx: AppEventSender,
     codex_op_target: CodexOpTarget,
     bottom_pane: BottomPane,
@@ -2039,6 +2039,9 @@ fn has_websocket_timing_metrics(summary: RuntimeMetricsSummary) -> bool {
 
 impl Drop for ChatWidget {
     fn drop(&mut self) {
+        if let Some((_, task)) = self.clipboard_image_task.take() {
+            task.abort();
+        }
         self.stop_rate_limit_poller();
     }
 }

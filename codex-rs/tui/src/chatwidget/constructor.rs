@@ -105,6 +105,7 @@ impl ChatWidget {
             pet_http_client.clone(),
         );
         let mut widget = Self {
+            clipboard_image_task: None,
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_target,
