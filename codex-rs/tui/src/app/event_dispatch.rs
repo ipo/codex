@@ -450,7 +450,9 @@ impl App {
                 );
                 self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                     .await;
-                let config = self.fresh_session_config();
+                let mut config = self.fresh_session_config();
+                config.model = Some(self.chat_widget.current_model().to_string());
+                config.model_reasoning_effort = self.chat_widget.current_reasoning_effort();
                 let turns = match self.thread_event_channels.get(&thread_id) {
                     Some(channel) => {
                         let store = channel.store.lock().await;

@@ -1,0 +1,9 @@
+---
+source: tui/src/app/tests.rs
+expression: "normalize_snapshot_paths(render_bottom_popup(&app.chat_widget, 100))"
+---
+  [Image #1]
+
+› selected prompt [Image #1]
+
+  gpt-5.4 high · /tmp/project

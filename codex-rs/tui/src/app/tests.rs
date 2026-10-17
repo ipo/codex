@@ -54,6 +54,7 @@ use codex_utils_absolute_path::test_support::PathExt;
 
 use crate::chatwidget::ChatWidgetInit;
 use crate::chatwidget::create_initial_user_message;
+use crate::chatwidget::tests::helpers::normalize_snapshot_paths;
 use crate::chatwidget::tests::helpers::render_bottom_popup;
 use crate::chatwidget::tests::helpers::set_active_cell;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
@@ -7261,7 +7262,19 @@ async fn remembered_current_cwd_stays_at_launch_across_in_app_resumes() -> Resul
 #[tokio::test]
 async fn prompt_edit_forks_before_selected_prompt_and_preserves_source() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let config = app.chat_widget.config_ref().clone();
+    let mut config = app.chat_widget.config_ref().clone();
+    config.model = Some("gpt-5.4".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
+    app.cli_kv_overrides.extend([
+        (
+            "model".to_string(),
+            toml::Value::String("gpt-5.1".to_string()),
+        ),
+        (
+            "model_reasoning_effort".to_string(),
+            toml::Value::String("low".to_string()),
+        ),
+    ]);
     let filename_ts = "2025-01-05T12-00-00";
     let source_thread_id = app_test_support::create_fake_rollout(
         config.codex_home.as_path(),
@@ -7389,6 +7402,17 @@ async fn prompt_edit_forks_before_selected_prompt_and_preserves_source() -> Resu
         .thread_id()
         .expect("prompt edit should switch to a forked thread");
     assert_ne!(forked_thread_id, source_thread_id);
+    assert_eq!(
+        (
+            app.chat_widget.current_model(),
+            app.chat_widget.current_reasoning_effort(),
+        ),
+        ("gpt-5.4", Some(ReasoningEffortConfig::High)),
+    );
+    assert_snapshot!(
+        "prompt_edit_preserves_thread_model",
+        normalize_snapshot_paths(render_bottom_popup(&app.chat_widget, /*width*/ 100))
+    );
     assert_eq!(app.chat_widget.composer_text_with_pending(), prompt.text);
     assert_eq!(
         app.chat_widget.remote_image_urls(),
@@ -7446,7 +7470,19 @@ async fn prompt_edit_forks_before_selected_prompt_and_preserves_source() -> Resu
 #[tokio::test]
 async fn prompt_edit_before_first_prompt_starts_fresh_thread() -> Result<()> {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let config = app.chat_widget.config_ref().clone();
+    let mut config = app.chat_widget.config_ref().clone();
+    config.model = Some("gpt-5.4".to_string());
+    config.model_reasoning_effort = Some(ReasoningEffortConfig::High);
+    app.cli_kv_overrides.extend([
+        (
+            "model".to_string(),
+            toml::Value::String("gpt-5.1".to_string()),
+        ),
+        (
+            "model_reasoning_effort".to_string(),
+            toml::Value::String("low".to_string()),
+        ),
+    ]);
     let source_thread_id = app_test_support::create_fake_rollout(
         config.codex_home.as_path(),
         "2025-01-05T12-00-00",
@@ -7487,6 +7523,17 @@ async fn prompt_edit_before_first_prompt_starts_fresh_thread() -> Result<()> {
         .thread_id()
         .expect("first prompt edit should start a fresh thread");
     assert_ne!(fresh_thread_id, source_thread_id);
+    assert_eq!(
+        (
+            app.chat_widget.current_model(),
+            app.chat_widget.current_reasoning_effort(),
+        ),
+        ("gpt-5.4", Some(ReasoningEffortConfig::High)),
+    );
+    assert_snapshot!(
+        "first_prompt_edit_preserves_thread_model",
+        normalize_snapshot_paths(render_bottom_popup(&app.chat_widget, /*width*/ 100))
+    );
     assert_eq!(app.chat_widget.composer_text_with_pending(), "first prompt");
     let history = std::iter::from_fn(|| app_event_rx.try_recv().ok())
         .filter_map(|event| match event {
