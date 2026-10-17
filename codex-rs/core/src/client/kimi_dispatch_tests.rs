@@ -440,6 +440,111 @@ fn kimi_compaction_threshold_uses_both_required_boundaries() {
 }
 
 #[test]
+fn projected_image_history_and_large_text_use_the_shared_budget_estimate() {
+    let mut model = codex_models_manager::bundled_models_response()
+        .expect("catalog")
+        .models
+        .into_iter()
+        .find(|model| model.slug == "kimi/k3-256k")
+        .expect("Kimi profile");
+    // The bundled profile already resolves inherited context and inference metadata.
+    model.default_reasoning_level = Some(ReasoningEffortConfig::High);
+    let Some(codex_protocol::model_inference::ModelInferenceConfig::Kimi(config)) =
+        model.inference.as_ref()
+    else {
+        panic!("native Kimi profile");
+    };
+    for image_size in [480_539, 960_539] {
+        let image_url = format!("data:image/png;base64,{}", "A".repeat(image_size));
+        let input = vec![
+            text_message("user", &"text".repeat(100_000)),
+            message(
+                "user",
+                vec![ContentItem::InputImage {
+                    image_url: image_url.clone(),
+                    detail: None,
+                }],
+            ),
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "exec".to_string(),
+                namespace: None,
+                arguments: r#"{"code":"image(result)"}"#.to_string(),
+                encrypted_function_args: None,
+                call_id: "exec-1".to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: Some("exec-1".to_string()),
+                name: Some("exec".to_string()),
+                namespace: None,
+                output: FunctionCallOutputPayload::from_content_items(
+                    (0..3)
+                        .map(|_| FunctionCallOutputContentItem::InputImage {
+                            image_url: image_url.clone(),
+                            detail: None,
+                        })
+                        .collect(),
+                ),
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ];
+        let prompt = prompt(input);
+        let estimate = estimated_input_tokens(&prompt, &model).expect("estimate");
+        assert!((108_000..109_000).contains(&estimate));
+        assert!(!should_compact(&model, estimate));
+        let request = kimi_request(
+            &prompt,
+            &model,
+            Some(ReasoningEffortConfig::High),
+            "test".to_string(),
+            config,
+        )
+        .expect("request");
+        assert_eq!(request.max_completion_tokens, 131_072);
+        assert_eq!(
+            estimate,
+            codex_api::estimate_kimi_input_tokens(&request.messages, &request.tools)
+        );
+    }
+
+    let mut large_schema = prompt(Vec::new());
+    large_schema.tools = vec![ToolSpec::Function(ResponsesApiTool {
+        name: "inspect".to_string(),
+        description: "inspect payload".to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::from([(
+                "payload".to_string(),
+                JsonSchema::string(Some("schema".repeat(150_000))),
+            )]),
+            Some(Vec::new()),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })]
+    .into();
+    for prompt in [
+        prompt(vec![text_message("user", &"text".repeat(225_000))]),
+        large_schema,
+    ] {
+        let estimate = estimated_input_tokens(&prompt, &model).expect("large estimate");
+        assert!(should_compact(&model, estimate));
+        let request = kimi_request(
+            &prompt,
+            &model,
+            Some(ReasoningEffortConfig::High),
+            "test".to_string(),
+            config,
+        )
+        .expect("large request");
+        assert_eq!(request.max_completion_tokens, 262_144 - estimate);
+    }
+}
+
+#[test]
 fn validates_native_kimi_route_contract() {
     assert!(validate_route(&kimi_route()).is_ok());
 

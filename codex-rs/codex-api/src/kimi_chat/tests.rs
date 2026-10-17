@@ -54,6 +54,110 @@ fn decode(stream: &str) -> Result<KimiDecodedResponse, KimiStreamError> {
 }
 
 #[test]
+fn image_estimates_ignore_encoding_size_without_discounting_text() {
+    let config = profile("k3-256k", 131_072, KimiThinkingPolicy::RequiredWithEffort);
+    for role in ["user", "tool"] {
+        let mut estimates = Vec::new();
+        for image_size in [480_539, 960_539] {
+            let parts = (0..4)
+                .map(|_| {
+                    json!({"type":"image_url","image_url":{
+                        "url":format!("data:image/png;base64,{}", "A".repeat(image_size))
+                    }})
+                })
+                .collect();
+            let content = KimiContent::Parts(parts);
+            let images = match role {
+                "user" => KimiMessage::User { content },
+                "tool" => KimiMessage::Tool {
+                    tool_call_id: "call-1".to_string(),
+                    content,
+                },
+                _ => unreachable!(),
+            };
+            let text = message("system", &"text".repeat(100_000));
+            let without_images = estimate_kimi_input_tokens(std::slice::from_ref(&text), &[]);
+            let messages = vec![text, images];
+            let estimated = estimate_kimi_input_tokens(&messages, &[]);
+            assert!(estimated >= without_images + 8_000);
+            estimates.push(estimated);
+            let mut settings = settings(/*input*/ 0, Some(KimiThinkingEffort::High));
+            settings.input_estimate = KimiInputEstimate::FinalSerialized;
+            let request = build_kimi_chat_request(&config, settings, messages.clone(), Vec::new())
+                .expect("image request");
+            assert_eq!(request.max_completion_tokens, 131_072);
+            assert_eq!(request.messages, messages, "outgoing images remain intact");
+        }
+        assert_eq!(estimates[0], estimates[1]);
+    }
+
+    // Data-URL-looking strings in text, reasoning and arguments are still text.
+    let data_url = format!("data:image/png;base64,{}", "A".repeat(400_000));
+    for content in [
+        KimiContent::Text(data_url.clone()),
+        KimiContent::Parts(vec![json!({"type":"text","text":data_url})]),
+    ] {
+        assert!(estimate_kimi_input_tokens(&[KimiMessage::User { content }], &[]) > 100_000);
+    }
+    let assistant = KimiAssistantMessage::from_input(
+        KimiAssistantMessageInput {
+            content: None,
+            tool_calls: vec![KimiToolCall::function(
+                "call-1",
+                "inspect",
+                data_url.clone(),
+            )],
+            reasoning: Some(
+                &KimiReasoning::for_model("k3-256k", KimiReasoningKey::ReasoningContent, data_url)
+                    .expect("reasoning"),
+            ),
+        },
+        "k3-256k",
+    )
+    .expect("assistant");
+    assert!(estimate_kimi_input_tokens(&[KimiMessage::Assistant(assistant)], &[]) > 200_000);
+}
+
+#[test]
+fn serialized_text_and_schema_estimates_still_clamp_completion_budget() {
+    for (messages, tools) in [
+        (vec![message("user", &"text".repeat(220_000))], Vec::new()),
+        (
+            Vec::new(),
+            vec![KimiFunctionTool::new(KimiFunctionDefinition {
+                name: "inspect".to_string(),
+                description: "inspect payload".to_string(),
+                parameters: json!({"type":"object","properties":{
+                    "payload":{"type":"string","description":"schema".repeat(150_000)}
+                }}),
+                strict: false,
+            })],
+        ),
+    ] {
+        let expected = serde_json::to_vec(&(&messages, &tools))
+            .expect("JSON")
+            .len() as u64;
+        assert_eq!(
+            estimate_kimi_input_tokens(&messages, &tools),
+            expected.div_ceil(4)
+        );
+        let mut settings = settings(/*input*/ 0, Some(KimiThinkingEffort::High));
+        settings.input_estimate = KimiInputEstimate::FinalSerialized;
+        let request = build_kimi_chat_request(
+            &profile("k3-256k", 131_072, KimiThinkingPolicy::RequiredWithEffort),
+            settings,
+            messages,
+            tools,
+        )
+        .expect("large request");
+        assert_eq!(
+            request.max_completion_tokens,
+            262_144 - expected.div_ceil(4)
+        );
+    }
+}
+
+#[test]
 fn exact_requests_cover_profiles_thinking_and_budget_edges() {
     let cases = [
         (

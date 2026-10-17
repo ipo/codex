@@ -247,9 +247,48 @@ pub fn build_kimi_chat_request(
 }
 
 pub fn estimate_kimi_input_tokens(messages: &[KimiMessage], tools: &[KimiFunctionTool]) -> u64 {
-    serde_json::to_vec(&(messages, tools))
-        .map(|input| u64::try_from(input.len()).unwrap_or(u64::MAX).div_ceil(4))
-        .unwrap_or(u64::MAX)
+    // Estimate the same framed input as before, but replace structural image parts
+    // with a provisional 2,000-token cost. Encoded bytes are transport, not text
+    // tokens. Counting serialization avoids allocating another copy of image data.
+    let Some(mut bytes) = serialized_len(&(messages, tools)) else {
+        return u64::MAX;
+    };
+    for message in messages {
+        let content = match message {
+            KimiMessage::System { content }
+            | KimiMessage::User { content }
+            | KimiMessage::Tool { content, .. } => content,
+            KimiMessage::Assistant(_) => continue,
+        };
+        if let KimiContent::Parts(parts) = content {
+            for part in parts {
+                if part.get("type").and_then(Value::as_str) == Some("image_url") {
+                    let Some(image_bytes) = serialized_len(part) else {
+                        return u64::MAX;
+                    };
+                    bytes = bytes.saturating_sub(image_bytes).saturating_add(8_000);
+                }
+            }
+        }
+    }
+    bytes.div_ceil(4)
+}
+
+fn serialized_len(value: &impl Serialize) -> Option<u64> {
+    struct Counter(u64);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len() as u64);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, value).ok()?;
+    Some(counter.0)
 }
 
 fn normalize_messages(
